@@ -61,7 +61,7 @@
 
 ## 项目概况
 
-pnpm Workspace Monorepo，TypeScript + ESM，当前有 5 个应用、3 个共享包；`apps/agent` 与 `apps/agent-web` 已完成 W1 工程骨架和 pi-web 前端基础代码接入。
+pnpm Workspace Monorepo，TypeScript + ESM，当前有 5 个应用、3 个共享包；Agent W1 已提供工程骨架、pi-web 前端基础代码、共享契约、事件样例／解析基础和开发测试身份适配。
 业务 Web 与 Electron 共用 `apps/web` 这一份 React 前端，连接 Fastify 业务后端；业务后端是按模块组织的单体。业务后端部署包包含 Web，由 Fastify 统一托管页面与 API；Vercel 使用现有业务后端项目统一发布。本地仍可分别启动。Agent 使用独立界面与独立服务骨架，Pi 执行尚待 W2 接入且仅在服务端运行；完整协作说明见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
 当前前端：认证入口提供“验证码登录 / 密码登录”双页签，默认验证码登录；认证接口通过平台适配访问现有后端。短信登录按后端结果区分已有账号与待注册账号；待注册账号在内存中携带手机号、一次性注册凭证进入个人资料页，注册成功后返回密码登录。登录、注册页不主动查询当前用户；工作台与个人中心启动时查询。开发与生产均查询真实当前用户，不再叠加固定用户预览；认证写请求和退出仍访问后端，失败不回退为模拟成功。后端现有能力：密码/短信登录、统一注册及登录后独立创建组织、当前会话角色切换、一次性注册凭证、刷新令牌、密码重置、退出、昵称查重、当前用户资料更新，以及上传台账和 OSS 文件接口。真实短信尚未接入；验证规则由后端管理，固定测试码统一定义在 shared 的 `MOCK_SMS_CODE`，后端 `MOCK_CODE` 与前端展示共用该值；页面不另行定义验证码，只在真实发码成功后保留服务端提示并展示测试码，已含验证码时不重复追加。
 
@@ -110,7 +110,7 @@ Agent 工程入口（W1 已落地，执行与持久化仍待后续工作包）�
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/agent`                 | `@tyde/agent`，Fastify 独立服务；`src/application.ts` 提供 `/health/live` 和 `/api/v1/docs/`，`src/config.ts` 校验配置。Pi、任务、工具、事件和存储待接入    |
 | `apps/agent-web`             | `@tyde/agent-web`，Vite／React 独立页面；自身客户端真实检查 Agent 连接，pi-web Markdown／输入基础代码见其 `upstream/pi-web/` 来源记录；对话发送及事件待接入 |
-| `packages/shared/src/agent/` | 浏览器可用的 Agent 健康检查 DTO／Schema，已导出 `@tyde/shared/agent`；新增业务契约在此维护                                                                  |
+| `packages/shared/src/agent/` | `@tyde/shared/agent` 导出健康检查与 21／22 号 v0.1 命令、查询、事件 DTO／Schema／校验器；源快照与生成规则见其 `contracts/README.md`                         |
 | `apps/agent/migrations/`     | Agent 独立迁移预留目录，目前只有说明、无 DDL 或迁移命令；独立于 `apps/server/prisma`                                                                        |
 
 ## 请求与会话链路
@@ -150,7 +150,10 @@ React 页面 → services/api → packages/platform
 
 ## Agent 接入与协作
 
-- 当前已落地 W1 工程骨架：两个应用、共享健康契约、启动／构建／检查命令与 pi-web 前端基础切片。健康检查只表示 HTTP 进程存活；对话、Pi、事件、DDL、授权及桌面接入尚未实现。MVP 仍需真实模型、只读工具、完整状态持久化／恢复和 macOS 验证。
+- W1 已落地工程、21／22 号 v0.1 共享契约、事件样例与 SSE 解析／游标基础、请求摘要及受控测试身份。当前实际 HTTP 接口仍只有健康检查与 Swagger；会话／命令／查询／SSE 路由、Pi、数据库、平台授权和桌面接入待后续实现，不把格式校验视为执行或事务已完成。
+- 契约源快照在 `packages/shared/src/agent/contracts/`，通过生成器维护类型与无运行时代码生成的校验器；修改基线后执行 `pnpm generate:agent-contracts`、`pnpm check:agent-contracts`、`pnpm test:agent`，不要直接修改生成文件。命令使用 `/api/agent/v1`，与业务 `/api/v1` 区分；所有 bigint 版本／序号用十进制字符串。
+- `apps/agent/src/auth/access.ts` 负责可信身份与私有会话归属；开发身份默认关闭，仅显式开发／测试环境和回环监听可用，用户与凭证由服务端配置。`src/commands/prepare-command.ts` 规范化 UUID／context，按固定 JCS 版本生成原意图摘要；持久幂等、并发裁决和原始 HTTP JSON 边界仍须在实现接口时验证。
+- `apps/agent-web/src/agent-events/` 解析分块 SSE，只在可靠产品事件成功按序应用后推进游标；控制帧和临时增量不推进。测试样例仅用于契约验证，不接入页面作为模拟响应。23 号业务接口仍为设计提案，未向 `apps/server` 增加内部接口或业务写入能力。
 - 业务 UI 继续由 `apps/web` 共用；Agent UI 独立放在 `apps/agent-web`，通过自己的客户端层访问远程 Agent API／事件。Electron 负责装载及受限桥接，Pi 执行统一归 `apps/agent`，不进入安装包。
 - 复用平台身份，Agent 校验产品会话／任务归属，业务后端逐次校验业务权限。首期会话为用户私有，部门／组织上下文仅定位业务范围，不授予会话访问权；测试身份限显式内部开发／测试模式。
 - Agent 自有数据与业务数据分开管理，工具通过业务 API 调用业务能力。完整 Pi 原生状态唯一存于 PostgreSQL，产品聊天与日志不能替代恢复状态；有业务效果的操作须先落实幂等、可信回执和结果核对。

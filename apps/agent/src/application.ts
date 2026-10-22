@@ -3,12 +3,31 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { AGENT_HEALTH_PATH, agentHealthSchema, type AgentHealth } from '@tyde/shared/agent';
 import type { AgentConfig } from './config.js';
+import {
+  createAgentAccess,
+  type AgentAccess,
+  type PlatformIdentityAdapter,
+} from './auth/access.js';
 
-export async function createApp(config: AgentConfig) {
+declare module 'fastify' {
+  interface FastifyInstance {
+    agentAccess: AgentAccess;
+  }
+}
+
+export async function createApp(
+  config: AgentConfig,
+  options: { identityAdapter?: PlatformIdentityAdapter } = {},
+) {
+  const agentAccess = createAgentAccess(config, options.identityAdapter);
   const app = Fastify({
-    logger: config.env === 'test' ? false : { level: 'info' },
+    logger:
+      config.env === 'test'
+        ? false
+        : { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie'] },
     disableRequestLogging: true,
   });
+  app.decorate('agentAccess', agentAccess);
 
   // 动态 OpenAPI 收集器必须先于接口注册。
   await app.register(swagger, {
@@ -17,7 +36,8 @@ export async function createApp(config: AgentConfig) {
       info: {
         title: 'tyde Agent API',
         version: '0.1.0',
-        description: 'W1 工程骨架，仅提供进程存活检查；尚未接入模型、身份、任务和数据库。',
+        description:
+          'W1 工程骨架，仅提供进程存活检查；开发测试身份适配器供后续资源接口使用，平台授权、模型、任务和数据库尚未接入。',
       },
       tags: [{ name: 'Health', description: 'Agent 服务进程存活检查，不代表模型或数据库就绪。' }],
     },

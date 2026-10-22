@@ -1,0 +1,1691 @@
+{
+  "openapi": "3.1.1",
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "info": {
+    "title": "Agent 五类命令接口设计",
+    "version": "1.0.0-design",
+    "description": "文档级 OpenAPI 设计稿；复用平台 Bearer 身份，不包含 GET、SSE 或服务实现。"
+  },
+  "x-design-status": "design_only",
+  "x-semantic-validation": [
+    "本规范为 design_only，URL、字段和限额是本轮新设计，尚未部署。",
+    "HTTP 解码后的请求体字节数不得超过 131072（128 KiB）；该限制由入口独立校验，不能用 JSON 字符数代替。",
+    "非法 UTF-8、JSON 语法错误或重复对象键均为 HTTP 400 INVALID_JSON；JSON Schema 本身不能检测已被解析器覆盖的重复键。",
+    "UUID 解析后规范化为小写；非负 bigint 字符串还须按十进制整数校验不大于 9223372036854775807。",
+    "真实日历日期、end>=start、已知 IANA timezone、Unicode 码点计数及非全空白由服务端统一语义校验。",
+    "v1 payload_hash 纳入 API 主版本、schema_version、路径 conversation_id、kind、原请求 task_kind/task_id/target_attempt_id/expected_task_version，以及用户正文、实际发送 context 与数组顺序；排除 request_key、client_instance_id、凭据、日志标识、运行现态、服务端新建 ID 和当前默认配置。",
+    "input.context 缺省先补 {}，其余可省字段不补 null；UUID 规范化小写，正文、业务 ID、日期/时区及数组顺序保持原值，不 trim、不改写 Unicode；对象字段顺序和 JSON 空白不影响摘要。采用固定版本 JCS 规范化后以 UTF-8 计算 SHA-256 小写十六进制，不能从后来回填或清空的命令外键重建原语义。",
+    "平台主体、会话归属、目标 attempt 属于 task、预期版本、业务范围、状态准入和执行唯一性由服务端裁决。",
+    "响应 command.outcome_code 与持久拒绝 error.code 必须一致；kind、outcome、decision 关联及 HTTP 状态的对应由语义验证，不宣称 Schema 可执行跨字段比较。",
+    "decision 和持久 error 是冻结的原裁决快照；不返回当前执行状态来替换原受理事实。",
+    "旧 key 命中且仍可访问时返回原 HTTP 状态、command、decision、error；只有 request_id/replayed 可不同。新 key 正确复用 A2 的 replayed 仍为 false。",
+    "新 key 的 A2 复用仅适用于 continue_task/retry_task：同 C/T、同 kind、同原 A1，A2.previous=A1 且 start_reason 匹配，A2 是本 Pi 当前未结束尝试，T 为 queued/running 且没有已受理停止；再比较 A2.trigger_command 的完整 v1 语义 hash，必须包括其原 expected_task_version。无需该原版本等于 A2 推进后的当前 T 版本；有意改为新版本不属于同语义复用。",
+    "协调顺序：先校验入口/身份/路径访问，再规范化并查旧 key；同 key 同 hash 重放、异 hash 冲突。新 key 验证 task/attempt 路径归属后进入协调事务，复核访问与旧 key，再判断 A2 复用或新裁决；accepted 不得提交，数据库明确提交后才响应。",
+    "补充/继续/重试的新裁决按固定优先级：TASK_COMPLETED、STOP_IN_PROGRESS、STALE_ATTEMPT_TARGET、TASK_STATE_CONFLICT、TASK_VERSION_CONFLICT、TASK_SCOPE_CONFLICT；continue/retry 的精确 A2 复用先于这些现态检查。start_task 独立检查 UNFINISHED_TASK_EXISTS，不按正文复用目标；provide_input 不以不同 key 复用补充尝试。",
+    "stop_attempt 独立处理请求指定 A：先识别目标已结束，再识别同目标停止意图已登记，否则新登记；不按当前最新 A2 重新定位、不校验 expected_task_version。已结束的 A2 不能被旧 A1 的新 key 跳过而创建 A3。",
+    "无权访问或删除策略优先于旧数据披露；跨会话异语义 key 冲突不得返回原命令 ID 或正文。",
+    "Unconfirmed 的 command=null 不表示命令一定没执行；提交结果不明时保留同 URL、同正文、同 key 核实。",
+    "已发布请求schema_version的解析与hash规则随接口升级保留；fix_request不授权自动换key重做结果未知的动作。",
+    "JSON解析拒绝不合法Unicode字符串（包括孤立代理项），不能将JCS不能编码的输入拖到提交阶段。所有示例为独立场景，不是同一顺序执行脚本。"
+  ],
+  "paths": {
+    "/api/agent/v1/conversations/{conversation_id}/commands": {
+      "post": {
+        "operationId": "submitAgentCommand",
+        "summary": "提交一个 Agent 用户命令",
+        "description": "本规范为 design_only，URL、字段和限额是本轮新设计，尚未部署。\n\nHTTP 解码后的请求体字节数不得超过 131072（128 KiB）；该限制由入口独立校验，不能用 JSON 字符数代替。\n\n非法 UTF-8、JSON 语法错误或重复对象键均为 HTTP 400 INVALID_JSON；JSON Schema 本身不能检测已被解析器覆盖的重复键。\n\nUUID 解析后规范化为小写；非负 bigint 字符串还须按十进制整数校验不大于 9223372036854775807。\n\n真实日历日期、end>=start、已知 IANA timezone、Unicode 码点计数及非全空白由服务端统一语义校验。\n\nv1 payload_hash 纳入 API 主版本、schema_version、路径 conversation_id、kind、原请求 task_kind/task_id/target_attempt_id/expected_task_version，以及用户正文、实际发送 context 与数组顺序；排除 request_key、client_instance_id、凭据、日志标识、运行现态、服务端新建 ID 和当前默认配置。\n\ninput.context 缺省先补 {}，其余可省字段不补 null；UUID 规范化小写，正文、业务 ID、日期/时区及数组顺序保持原值，不 trim、不改写 Unicode；对象字段顺序和 JSON 空白不影响摘要。采用固定版本 JCS 规范化后以 UTF-8 计算 SHA-256 小写十六进制，不能从后来回填或清空的命令外键重建原语义。\n\n平台主体、会话归属、目标 attempt 属于 task、预期版本、业务范围、状态准入和执行唯一性由服务端裁决。\n\n响应 command.outcome_code 与持久拒绝 error.code 必须一致；kind、outcome、decision 关联及 HTTP 状态的对应由语义验证，不宣称 Schema 可执行跨字段比较。\n\ndecision 和持久 error 是冻结的原裁决快照；不返回当前执行状态来替换原受理事实。\n\n旧 key 命中且仍可访问时返回原 HTTP 状态、command、decision、error；只有 request_id/replayed 可不同。新 key 正确复用 A2 的 replayed 仍为 false。\n\n新 key 的 A2 复用仅适用于 continue_task/retry_task：同 C/T、同 kind、同原 A1，A2.previous=A1 且 start_reason 匹配，A2 是本 Pi 当前未结束尝试，T 为 queued/running 且没有已受理停止；再比较 A2.trigger_command 的完整 v1 语义 hash，必须包括其原 expected_task_version。无需该原版本等于 A2 推进后的当前 T 版本；有意改为新版本不属于同语义复用。\n\n协调顺序：先校验入口/身份/路径访问，再规范化并查旧 key；同 key 同 hash 重放、异 hash 冲突。新 key 验证 task/attempt 路径归属后进入协调事务，复核访问与旧 key，再判断 A2 复用或新裁决；accepted 不得提交，数据库明确提交后才响应。\n\n补充/继续/重试的新裁决按固定优先级：TASK_COMPLETED、STOP_IN_PROGRESS、STALE_ATTEMPT_TARGET、TASK_STATE_CONFLICT、TASK_VERSION_CONFLICT、TASK_SCOPE_CONFLICT；continue/retry 的精确 A2 复用先于这些现态检查。start_task 独立检查 UNFINISHED_TASK_EXISTS，不按正文复用目标；provide_input 不以不同 key 复用补充尝试。\n\nstop_attempt 独立处理请求指定 A：先识别目标已结束，再识别同目标停止意图已登记，否则新登记；不按当前最新 A2 重新定位、不校验 expected_task_version。已结束的 A2 不能被旧 A1 的新 key 跳过而创建 A3。\n\n无权访问或删除策略优先于旧数据披露；跨会话异语义 key 冲突不得返回原命令 ID 或正文。\n\nUnconfirmed 的 command=null 不表示命令一定没执行；提交结果不明时保留同 URL、同正文、同 key 核实。",
+        "security": [
+          {
+            "PlatformBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "example": "10000000-0000-4000-8000-000000000001",
+            "description": "已存在的用户私有产品会话，平台主体从 Bearer 解析。"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandRequest"
+              },
+              "examples": {
+                "start_task": {
+                  "summary": "start_task 独立请求示例",
+                  "value": {
+                    "schema_version": 1,
+                    "request_key": "90000000-0000-4000-8000-000000000001",
+                    "kind": "start_task",
+                    "client_instance_id": "80000000-0000-4000-8000-000000000001",
+                    "task_kind": "scheduling_draft",
+                    "input": {
+                      "text": "请生成下周排班草案，晚班尽量平均。",
+                      "context": {
+                        "department_id": "dept-001",
+                        "date_range": {
+                          "start": "2026-10-26",
+                          "end": "2026-11-01"
+                        },
+                        "timezone": "Asia/Shanghai"
+                      }
+                    }
+                  }
+                },
+                "provide_input": {
+                  "summary": "provide_input 独立请求示例",
+                  "value": {
+                    "schema_version": 1,
+                    "request_key": "90000000-0000-4000-8000-000000000002",
+                    "kind": "provide_input",
+                    "task_id": "20000000-0000-4000-8000-000000000001",
+                    "target_attempt_id": "30000000-0000-4000-8000-000000000001",
+                    "expected_task_version": "7",
+                    "input": {
+                      "text": "每个晚班至少两人，小王周三不能安排。"
+                    }
+                  }
+                },
+                "continue_task": {
+                  "summary": "continue_task 独立请求示例",
+                  "value": {
+                    "schema_version": 1,
+                    "request_key": "90000000-0000-4000-8000-000000000004",
+                    "kind": "continue_task",
+                    "task_id": "20000000-0000-4000-8000-000000000001",
+                    "target_attempt_id": "30000000-0000-4000-8000-000000000002",
+                    "expected_task_version": "12"
+                  }
+                },
+                "retry_task": {
+                  "summary": "retry_task 独立请求示例",
+                  "value": {
+                    "schema_version": 1,
+                    "request_key": "90000000-0000-4000-8000-000000000005",
+                    "kind": "retry_task",
+                    "task_id": "20000000-0000-4000-8000-000000000001",
+                    "target_attempt_id": "30000000-0000-4000-8000-000000000003",
+                    "expected_task_version": "18"
+                  }
+                },
+                "stop_attempt": {
+                  "summary": "stop_attempt 独立请求示例",
+                  "value": {
+                    "schema_version": 1,
+                    "request_key": "90000000-0000-4000-8000-000000000003",
+                    "kind": "stop_attempt",
+                    "task_id": "20000000-0000-4000-8000-000000000001",
+                    "target_attempt_id": "30000000-0000-4000-8000-000000000002"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-max-decoded-body-bytes": 131072,
+        "responses": {
+          "202": {
+            "description": "命令已可靠应用，相关任务／停止动作尚有异步执行阶段；不是任务完成确认。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Applied202Response"
+                },
+                "examples": {
+                  "task_created": {
+                    "summary": "task_created；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000001",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000001",
+                        "request_key": "90000000-0000-4000-8000-000000000001",
+                        "kind": "start_task",
+                        "status": "applied",
+                        "outcome_code": "TASK_CREATED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": null,
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000001",
+                        "task_status_at_decision": "queued",
+                        "task_version_at_decision": "0",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "pending",
+                        "user_message_id": "60000000-0000-4000-8000-000000000001"
+                      },
+                      "error": null
+                    }
+                  },
+                  "input_accepted": {
+                    "summary": "input_accepted；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000002",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000002",
+                        "request_key": "90000000-0000-4000-8000-000000000002",
+                        "kind": "provide_input",
+                        "status": "applied",
+                        "outcome_code": "INPUT_ACCEPTED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000001",
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000002",
+                        "task_status_at_decision": "queued",
+                        "task_version_at_decision": "8",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "pending",
+                        "user_message_id": "60000000-0000-4000-8000-000000000002"
+                      },
+                      "error": null
+                    }
+                  },
+                  "stop_requested": {
+                    "summary": "stop_requested；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000003",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000003",
+                        "request_key": "90000000-0000-4000-8000-000000000003",
+                        "kind": "stop_attempt",
+                        "status": "applied",
+                        "outcome_code": "STOP_REQUESTED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000002",
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000002",
+                        "task_status_at_decision": "stopping",
+                        "task_version_at_decision": "12",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "none",
+                        "user_message_id": null
+                      },
+                      "error": null
+                    }
+                  },
+                  "continue_created": {
+                    "summary": "continue_created；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000001",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000004",
+                        "request_key": "90000000-0000-4000-8000-000000000004",
+                        "kind": "continue_task",
+                        "status": "applied",
+                        "outcome_code": "ATTEMPT_CREATED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000002",
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000003",
+                        "task_status_at_decision": "queued",
+                        "task_version_at_decision": "13",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "none",
+                        "user_message_id": null
+                      },
+                      "error": null
+                    }
+                  },
+                  "retry_created": {
+                    "summary": "retry_created；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000005",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000005",
+                        "request_key": "90000000-0000-4000-8000-000000000005",
+                        "kind": "retry_task",
+                        "status": "applied",
+                        "outcome_code": "ATTEMPT_CREATED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000003",
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000004",
+                        "task_status_at_decision": "queued",
+                        "task_version_at_decision": "19",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "none",
+                        "user_message_id": null
+                      },
+                      "error": null
+                    }
+                  },
+                  "same_key_replayed": {
+                    "summary": "same_key_replayed；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000100",
+                      "replayed": true,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000004",
+                        "request_key": "90000000-0000-4000-8000-000000000004",
+                        "kind": "continue_task",
+                        "status": "applied",
+                        "outcome_code": "ATTEMPT_CREATED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000002",
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000003",
+                        "task_status_at_decision": "queued",
+                        "task_version_at_decision": "13",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "none",
+                        "user_message_id": null
+                      },
+                      "error": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "复用现有尝试、停止意图已登记或明确目标已结束；不代表重启旧目标。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Applied200Response"
+                },
+                "examples": {
+                  "attempt_reused": {
+                    "summary": "attempt_reused；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000008",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000008",
+                        "request_key": "90000000-0000-4000-8000-000000000008",
+                        "kind": "continue_task",
+                        "status": "applied",
+                        "outcome_code": "ATTEMPT_REUSED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000002",
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000003",
+                        "task_status_at_decision": "running",
+                        "task_version_at_decision": "14",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "none",
+                        "user_message_id": null
+                      },
+                      "error": null
+                    }
+                  },
+                  "stop_already_requested": {
+                    "summary": "stop_already_requested；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000006",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000006",
+                        "request_key": "90000000-0000-4000-8000-000000000006",
+                        "kind": "stop_attempt",
+                        "status": "applied",
+                        "outcome_code": "STOP_ALREADY_REQUESTED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000002",
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000002",
+                        "task_status_at_decision": "stopping",
+                        "task_version_at_decision": "12",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "none",
+                        "user_message_id": null
+                      },
+                      "error": null
+                    }
+                  },
+                  "old_target_ended_new_attempt_running": {
+                    "summary": "old_target_ended_new_attempt_running；各例为独立场景",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000007",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000007",
+                        "request_key": "90000000-0000-4000-8000-000000000007",
+                        "kind": "stop_attempt",
+                        "status": "applied",
+                        "outcome_code": "TARGET_ALREADY_ENDED",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000001",
+                        "result_attempt_id": "30000000-0000-4000-8000-000000000001",
+                        "task_status_at_decision": "running",
+                        "task_version_at_decision": "11",
+                        "result_attempt_outcome_at_decision": "needs_input",
+                        "input_state_at_decision": "none",
+                        "user_message_id": null
+                      },
+                      "error": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "已持久拒绝，或同一用户 request_key 被不同语义复用。后者不返回原命令 ID。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RejectedResponse"
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/UnconfirmedResponse"
+                        },
+                        {
+                          "properties": {
+                            "error": {
+                              "properties": {
+                                "code": {
+                                  "const": "IDEMPOTENCY_KEY_CONFLICT"
+                                },
+                                "action": {
+                                  "const": "fix_request"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "examples": {
+                  "persistent_version_conflict": {
+                    "summary": "已保存拒绝，重复原key仍返回此裁决",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000002",
+                      "replayed": false,
+                      "command": {
+                        "id": "40000000-0000-4000-8000-000000000002",
+                        "request_key": "90000000-0000-4000-8000-000000000002",
+                        "kind": "provide_input",
+                        "status": "rejected",
+                        "outcome_code": "TASK_VERSION_CONFLICT",
+                        "processed_at": "2026-10-22T03:00:00.000Z"
+                      },
+                      "decision": {
+                        "conversation_id": "10000000-0000-4000-8000-000000000001",
+                        "task_id": "20000000-0000-4000-8000-000000000001",
+                        "target_attempt_id": "30000000-0000-4000-8000-000000000001",
+                        "result_attempt_id": null,
+                        "task_status_at_decision": "waiting_input",
+                        "task_version_at_decision": "8",
+                        "result_attempt_outcome_at_decision": null,
+                        "input_state_at_decision": "none",
+                        "user_message_id": null
+                      },
+                      "error": {
+                        "code": "TASK_VERSION_CONFLICT",
+                        "message": "任务已发生变化，请刷新后决定下一步。",
+                        "action": "refresh_then_decide",
+                        "details": {
+                          "current_task_version": "8",
+                          "current_task_status": "waiting_input",
+                          "latest_attempt_id": "30000000-0000-4000-8000-000000000001"
+                        }
+                      }
+                    }
+                  },
+                  "key_conflict_without_original_details": {
+                    "summary": "不新建命令，不披露旧命令内容",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000101",
+                      "replayed": false,
+                      "command": null,
+                      "decision": null,
+                      "error": {
+                        "code": "IDEMPOTENCY_KEY_CONFLICT",
+                        "message": "该请求标识已用于不同内容，请核对原请求。",
+                        "action": "fix_request",
+                        "details": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON 无法解析。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "INVALID_JSON"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求结构、大小以外的语义校验或请求版本不支持。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "INVALID_REQUEST",
+                                "UNSUPPORTED_SCHEMA_VERSION"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "平台登录身份缺失或失效。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "UNAUTHENTICATED"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "平台鉴权明确禁止当前操作，不披露其他用户资源。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "FORBIDDEN"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可访问、不存在或不属于请求路径；不披露其他归属。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "RESOURCE_NOT_FOUND"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "HTTP 解码后的请求体超过 128 KiB。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "REQUEST_TOO_LARGE"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "仅支持 application/json 请求。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "UNSUPPORTED_MEDIA_TYPE"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务不可用或无法确认提交结果；按 error.action 核实。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "SERVICE_UNAVAILABLE",
+                                "COMMAND_OUTCOME_UNKNOWN"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "outcome_unknown": {
+                    "summary": "提交可能成功，保留原key核实",
+                    "value": {
+                      "schema_version": 1,
+                      "request_id": "70000000-0000-4000-8000-000000000002",
+                      "replayed": false,
+                      "command": null,
+                      "decision": null,
+                      "error": {
+                        "code": "COMMAND_OUTCOME_UNKNOWN",
+                        "message": "暂时无法确认本次命令是否已保存，请保留原请求核实。",
+                        "action": "resend_same_request",
+                        "details": {}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误；此响应不能证明命令没有执行。",
+            "headers": {
+              "Cache-Control": {
+                "description": "命令响应不可缓存。",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/UnconfirmedResponse"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "INTERNAL_ERROR"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "PlatformBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "复用平台现有登录凭据，不假定其一定为 JWT。"
+      }
+    },
+    "schemas": {
+      "UUID": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        "description": "标准连字符 UUID，接受十六进制大写或小写；服务端在语义规范化时转为小写。"
+      },
+      "NonNegativeBigInt": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "description": "非负 bigint 十进制字符串，无符号或前导零；服务端还须验证值不大于 9223372036854775807。不能转为 JavaScript Number。",
+        "x-semantic-maximum": "9223372036854775807",
+        "maxLength": 19
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "waiting_input",
+          "stopping",
+          "stopped",
+          "interrupted",
+          "failed",
+          "completed"
+        ]
+      },
+      "AttemptOutcome": {
+        "type": "string",
+        "enum": [
+          "completed",
+          "needs_input",
+          "stopped",
+          "interrupted",
+          "failed"
+        ]
+      },
+      "CommandKind": {
+        "type": "string",
+        "enum": [
+          "start_task",
+          "provide_input",
+          "continue_task",
+          "retry_task",
+          "stop_attempt"
+        ]
+      },
+      "DateRange": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "additionalProperties": false,
+        "description": "两个值均为真实 ISO 日历日期；服务端语义校验 end >= start。"
+      },
+      "BusinessContext": {
+        "type": "object",
+        "properties": {
+          "department_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "date_range": {
+            "$ref": "#/components/schemas/DateRange"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "必须为服务端认可的已知 IANA 时区；名称有效性由语义校验完成。"
+          },
+          "selected_employee_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "dependentRequired": {
+          "date_range": [
+            "timezone"
+          ]
+        },
+        "description": "允许空对象，input.context 省略与传 {} 在 v1 语义摘要中等价。仅保存实际发送的业务定位上下文；有 date_range 必须同时有 timezone。不表示会话共享权限。"
+      },
+      "UserInput": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000,
+            "pattern": "\\S",
+            "description": "1—16000 个 Unicode 码点，且不能全为空白。不得以 UTF-16 code unit 数替代码点计数。"
+          },
+          "context": {
+            "$ref": "#/components/schemas/BusinessContext"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "StartTaskCommand": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_key": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "client_instance_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "kind": {
+            "type": "string",
+            "const": "start_task"
+          },
+          "task_kind": {
+            "type": "string",
+            "enum": [
+              "business_query",
+              "scheduling_draft"
+            ]
+          },
+          "input": {
+            "$ref": "#/components/schemas/UserInput"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_key",
+          "kind",
+          "task_kind",
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "ProvideInputCommand": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_key": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "client_instance_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "kind": {
+            "type": "string",
+            "const": "provide_input"
+          },
+          "task_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "target_attempt_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "expected_task_version": {
+            "$ref": "#/components/schemas/NonNegativeBigInt"
+          },
+          "input": {
+            "$ref": "#/components/schemas/UserInput"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_key",
+          "kind",
+          "task_id",
+          "target_attempt_id",
+          "expected_task_version",
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "ContinueTaskCommand": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_key": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "client_instance_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "kind": {
+            "type": "string",
+            "const": "continue_task"
+          },
+          "task_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "target_attempt_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "expected_task_version": {
+            "$ref": "#/components/schemas/NonNegativeBigInt"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_key",
+          "kind",
+          "task_id",
+          "target_attempt_id",
+          "expected_task_version"
+        ],
+        "additionalProperties": false
+      },
+      "RetryTaskCommand": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_key": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "client_instance_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "kind": {
+            "type": "string",
+            "const": "retry_task"
+          },
+          "task_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "target_attempt_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "expected_task_version": {
+            "$ref": "#/components/schemas/NonNegativeBigInt"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_key",
+          "kind",
+          "task_id",
+          "target_attempt_id",
+          "expected_task_version"
+        ],
+        "additionalProperties": false
+      },
+      "StopAttemptCommand": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_key": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "client_instance_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "kind": {
+            "type": "string",
+            "const": "stop_attempt"
+          },
+          "task_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "target_attempt_id": {
+            "$ref": "#/components/schemas/UUID"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_key",
+          "kind",
+          "task_id",
+          "target_attempt_id"
+        ],
+        "additionalProperties": false
+      },
+      "CommandRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/StartTaskCommand"
+          },
+          {
+            "$ref": "#/components/schemas/ProvideInputCommand"
+          },
+          {
+            "$ref": "#/components/schemas/ContinueTaskCommand"
+          },
+          {
+            "$ref": "#/components/schemas/RetryTaskCommand"
+          },
+          {
+            "$ref": "#/components/schemas/StopAttemptCommand"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "start_task": "#/components/schemas/StartTaskCommand",
+            "provide_input": "#/components/schemas/ProvideInputCommand",
+            "continue_task": "#/components/schemas/ContinueTaskCommand",
+            "retry_task": "#/components/schemas/RetryTaskCommand",
+            "stop_attempt": "#/components/schemas/StopAttemptCommand"
+          }
+        },
+        "description": "五种命令互斥；所有对象层级禁止未知字段，不接收 null。一个用户意图首次发送前生成 request_key，网络核实原样复用。"
+      },
+      "Decision": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "task_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_attempt_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result_attempt_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task_status_at_decision": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TaskStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task_version_at_decision": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NonNegativeBigInt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result_attempt_outcome_at_decision": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttemptOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_state_at_decision": {
+            "type": "string",
+            "enum": [
+              "none",
+              "pending"
+            ]
+          },
+          "user_message_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "conversation_id",
+          "task_id",
+          "target_attempt_id",
+          "result_attempt_id",
+          "task_status_at_decision",
+          "task_version_at_decision",
+          "result_attempt_outcome_at_decision",
+          "input_state_at_decision",
+          "user_message_id"
+        ],
+        "additionalProperties": false,
+        "description": "冻结的命令裁决快照；*_at_decision 不是当前运行视图。target_attempt_id 只返回已验证关联；原请求目标仍参与语义摘要。"
+      },
+      "ErrorField": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorDetails": {
+        "type": "object",
+        "properties": {
+          "current_task_version": {
+            "$ref": "#/components/schemas/NonNegativeBigInt"
+          },
+          "current_task_status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "latest_attempt_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "active_task_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorField"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "description": "仅包含可授权披露的信息。持久拒绝重放时保留原裁决观察值，current_* 不代表重放时的新状态。"
+      },
+      "RejectedError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "UNFINISHED_TASK_EXISTS",
+              "TASK_COMPLETED",
+              "STOP_IN_PROGRESS",
+              "STALE_ATTEMPT_TARGET",
+              "TASK_STATE_CONFLICT",
+              "TASK_VERSION_CONFLICT",
+              "TASK_SCOPE_CONFLICT"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "const": "refresh_then_decide"
+          },
+          "details": {
+            "$ref": "#/components/schemas/ErrorDetails"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "action",
+          "details"
+        ],
+        "additionalProperties": false
+      },
+      "UnconfirmedError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "IDEMPOTENCY_KEY_CONFLICT",
+              "INVALID_JSON",
+              "INVALID_REQUEST",
+              "UNSUPPORTED_SCHEMA_VERSION",
+              "UNAUTHENTICATED",
+              "FORBIDDEN",
+              "RESOURCE_NOT_FOUND",
+              "REQUEST_TOO_LARGE",
+              "UNSUPPORTED_MEDIA_TYPE",
+              "SERVICE_UNAVAILABLE",
+              "COMMAND_OUTCOME_UNKNOWN",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "none",
+              "resend_same_request",
+              "refresh_then_decide",
+              "reauthenticate",
+              "fix_request",
+              "contact_support"
+            ]
+          },
+          "details": {
+            "$ref": "#/components/schemas/ErrorDetails"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "action",
+          "details"
+        ],
+        "additionalProperties": false
+      },
+      "AppliedCommand": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "request_key": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CommandKind"
+          },
+          "status": {
+            "type": "string",
+            "const": "applied"
+          },
+          "outcome_code": {
+            "type": "string",
+            "enum": [
+              "TASK_CREATED",
+              "INPUT_ACCEPTED",
+              "ATTEMPT_CREATED",
+              "STOP_REQUESTED",
+              "ATTEMPT_REUSED",
+              "STOP_ALREADY_REQUESTED",
+              "TARGET_ALREADY_ENDED"
+            ]
+          },
+          "processed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "request_key",
+          "kind",
+          "status",
+          "outcome_code",
+          "processed_at"
+        ],
+        "additionalProperties": false
+      },
+      "RejectedCommand": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "request_key": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CommandKind"
+          },
+          "status": {
+            "type": "string",
+            "const": "rejected"
+          },
+          "outcome_code": {
+            "type": "string",
+            "enum": [
+              "UNFINISHED_TASK_EXISTS",
+              "TASK_COMPLETED",
+              "STOP_IN_PROGRESS",
+              "STALE_ATTEMPT_TARGET",
+              "TASK_STATE_CONFLICT",
+              "TASK_VERSION_CONFLICT",
+              "TASK_SCOPE_CONFLICT"
+            ]
+          },
+          "processed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "request_key",
+          "kind",
+          "status",
+          "outcome_code",
+          "processed_at"
+        ],
+        "additionalProperties": false
+      },
+      "AppliedResponse": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "command": {
+            "$ref": "#/components/schemas/AppliedCommand"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/Decision"
+          },
+          "error": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "replayed",
+          "command",
+          "decision",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "RejectedResponse": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "command": {
+            "$ref": "#/components/schemas/RejectedCommand"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/Decision"
+          },
+          "error": {
+            "$ref": "#/components/schemas/RejectedError"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "replayed",
+          "command",
+          "decision",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "UnconfirmedResponse": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "replayed": {
+            "type": "boolean",
+            "const": false
+          },
+          "command": {
+            "type": "null"
+          },
+          "decision": {
+            "type": "null"
+          },
+          "error": {
+            "$ref": "#/components/schemas/UnconfirmedError"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "replayed",
+          "command",
+          "decision",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "ResponseEnvelope": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AppliedResponse"
+          },
+          {
+            "$ref": "#/components/schemas/RejectedResponse"
+          },
+          {
+            "$ref": "#/components/schemas/UnconfirmedResponse"
+          }
+        ],
+        "description": "Applied、持久 Rejected、Unconfirmed 三分支。command=null 仅表示此响应没有可返回的已确认命令结论，不能推断没有执行。"
+      },
+      "Applied202Response": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AppliedResponse"
+          },
+          {
+            "properties": {
+              "command": {
+                "properties": {
+                  "outcome_code": {
+                    "enum": [
+                      "TASK_CREATED",
+                      "INPUT_ACCEPTED",
+                      "ATTEMPT_CREATED",
+                      "STOP_REQUESTED"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "Applied200Response": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AppliedResponse"
+          },
+          {
+            "properties": {
+              "command": {
+                "properties": {
+                  "outcome_code": {
+                    "enum": [
+                      "ATTEMPT_REUSED",
+                      "STOP_ALREADY_REQUESTED",
+                      "TARGET_ALREADY_ENDED"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

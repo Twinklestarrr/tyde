@@ -4,6 +4,38 @@ export interface AgentConfig {
   env: 'development' | 'test' | 'production';
   host: string;
   port: number;
+  auth: AgentAuthConfig;
+}
+
+export type AgentAuthConfig =
+  { mode: 'disabled' } | { mode: 'development'; userId: string; bearerToken: string };
+
+export function assertAuthConfiguration(config: AgentConfig): void {
+  if (config.auth.mode !== 'development') return;
+  if (config.env === 'production') {
+    throw new Error('production 环境禁止启用 Agent 开发测试身份');
+  }
+  if (config.host !== '127.0.0.1' && config.host !== '::1') {
+    throw new Error('Agent 开发测试身份仅允许 AGENT_HOST=127.0.0.1 或 ::1');
+  }
+  if (!isValidUserId(config.auth.userId)) {
+    throw new Error('AGENT_TEST_USER_ID 必须是 1 至 128 字符、不含空白或控制字符的稳定用户标识');
+  }
+  if (
+    config.auth.bearerToken.trim() !== config.auth.bearerToken ||
+    !/^[A-Za-z0-9._~+/-]{32,}={0,2}$/.test(config.auth.bearerToken)
+  ) {
+    throw new Error('AGENT_TEST_BEARER_TOKEN 必须是至少 32 字符的 Bearer 凭证，不含空白');
+  }
+}
+
+export function isValidUserId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    [...value].length >= 1 &&
+    [...value].length <= 128 &&
+    !/[\s\p{Cc}\p{Cs}]/u.test(value)
+  );
 }
 
 export function readConfig(source: NodeJS.ProcessEnv = process.env): AgentConfig {
@@ -26,5 +58,19 @@ export function readConfig(source: NodeJS.ProcessEnv = process.env): AgentConfig
     throw new Error('AGENT_PORT 必须是 1 至 65535 的整数');
   }
 
-  return { env, host, port };
+  const authMode = source.AGENT_AUTH_MODE ?? 'disabled';
+  if (authMode !== 'disabled' && authMode !== 'development') {
+    throw new Error('AGENT_AUTH_MODE 必须是 disabled 或 development');
+  }
+  const auth: AgentAuthConfig =
+    authMode === 'development'
+      ? {
+          mode: 'development',
+          userId: source.AGENT_TEST_USER_ID ?? '',
+          bearerToken: source.AGENT_TEST_BEARER_TOKEN ?? '',
+        }
+      : { mode: 'disabled' };
+  const config: AgentConfig = { env, host, port, auth };
+  assertAuthConfiguration(config);
+  return config;
 }

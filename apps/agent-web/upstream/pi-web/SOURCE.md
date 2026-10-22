@@ -3,7 +3,21 @@
 - 公共仓库：[agegr/pi-web](https://github.com/agegr/pi-web)。
 - 固定提交：`7c0778a8bc7342f1ededc6f5fb190dc6f4e43044`（package version `0.12.2`）。
 - 许可证：MIT，作者 `agegr`，原文保留在 [LICENSE](LICENSE)。
-- 引入方式：选择前端源码子集并适配，不嵌套 Git 仓库，不依赖上游可执行包。
+- 引入方式：选择前端源码子集并适配，不在应用目录嵌套 Git 仓库，不依赖上游可执行包。
+
+## 完整上游参考仓库
+
+本机完整克隆保留在仓库根目录下的 `.local/upstream/pi-web/`（含独立 `.git`），固定在上述提交，供后续开发查阅和对照。该目录已由根 `.gitignore` 的 `.local/` 规则忽略，不参与 workspace、构建或提交；它与 `apps/agent-web` 中已适配的前端代码分开维护。本目录 `upstream/pi-web/` 只保存许可证和来源说明，不是完整源码。
+
+完整上游的 `app/` 包含 Next 页面及 API，`components/`、`hooks/`、`lib/` 包含界面、状态和执行相关代码；先阅读其 `README.md` 了解入口。查阅不等于引入：W2 执行统一在 `apps/agent` 实现，不能直接启用上游本机执行、JSONL、终端或凭据存储。
+
+原临时克隆位于 `/private/tmp/tyde-pi-web-w1-upstream`；临时目录不作为后续开发的固定入口。其他机器若没有完整参考仓库，可在 tyde 根目录重建：
+
+```sh
+mkdir -p .local/upstream
+git clone https://github.com/agegr/pi-web.git .local/upstream/pi-web
+git -C .local/upstream/pi-web checkout --detach 7c0778a8bc7342f1ededc6f5fb190dc6f4e43044
+```
 
 ## 引入范围
 

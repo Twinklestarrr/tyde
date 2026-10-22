@@ -4,7 +4,7 @@
 
 React + Electron + Fastify + PostgreSQL 的 pnpm Monorepo。Web 与桌面共用 `apps/web`，使用 Tailwind CSS、shadcn/ui、TanStack Router 和 React Query。认证入口提供“验证码登录 / 密码登录”双页签，默认验证码登录；认证操作均访问当前后端，支持短信或密码登录、统一注册、会话恢复及退出。前端不生成或在本地校验验证码；当前短信仅 mock，发码成功后保留服务端提示，并展示与后端共用的固定测试码。后端已升级统一账号，所有账号自带领航员/策略官/执行专家，提供当前会话角色切换、登录后独立创建组织、本人全部组织摘要、刷新令牌、密码重置、用户资料更新、组织成员与审批、成员导入及文件上传台账；客户端已接入真实角色切换与组织创建，多组织选择尚未接入，真实短信尚未接入。后端字段和迁移说明见 [认证后端上下文](docs/AUTH_BACKEND.md)。
 
-Agent W1 工程骨架已加入 workspace：`apps/agent` 为独立 Fastify 服务，`apps/agent-web` 为独立 Vite／React 页面，已接入 pi-web 的前端基础代码；Pi 执行、对话、持久化与 Electron 装配仍待后续工作包。前后端分工、共享契约、数据与授权边界、桌面接入及最小版本范围见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
+Agent W1 已提供两个应用骨架、pi-web 前端基础代码、21／22 号 v0.1 共享契约、事件样例与解析测试，以及显式开发测试身份适配器。Pi 执行、实际会话／任务接口、持久化与 Electron 装配仍待后续工作包。前后端分工、契约基线、数据与授权边界见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
 
 ## 环境
 
@@ -23,6 +23,8 @@ pnpm dev:agent-web  # http://127.0.0.1:3003
 ```
 
 页面通过自身客户端真实查询 Agent `/health/live`，可编辑本地输入草稿；发送尚未接入。服务连接正常仅说明 HTTP 进程存活。端口、环境变量与生产代理说明见 [Agent 服务](apps/agent/README.md) 和 [Agent 界面](apps/agent-web/README.md)，pi-web 固定版本及导入范围见 [上游记录](apps/agent-web/upstream/pi-web/SOURCE.md)。
+
+`@tyde/shared/agent` 导出命令、查询与 SSE 的 DTO、Schema 和 `validateAgentContract`。本地源快照与生成规则见 [契约说明](packages/shared/src/agent/contracts/README.md)；`pnpm check:agent-contracts` 校验生成代码一致性，`pnpm test:agent` 验证格式、请求摘要、归属和事件边界。测试夹具不参与页面请求或生产响应。
 
 ```sh
 pnpm typecheck:agent

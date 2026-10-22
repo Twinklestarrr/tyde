@@ -1,6 +1,10 @@
 import { Type, type Static } from '@sinclair/typebox';
 
+export * from './contracts/index.js';
+
 export const AGENT_HEALTH_PATH = '/health/live';
+export const AGENT_API_PREFIX = '/api/agent/v1';
+export const AGENT_COMMAND_BODY_LIMIT = 128 * 1024;
 
 export const agentHealthSchema = Type.Object(
   {
