@@ -4,12 +4,34 @@
 
 React + Electron + Fastify + PostgreSQL 的 pnpm Monorepo。Web 与桌面共用 `apps/web`，使用 Tailwind CSS、shadcn/ui、TanStack Router 和 React Query。认证入口提供“验证码登录 / 密码登录”双页签，默认验证码登录；认证操作均访问当前后端，支持短信或密码登录、统一注册、会话恢复及退出。前端不生成或在本地校验验证码；当前短信仅 mock，发码成功后保留服务端提示，并展示与后端共用的固定测试码。后端已升级统一账号，所有账号自带领航员/策略官/执行专家，提供当前会话角色切换、登录后独立创建组织、本人全部组织摘要、刷新令牌、密码重置、用户资料更新、组织成员与审批、成员导入及文件上传台账；客户端已接入真实角色切换与组织创建，多组织选择尚未接入，真实短信尚未接入。后端字段和迁移说明见 [认证后端上下文](docs/AUTH_BACKEND.md)。
 
+Agent W1 工程骨架已加入 workspace：`apps/agent` 为独立 Fastify 服务，`apps/agent-web` 为独立 Vite／React 页面，已接入 pi-web 的前端基础代码；Pi 执行、对话、持久化与 Electron 装配仍待后续工作包。前后端分工、共享契约、数据与授权边界、桌面接入及最小版本范围见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
+
 ## 环境
 
 - Node.js 24（基线 24.19.0），pnpm 11.23.0。使用 `nvm use` 切换 Node；不要自动升级 pnpm 主版本。
 - 开发连接 `apps/server/.env` 指定的远程 PostgreSQL；需要本机数据库时可使用 Postgres.app PostgreSQL 18。不需要 Docker 或 Podman。
 - 首次依赖安装需要 npm 网络；Electron 安装与打包还会下载二进制。
 - Mac 包在 macOS 构建；Windows 包优先在 Windows x64 构建。用户安装客户端无需这些开发工具。
+
+## Agent 独立开发（W1）
+
+完成 `pnpm install` 后分别启动两个终端，无需业务数据库或模型密钥：
+
+```sh
+pnpm dev:agent      # http://127.0.0.1:3002，Swagger /api/v1/docs/
+pnpm dev:agent-web  # http://127.0.0.1:3003
+```
+
+页面通过自身客户端真实查询 Agent `/health/live`，可编辑本地输入草稿；发送尚未接入。服务连接正常仅说明 HTTP 进程存活。端口、环境变量与生产代理说明见 [Agent 服务](apps/agent/README.md) 和 [Agent 界面](apps/agent-web/README.md)，pi-web 固定版本及导入范围见 [上游记录](apps/agent-web/upstream/pi-web/SOURCE.md)。
+
+```sh
+pnpm typecheck:agent
+pnpm test:agent
+pnpm build:agent
+pnpm build:agent-web
+```
+
+业务开发、Vercel 与桌面构建入口继续按原流程运行；Agent 独立部署与双视图装配后续接入。
 
 ## 首次运行（Mac）
 

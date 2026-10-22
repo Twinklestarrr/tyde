@@ -1,0 +1,219 @@
+/* Adapted from agegr/pi-web; see ../../upstream/pi-web/SOURCE.md and LICENSE. */
+@theme {
+  --color-bg: var(--bg);
+  --color-bg-panel: var(--bg-panel);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-selected: var(--bg-selected);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-dim: var(--text-dim);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-user-bg: var(--user-bg);
+  --color-assistant-bg: var(--assistant-bg);
+  --color-tool-bg: var(--tool-bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --font-mono-font: var(--font-mono);
+}
+
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-panel: #f5f5f5;
+  --bg-hover: #eeeeee;
+  --bg-selected: #e8e8e8;
+  --border: #e0e0e0;
+  --text: #1a1a1a;
+  --text-muted: #515c6b;
+  --text-dim: #5e6673;
+  --accent: #245bce;
+  --accent-hover: #1d4ed8;
+  --accent-contrast: #ffffff;
+  --user-bg: #eff6ff;
+  --assistant-bg: #ffffff;
+  --tool-bg: #f9fafb;
+  --bg-subtle: rgba(0, 0, 0, 0.03);
+  --chat-content-max-width: 820px;
+  --chat-content-font-size: 14px;
+}
+
+html.dark,
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #1a1a1a;
+  --bg-panel: #242424;
+  --bg-hover: #2e2e2e;
+  --bg-selected: #383838;
+  --border: #454545;
+  --text: #e8e8e8;
+  --text-muted: #b7b7b7;
+  --text-dim: #a4a4a4;
+  --accent: #a4c2f4;
+  --accent-hover: #c3d8fa;
+  --accent-contrast: #182234;
+  --user-bg: #292929;
+  --assistant-bg: #1a1a1a;
+  --tool-bg: #222222;
+  --bg-subtle: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme='mist'] {
+  color-scheme: light;
+  --bg: #f4f8f7;
+  --bg-panel: #e9f0ee;
+  --bg-hover: #e0eae7;
+  --bg-selected: #d7e4df;
+  --border: #afc4ba;
+  --text: #202e2b;
+  --text-muted: #455f56;
+  --text-dim: #52685f;
+  --accent: #1e6559;
+  --accent-hover: #174f46;
+  --accent-contrast: #ffffff;
+  --user-bg: #e0efeb;
+  --assistant-bg: #f4f8f7;
+  --tool-bg: #ecf3f0;
+  --bg-subtle: rgba(24, 65, 50, 0.04);
+}
+
+.markdown-body {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  font-size: calc(14px + var(--chat-font-size-offset, 0px));
+  line-height: 1.7;
+  color: var(--text);
+  word-break: break-word;
+}
+.markdown-body p {
+  margin: 0 0 8px;
+}
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-weight: 600;
+  margin: 10px 0 5px;
+  color: var(--text);
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+.markdown-body h1 {
+  font-size: 1.16em;
+}
+.markdown-body h2 {
+  font-size: 1.08em;
+}
+.markdown-body h3 {
+  font-size: 0.98em;
+  color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
+}
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 22px;
+  margin: 5px 0 8px;
+  list-style-position: outside;
+}
+/* Room for the widest bold "N. " marker; MarkdownBody sets the digit count. */
+.markdown-body ol {
+  padding-left: calc(0.8em + var(--ol-marker-digits, 2) * 0.62em);
+}
+.markdown-body li {
+  margin: 3px 0;
+  padding-left: 2px;
+}
+.markdown-body ul > li {
+  list-style-type: disc;
+}
+.markdown-body ol > li {
+  list-style-type: decimal;
+}
+.markdown-body li > p {
+  margin: 0;
+}
+.markdown-body li::marker {
+  color: color-mix(in srgb, var(--accent) 72%, var(--text-muted));
+  font-weight: 600;
+}
+.markdown-body strong {
+  color: color-mix(in srgb, var(--text) 88%, var(--accent));
+  font-weight: 700;
+}
+.markdown-body em {
+  color: var(--text-muted);
+}
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.markdown-body a:hover {
+  text-decoration-color: var(--accent);
+}
+.markdown-body a[role='link'] {
+  cursor: pointer;
+}
+.markdown-body blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--border) 75%, var(--text-muted));
+  border-radius: 0 6px 6px 0;
+  margin: 6px 0;
+  padding: 6px 11px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+.markdown-table-frame {
+  width: 100%;
+  margin: 8px 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.markdown-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.markdown-body table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+  font-size: calc(13px + var(--chat-font-size-offset, 0px));
+}
+.markdown-table-wrap > table {
+  width: max-content;
+}
+.markdown-body th,
+.markdown-body td {
+  max-width: 240px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-body tr:last-child td {
+  border-bottom: 0;
+}
+.markdown-body th {
+  background: var(--bg-panel);
+  color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
+  font-weight: 650;
+}
+.markdown-body tbody tr:nth-child(even) td {
+  background: var(--bg-subtle);
+}
+.markdown-body hr {
+  border: none;
+  height: 1px;
+  margin: 12px 0;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+}

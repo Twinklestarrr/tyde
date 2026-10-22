@@ -61,8 +61,8 @@
 
 ## 项目概况
 
-pnpm Workspace Monorepo，TypeScript + ESM，3 个应用、3 个共享包。
-Web 与 Electron 共用一份 React 前端，连接 Fastify 后端；后端是按业务模块组织的单体。后端部署包包含 Web，由 Fastify 统一托管页面与 API；Vercel 使用现有后端项目统一发布。本地仍可分别启动。
+pnpm Workspace Monorepo，TypeScript + ESM，当前有 5 个应用、3 个共享包；`apps/agent` 与 `apps/agent-web` 已完成 W1 工程骨架和 pi-web 前端基础代码接入。
+业务 Web 与 Electron 共用 `apps/web` 这一份 React 前端，连接 Fastify 业务后端；业务后端是按模块组织的单体。业务后端部署包包含 Web，由 Fastify 统一托管页面与 API；Vercel 使用现有业务后端项目统一发布。本地仍可分别启动。Agent 使用独立界面与独立服务骨架，Pi 执行尚待 W2 接入且仅在服务端运行；完整协作说明见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
 当前前端：认证入口提供“验证码登录 / 密码登录”双页签，默认验证码登录；认证接口通过平台适配访问现有后端。短信登录按后端结果区分已有账号与待注册账号；待注册账号在内存中携带手机号、一次性注册凭证进入个人资料页，注册成功后返回密码登录。登录、注册页不主动查询当前用户；工作台与个人中心启动时查询。开发与生产均查询真实当前用户，不再叠加固定用户预览；认证写请求和退出仍访问后端，失败不回退为模拟成功。后端现有能力：密码/短信登录、统一注册及登录后独立创建组织、当前会话角色切换、一次性注册凭证、刷新令牌、密码重置、退出、昵称查重、当前用户资料更新，以及上传台账和 OSS 文件接口。真实短信尚未接入；验证规则由后端管理，固定测试码统一定义在 shared 的 `MOCK_SMS_CODE`，后端 `MOCK_CODE` 与前端展示共用该值；页面不另行定义验证码，只在真实发码成功后保留服务端提示并展示测试码，已含验证码时不重复追加。
 
 登录后工作台 `/` 与个人中心 `/profile` 共用 `layouts/WorkspaceLayout.tsx` 顶栏及账户菜单。个人中心的资料与账户安全由三种会话角色共用，执行专家额外提供概览业务区，领航员/策略官默认个人资料；资料通过 GET `/users/me` 读取，变更字段通过 POST `/users/me/update` 真实保存。头像编辑集中在同一区域：圆形预览旁提供更换/清除，隐藏原生文件输入；HTTPS 图片链接作为默认收起的备选方式。头像支持本地图片及 HTTPS 图片地址：本地选图先用临时 blob 预览，保存时以 AVATAR 上传并使用 objectKey/avatarUploadToken 调用现有资料接口认领；失败保留草稿与已取得的内存凭证，手动重试不重复上传，取消/换图/清除释放本地预览。支持 JPG/PNG/GIF/BMP/WebP，最大 10 MiB，实际类型/内容/大小仍由后端校验；凭证不持久化。简介最多 1000 字符，身份证不回填脱敏值、留空保留，已认证不可修改；昵称、姓名与手机号只读。改密使用同一真实接口，成功撤销全部会话，清空客户端缓存并回到密码登录；失败保留表单，不模拟成功或自动重放写入。`ProfileOrganization.tsx` 仅为有效组织主管/管理员查询 GET `/organizations`，普通成员显示会话中的真实摘要；失败明确显示详情未加载及只读重试。组织管理已在独立 `/organization` 接入。工作台尚未接入项目、排班和申请业务；个人中心专家概览通过 main 既有接口读取本人项目/分配详情、月考勤/节假日及本人申请，暂不扩展排班写流程。
@@ -104,6 +104,15 @@ Web 与 Electron 共用一份 React 前端，连接 Fastify 后端；后端是�
 
 插队模块（2026-10-21）：`modules/users/personal-application.*`接本人申请分页；`modules/attendance/`接本人月历、公开节假日源及内存缓存、无组织本人幂等排班和组织管理直接修正；`modules/expert/expert-assignment.*`接本人已接单项目/分配详情、准入与成员履约节点读取，并提供专家项目附件资格查询。由`application.ts`装配，第15迁移`20261021010000_personal_workbench`新增排班/日考勤/修正审计/幂等回执/成员接单响应/应试事实，补准入来源外键；所需专用库结构已由用户137项集成通过验证，迁移历史未另查。请假/修正申请及撤回已由`attendance-application.*`接入，复用组织单主管审批；月历返回申请与逐日权限。第16迁移将尚无结论的日考勤/审计前状态改为可空（Agent应用专用库报P1001，尚未应用），311项单测及类型/ESLint通过；用户145项集成已全部通过（15:17:51启动，总69.67秒），137项仍为前批证据；接单/考试写流程仍由06/07/08接入。契约及迁移步骤见[个人中心与工作台后端](docs/PERSONAL_WORKBENCH.md)。本批299项单测通过，服务端类型/ESLint通过；用户2026-10-21回传14:12:47启动的137项集成全部通过（1文件，总77.59秒，测试66.39秒）；第15迁移所需专用库结构及本批业务已验证，原数据库连接阻塞解除，迁移历史未另查。开发/部署库迁移及真实OSS/日历源联调仍待验收。
 
+Agent 工程入口（W1 已落地，执行与持久化仍待后续工作包）：
+
+| 路径                         | 职责                                                                                                                                                        |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/agent`                 | `@tyde/agent`，Fastify 独立服务；`src/application.ts` 提供 `/health/live` 和 `/api/v1/docs/`，`src/config.ts` 校验配置。Pi、任务、工具、事件和存储待接入    |
+| `apps/agent-web`             | `@tyde/agent-web`，Vite／React 独立页面；自身客户端真实检查 Agent 连接，pi-web Markdown／输入基础代码见其 `upstream/pi-web/` 来源记录；对话发送及事件待接入 |
+| `packages/shared/src/agent/` | 浏览器可用的 Agent 健康检查 DTO／Schema，已导出 `@tyde/shared/agent`；新增业务契约在此维护                                                                  |
+| `apps/agent/migrations/`     | Agent 独立迁移预留目录，目前只有说明、无 DDL 或迁移命令；独立于 `apps/server/prisma`                                                                        |
+
 ## 请求与会话链路
 
 ```text
@@ -139,31 +148,42 @@ React 页面 → services/api → packages/platform
 
 05考试入口（2026-10-21第三批）：`modules/entrance-exams/exam-query.service/schema.ts`接编辑配置/管理页/花名册，`exam-command.service.ts`接关闭；`exam-access.ts`区分当前PM写权限、PM协作只读和历史MANUAL配置的NAV只读。现有management路由由application装配；导入及发布/编辑沿原入口。第18迁移新增逐轮阅卷记录和同版本来源约束，所需专用库结构已由用户2026-10-22 09:16:49复跑162项全通过验证（总78.84秒，测试68.19秒），原缺表阻塞解除，迁移历史未另查；开发/部署仍未验证。339单测为前批证据，本次仅同步结果、未重跑或操作数据库。下次040/048—052；保持05，不交接06。详情以根05任务及[考试基础](docs/ENTRANCE_EXAM_MANAGEMENT.md)为准。
 
+## Agent 接入与协作
+
+- 当前已落地 W1 工程骨架：两个应用、共享健康契约、启动／构建／检查命令与 pi-web 前端基础切片。健康检查只表示 HTTP 进程存活；对话、Pi、事件、DDL、授权及桌面接入尚未实现。MVP 仍需真实模型、只读工具、完整状态持久化／恢复和 macOS 验证。
+- 业务 UI 继续由 `apps/web` 共用；Agent UI 独立放在 `apps/agent-web`，通过自己的客户端层访问远程 Agent API／事件。Electron 负责装载及受限桥接，Pi 执行统一归 `apps/agent`，不进入安装包。
+- 复用平台身份，Agent 校验产品会话／任务归属，业务后端逐次校验业务权限。首期会话为用户私有，部门／组织上下文仅定位业务范围，不授予会话访问权；测试身份限显式内部开发／测试模式。
+- Agent 自有数据与业务数据分开管理，工具通过业务 API 调用业务能力。完整 Pi 原生状态唯一存于 PostgreSQL，产品聊天与日志不能替代恢复状态；有业务效果的操作须先落实幂等、可信回执和结果核对。
+- 页面重连恢复展示，不重新启动执行；继续／重试由服务端幂等协调。流式结束、停止受理和实际停止分别确认，正常退出只请求停止本客户端明确关联的任务／尝试；正式业务提交仍需用户确认。
+- 修改 shared、platform、Electron 或根构建脚本时同步调用方与影响范围验证。开发分工、契约语义、工作包、桌面装配及待定事项集中维护在 [docs/AGENT_DEVELOPMENT.md](docs/AGENT_DEVELOPMENT.md)，同事无需访问仓库外设计目录。
+
 ## 开发新需求时
 
-- 当前 UI 任务只负责 Web、Electron 和必要客户端适配；同步 main 已有后端代码不属于自行扩展业务。以后端现有 API 和 shared DTO/schema 为准；不得自行新增后端业务接口、修改 Prisma schema 或数据库迁移。用户已授权的后端例外为支撑 Electron 页面直接 HTTP 的最小来源/CORS/Cookie 适配，不扩展个人资料业务。已有接口按当前契约对接，剩余语义缺口先列清单并与后端确认，不提前把设计写成已实现契约。个人中心已授权接入现有资料、改密和组织读取接口；仅扩展 shared 客户端能力接口，不修改后端 DTO/schema。
-- UI 放 `apps/web/src/modules/<业务>/`，路由接入 `app/App.tsx`；后端模块放 `apps/server/src/modules/<业务>/`，在 `application.ts` 装配。
+- 业务前端任务负责 Web、Electron 和必要客户端适配；同步 main 已有后端代码不属于自行扩展业务。以后端现有 API 和 shared DTO/schema 为准；不得自行新增后端业务接口、修改 Prisma schema 或数据库迁移。用户已授权的后端例外为支撑 Electron 页面直接 HTTP 的最小来源/CORS/Cookie 适配，不扩展个人资料业务。已有接口按当前契约对接，剩余语义缺口先列清单并与后端确认，不提前把设计写成已实现契约。个人中心已授权接入现有资料、改密和组织读取接口；仅扩展 shared 客户端能力接口，不修改后端 DTO/schema。 Agent 后端任务按当前授权范围在 `apps/agent` 实现接口、执行状态和存储，涉及业务后端仍按其职责协作。
+- 业务 UI 放 `apps/web/src/modules/<业务>/`，路由接入 `app/App.tsx`；业务后端模块放 `apps/server/src/modules/<业务>/`，在 `application.ts` 装配。Agent UI 与服务分别落在 `apps/agent-web`、`apps/agent`。
 - Swagger UI 为 `/api/v1/docs/`，JSON/YAML 在其下的 `/json`、`/yaml`；插件必须先于业务路由注册。新增接口补齐 summary、operationId、tags、请求与响应 schema，认证请求 schema 位于 `packages/shared/src/auth.ts`，响应 schema 位于 `auth.schema.ts`；维护说明见 `docs/API.md`。
 - Swagger 字段说明是新增/修改接口的必交付项：所有请求、响应、嵌套对象、数组项及参数均需中文 `description`，枚举逐值解释，说明条件必填/默认行为/单位/格式/null，并提供真实可校验示例；未接入和占位能力如实标注。常规枚举使用 `type: string` + `enum`，避免无必要的 `anyOf`。完整规则和验收要求见 `docs/API.md` 的“Swagger 文档标准”。
-- 已有 API 的客户端变更同步维护 platform Web/桌面适配、Electron preload/受限 IPC 与页面调用；新增后端 DTO/schema、路由、service 和数据库变更由后端负责人实现。
-- UI 统一通过平台适配层访问业务能力；Electron 只承担桌面能力，不复制 React 页面、不内嵌业务后端。
-- Web 与 Electron 只维护 `apps/web` 这一份组件、路由和业务逻辑；优先复用 `components/ui/`，不再引入 Ant Design 或另一套路由。按钮尺寸通过公共 `size` 变体管理。
+- 已有业务 API 的客户端变更同步维护 platform Web/桌面适配、Electron preload/受限 IPC 与页面调用；业务后端 DTO/schema、路由、service 和数据库变更由业务后端负责人实现。Agent 契约由 Agent 前后端共同确认，在 shared 维护唯一跨应用定义。
+- 业务 UI 统一通过平台适配层访问业务能力；Agent UI 集中通过自身客户端层访问 Agent 服务。Electron 只承担桌面能力，不复制业务页面、不内嵌业务后端或 Pi 执行进程。
+- Web 与 Electron 的业务 UI 只维护 `apps/web` 这一份组件、路由和业务逻辑；优先复用 `components/ui/`，不再引入 Ant Design 或另一套业务路由。按钮尺寸通过公共 `size` 变体管理。独立 Agent UI 在 `apps/agent-web` 维护和构建，隔离样式。
 - 认证页当前采用满页浅青背景与右侧白色悬浮卡片。桌面左侧沿用 main 的英文引导、中文主标题与辅助说明层级，使用当前的潮汐主题文案、协作说明和欢迎语。手机端使用相同背景与白卡，隐藏左侧文案。
 - 资料页使用 20px 标题并收紧顶部间距，分为“基础信息”（密码、确认密码）与“个人信息”（姓名、昵称、身份证号、邮箱）两段，保留全部字段与校验；375px 宽手机保持两列，仅宽度不超过 360px 时改为单列，手机卡片左右内边距为 16px。初始、校验错误和提交提示状态以在 1280×720 桌面及典型 375px 宽手机视口内单页完整展示为目标，手机和矮窗仍保留自然滚动，不隐藏溢出内容。
-- 优先复用现有通用 UI、主题变量和基础样式，认证展示组件放 `modules/auth/components/`。页面只通过 `services/api.ts` 调用平台能力；不重新引入旧认证契约、前端本地验证码 mock 或上传服务。
+- 业务前端优先复用现有通用 UI、主题变量和基础样式，认证展示组件放 `modules/auth/components/`。业务页面只通过 `services/api.ts` 调用平台能力；不重新引入旧认证契约、前端本地验证码 mock 或上传服务。
 - 登录、注册页不主动查询 `/users/me`；工作台与个人中心启动时查询，开发和生产均恢复真实会话。不自动发起健康检查。发码只在点击且手机号校验通过后请求 `/auth/sms/send`，使用 `scene=login`。当前后端成功 data 为“验证码已发送，请注意查收”，不另设验证码、短信模式或成功重发间隔字段；页面保留服务端提示，并在成功后展示与后端 mock 共用的 shared 常量 `MOCK_SMS_CODE`，不在页面另行写死验证码，提示已含该验证码时不重复追加。接入真实短信时同步移除固定测试码提示；不根据输入本地判定验证成功，也不猜测成功倒计时。HTTP 429 时使用后端 `Retry-After` 禁止重发。失败显示后端错误或网络错误，不显示测试码、不回退到模拟成功。
 - `/auth` 提供“验证码登录 / 密码登录”双页签，默认验证码登录，不提供角色或独立注册页签。密码页首次打开即展示“验证码注册”，无需提交。密码与短信提交分别请求 `/auth/login` 与 `/auth/sms/login`；登录后重新获取用户资料再进入欢迎页。验证码注册保留手机号、清空密码与验证码并聚焦验证码输入框，不自动发码。
 - 短信登录只有后端返回 `registration_required` 才进入 `/register`。手机号、registrationToken、expiresAt 仅放跨页内存，不进 URL 或持久化存储；凭证过期、刷新、直接访问或离开资料页后须重新验证。资料页不重复填写手机号或验证码，不提供角色、组织注册或材料上传；提交固定 `accountType=INDIVIDUAL` 与后端 DTO 字段。注册成功只创建账号，前端返回密码页并提示登录，不模拟会话。表单密码、姓名、昵称、身份证与邮箱校验和后端规则保持一致。
 - 桌面专有入口依据 `platform.capabilities` 显示；只登记已实现的能力，相关路由与调用也须检查可用性。`isElectron` 用于端标识，不能代替能力或业务权限校验。
-- 当前后端 API 是唯一联调契约，不依赖原 tyde-web 的 Java 服务；未实现的业务接口先与后端同学约定 shared 类型/schema，再实现双端适配，不接入旧后端，认证及个人资料写入失败均不模拟成功。
+- 当前业务后端 API 是业务联调契约，不依赖原 tyde-web 的 Java 服务；未实现的业务接口先与后端同学约定 shared 类型/schema，再实现双端适配，不接入旧后端，认证及个人资料写入失败均不模拟成功。 Agent 接口按自身共享契约实现与联调。
 - IPC 仅用于公开运行配置和已实现的桌面系统能力，不转发业务 HTTP；保留来源及参数校验，不暴露通用 HTTP / 任意 URL 能力。preload 的 IPC 常量从 `@tyde/shared/ipc` 导入。
 - 保持 `sandbox: true`、`contextIsolation: true`、`nodeIntegration: false`；不向 renderer 暴露任意 URL 请求、文件系统或完整 `ipcRenderer`。
-- 后端负责人提供的数据结构变更应同时包含 Prisma schema 与迁移；当前 UI 任务只同步远端已有文件，不自行修改或执行数据库迁移。服务端密钥留在后端 `.env`，不进入前端构建、桌面资源或日志。
+- 后端负责人提供的数据结构变更应同时包含 Prisma schema 与迁移；当前 UI 任务只同步远端已有文件，不自行修改或执行数据库迁移。Agent 自有数据变更同步维护其模型和独立迁移，具体方案按接库任务落实。服务端密钥留在对应服务的部署配置或 `.env`，不进入前端构建、桌面资源或日志。
 - 开发和生产前端共用平台适配，当前用户与个人资料均访问真实接口；已移除固定当前用户与个人资料内存演示，不再使用 VITE_MOCK_CURRENT_USER。后端当前仅允许开发/测试 mock 短信，`security.ts` 的 `MOCK_CODE` 引用 shared 的 `MOCK_SMS_CODE`，页面发码成功后展示同一测试码；后端 `production` 模式被配置校验阻止启动。短信提供方由后端配置决定，接入真实短信需同时调整 provider、配置校验并移除测试码提示。
 
 ## 常用命令与验证
 
 在仓库根目录执行，使用 Node.js 24 与 pnpm 11；开发连接 `.env` 指定的远程 PostgreSQL，需要本机数据库时单独准备。
+
+Agent 独立入口：`pnpm dev:agent`（3002）、`pnpm dev:agent-web`（3003）；`pnpm build:agent`、`pnpm build:agent-web`、`pnpm typecheck:agent`、`pnpm test:agent`。界面通过 `/agent-api` 代理访问 Agent 服务，配置及生产反向代理要求见各应用 README。现有 `dev:local`、`build:electron`、`build:vercel`、`test` 与 `db:*` 仍为业务链路，尚未装配 Agent 或执行其迁移。
 
 | 场景                  | 命令                                                                                              |
 | --------------------- | ------------------------------------------------------------------------------------------------- |
