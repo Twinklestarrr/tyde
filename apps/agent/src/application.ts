@@ -37,7 +37,7 @@ export async function createApp(
         title: 'tyde Agent API',
         version: '0.1.0',
         description:
-          'W1 工程骨架，仅提供进程存活检查；开发测试身份适配器供后续资源接口使用，平台授权、模型、任务和数据库尚未接入。',
+          'HTTP 仅提供进程存活检查；W2 Pi 内存执行与 MaaS 校验由独立无界面入口验证，不代表产品任务接口、平台授权或数据库已接入。',
       },
       tags: [{ name: 'Health', description: 'Agent 服务进程存活检查，不代表模型或数据库就绪。' }],
     },

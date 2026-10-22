@@ -4,7 +4,7 @@
 
 React + Electron + Fastify + PostgreSQL 的 pnpm Monorepo。Web 与桌面共用 `apps/web`，使用 Tailwind CSS、shadcn/ui、TanStack Router 和 React Query。认证入口提供“验证码登录 / 密码登录”双页签，默认验证码登录；认证操作均访问当前后端，支持短信或密码登录、统一注册、会话恢复及退出。前端不生成或在本地校验验证码；当前短信仅 mock，发码成功后保留服务端提示，并展示与后端共用的固定测试码。后端已升级统一账号，所有账号自带领航员/策略官/执行专家，提供当前会话角色切换、登录后独立创建组织、本人全部组织摘要、刷新令牌、密码重置、用户资料更新、组织成员与审批、成员导入及文件上传台账；客户端已接入真实角色切换与组织创建，多组织选择尚未接入，真实短信尚未接入。后端字段和迁移说明见 [认证后端上下文](docs/AUTH_BACKEND.md)。
 
-Agent W1 已提供两个应用骨架、pi-web 前端基础代码、21／22 号 v0.1 共享契约、事件样例与解析测试，以及显式开发测试身份适配器。Pi 执行、实际会话／任务接口、持久化与 Electron 装配仍待后续工作包。前后端分工、契约基线、数据与授权边界见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
+Agent W1 已提供两个应用骨架、pi-web 前端基础代码、21／22 号 v0.1 共享契约、事件解析及受控开发身份。W2 增加固定 Pi 1.3.0、内存多轮、流式、停止／故障处理与无界面验收入口。模型主入口通过服务端 URL 与 Key 配置，默认官方 DeepSeek；24 号平台转发保留为独立可选路径。当前未提供实际 Key，真实模型验收待使用方执行。产品任务 HTTP、页面发送、持久化与 Electron 装配仍待后续工作包。分工和边界见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
 
 ## 环境
 
@@ -13,7 +13,7 @@ Agent W1 已提供两个应用骨架、pi-web 前端基础代码、21／22 号 v
 - 首次依赖安装需要 npm 网络；Electron 安装与打包还会下载二进制。
 - Mac 包在 macOS 构建；Windows 包优先在 Windows x64 构建。用户安装客户端无需这些开发工具。
 
-## Agent 独立开发（W1）
+## Agent 独立开发
 
 完成 `pnpm install` 后分别启动两个终端，无需业务数据库或模型密钥：
 
@@ -24,7 +24,7 @@ pnpm dev:agent-web  # http://127.0.0.1:3003
 
 页面通过自身客户端真实查询 Agent `/health/live`，可编辑本地输入草稿；发送尚未接入。服务连接正常仅说明 HTTP 进程存活。端口、环境变量与生产代理说明见 [Agent 服务](apps/agent/README.md) 和 [Agent 界面](apps/agent-web/README.md)，pi-web 固定版本及导入范围见 [上游记录](apps/agent-web/upstream/pi-web/SOURCE.md)。
 
-`@tyde/shared/agent` 导出命令、查询与 SSE 的 DTO、Schema 和 `validateAgentContract`。本地源快照与生成规则见 [契约说明](packages/shared/src/agent/contracts/README.md)；`pnpm check:agent-contracts` 校验生成代码一致性，`pnpm test:agent` 验证格式、请求摘要、归属和事件边界。测试夹具不参与页面请求或生产响应。
+`@tyde/shared/agent` 导出命令、查询与 SSE 的 DTO、Schema 和 `validateAgentContract`。本地源快照与生成规则见 [契约说明](packages/shared/src/agent/contracts/README.md)；`pnpm check:agent-contracts` 校验生成代码一致性，`pnpm test:agent` 另覆盖 Pi／MaaS 隔离回归。测试夹具不参与页面请求或生产响应。2026-10-22 核对当前 21／22 号外部 JSON 与仓库快照逐字节一致，未覆盖生成代码。
 
 ```sh
 pnpm typecheck:agent
@@ -32,6 +32,23 @@ pnpm test:agent
 pnpm build:agent
 pnpm build:agent-web
 ```
+
+W2 本地验收使用独立命令，无需先启动 HTTP 服务、页面或数据库。在 `apps/agent/.env` 填写模型 URL 和 Key；默认官方 DeepSeek 的 `deepseek-flash`：
+
+```dotenv
+AGENT_MODEL_BASE_URL=https://api.deepseek.com/v1
+AGENT_MODEL_API_KEY=
+```
+
+把实际 Key 填在上述等号后，仅保存到忽略的 `.env`。其他 OpenAI 兼容地址另填 `AGENT_MODEL_ID`。在仓库根目录执行：
+
+```sh
+pnpm --filter @tyde/agent smoke:model --check-config
+pnpm --filter @tyde/agent smoke:model
+pnpm --filter @tyde/agent smoke:model --stop-after-ms 2000
+```
+
+配置检查不发送模型请求；默认冒烟验证两轮与上下文召回，停止时机可调整。完整配置见 [Agent 服务](apps/agent/README.md#url-与-key-本地验收)。原 `smoke:maas` 只用于可选的 24 号平台契约验收，独立要求平台身份／路由配置，两条路径不会自动回退。页面当前仍只显示连接与草稿。隔离测试不代表真实模型验通，内存模式不承诺重启恢复或持久提交。
 
 业务开发、Vercel 与桌面构建入口继续按原流程运行；Agent 独立部署与双视图装配后续接入。
 
