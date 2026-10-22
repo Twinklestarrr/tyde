@@ -20,21 +20,24 @@
 :root,
 [data-theme='light'] {
   color-scheme: light;
-  --bg: #ffffff;
-  --bg-panel: #f5f5f5;
-  --bg-hover: #eeeeee;
-  --bg-selected: #e8e8e8;
-  --border: #e0e0e0;
-  --text: #1a1a1a;
-  --text-muted: #515c6b;
-  --text-dim: #5e6673;
-  --accent: #245bce;
-  --accent-hover: #1d4ed8;
+  /* Brand colors follow apps/web/src/styles/global.css; layout remains isolated. */
+  --bg: #f8fafc;
+  --bg-panel: #ffffff;
+  --bg-hover: #eef3f7;
+  --bg-selected: #eaf8fa;
+  --border: #d9e2ec;
+  --text: #263f4e;
+  --text-muted: #526b78;
+  --text-dim: #7890a3;
+  --accent: #1d9db1;
+  --accent-hover: #138ea3;
   --accent-contrast: #ffffff;
-  --user-bg: #eff6ff;
+  --success: #13954c;
+  --warning: #a56508;
+  --user-bg: #eaf8fa;
   --assistant-bg: #ffffff;
-  --tool-bg: #f9fafb;
-  --bg-subtle: rgba(0, 0, 0, 0.03);
+  --tool-bg: #f8fafc;
+  --bg-subtle: #eef3f7;
   --chat-content-max-width: 820px;
   --chat-content-font-size: 14px;
 }
@@ -42,40 +45,23 @@
 html.dark,
 [data-theme='dark'] {
   color-scheme: dark;
-  --bg: #1a1a1a;
-  --bg-panel: #242424;
-  --bg-hover: #2e2e2e;
-  --bg-selected: #383838;
-  --border: #454545;
-  --text: #e8e8e8;
-  --text-muted: #b7b7b7;
-  --text-dim: #a4a4a4;
-  --accent: #a4c2f4;
-  --accent-hover: #c3d8fa;
-  --accent-contrast: #182234;
-  --user-bg: #292929;
-  --assistant-bg: #1a1a1a;
-  --tool-bg: #222222;
-  --bg-subtle: rgba(255, 255, 255, 0.04);
-}
-
-[data-theme='mist'] {
-  color-scheme: light;
-  --bg: #f4f8f7;
-  --bg-panel: #e9f0ee;
-  --bg-hover: #e0eae7;
-  --bg-selected: #d7e4df;
-  --border: #afc4ba;
-  --text: #202e2b;
-  --text-muted: #455f56;
-  --text-dim: #52685f;
-  --accent: #1e6559;
-  --accent-hover: #174f46;
-  --accent-contrast: #ffffff;
-  --user-bg: #e0efeb;
-  --assistant-bg: #f4f8f7;
-  --tool-bg: #ecf3f0;
-  --bg-subtle: rgba(24, 65, 50, 0.04);
+  --bg: #13212a;
+  --bg-panel: #1b2c36;
+  --bg-hover: #243b47;
+  --bg-selected: #194550;
+  --border: #36505f;
+  --text: #e4eef3;
+  --text-muted: #b1c4cf;
+  --text-dim: #91aab9;
+  --accent: #64c9db;
+  --accent-hover: #8bd9e6;
+  --accent-contrast: #13212a;
+  --success: #76d49a;
+  --warning: #edc270;
+  --user-bg: #194550;
+  --assistant-bg: #13212a;
+  --tool-bg: #1b2c36;
+  --bg-subtle: #20343f;
 }
 
 .markdown-body {

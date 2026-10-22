@@ -2,10 +2,13 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { validateAgentContract } from '@tyde/shared/agent';
 import { ChatInput } from './components/ChatInput';
 import { MarkdownBody } from './components/MarkdownBody';
+import { AttemptStats } from './components/AttemptStats';
+import { MessageTime } from './components/MessageTime';
 import { messageText } from './agent-events/projection';
 import { AgentClient } from './services/agent-client';
 import { ChatController } from './services/chat-controller';
 import { taskExecutionPhase, type TaskExecutionPhase } from './lib/task-state';
+import { useLocalCalendarDay } from './hooks/useLocalCalendarDay';
 
 const TASK_LABELS: Record<TaskExecutionPhase, string> = {
   queued: '等待执行',
@@ -43,7 +46,7 @@ export function App() {
   };
 
   return (
-    <div className="agent-shell" data-theme={dark ? 'dark' : 'mist'}>
+    <div className="agent-shell" data-theme={dark ? 'dark' : 'light'}>
       {controller ? (
         <Workspace
           controller={controller}
@@ -107,6 +110,7 @@ function Workspace({
   onDisconnect(): void;
 }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+  const calendarDay = useLocalCalendarDay();
   const [draft, setDraft] = useState('');
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -378,6 +382,7 @@ function Workspace({
                           {message.status === 'in_progress' ? '仍在生成…' : '此条输出没有正文。'}
                         </p>
                       )}
+                      <MessageTime timestamp={message.created_at} calendarDay={calendarDay} />
                     </article>
                   );
                 })}
@@ -400,15 +405,7 @@ function Workspace({
                   ))}
                 </details>
               )}
-              {task?.latest_attempt.budget && (
-                <div className="budget-note">
-                  本次尝试：模型请求 {task.latest_attempt.budget.model_requests_used}/
-                  {task.latest_attempt.budget.max_model_requests} · 工具执行{' '}
-                  {task.latest_attempt.budget.tool_calls_used}/
-                  {task.latest_attempt.budget.max_tool_calls}
-                  {task.latest_attempt.budget.limit_exceeded_kind && ' · 已达到执行预算边界'}
-                </div>
-              )}
+              {task && <AttemptStats key={task.latest_attempt.id} attempt={task.latest_attempt} />}
               <div ref={endRef} />
             </section>
           )}

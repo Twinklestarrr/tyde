@@ -159,6 +159,7 @@ React 页面 → services/api → packages/platform
 - 契约源快照在 `packages/shared/src/agent/contracts/`，通过生成器维护类型与无运行时代码生成的校验器；修改基线后执行 `pnpm generate:agent-contracts`、`pnpm check:agent-contracts`、`pnpm test:agent`，不要直接修改生成文件。命令使用 `/api/agent/v1`，与业务 `/api/v1` 区分；所有 bigint 版本／序号用十进制字符串。
 - `apps/agent/src/auth/access.ts` 负责可信身份与私有会话归属；开发身份默认关闭，仅显式开发／测试环境和回环监听可用，用户与凭证由服务端配置。`src/commands/prepare-command.ts` 规范化 UUID／context，按固定 JCS 版本生成原意图摘要；W3 进程内原命令去重、同 key 冲突、执行互斥和严格 JSON 边界已接入；持久幂等与事务提交仍待 W5。
 - W3 每个 Conversation 至多固定绑定一个 Pi Session；普通问答完成后，后续问题创建新 Task 并复用原生上下文。停止、失败、中断和待补充仍属未完成目标，不能偷偷新建 Task 或 Pi 会话绕过。停止绑定明确 Attempt，受理后先显示 stopping，实际收敛后才显示 stopped；迟到旧停止不影响后续执行。
+- Agent 会话未指定标题时，以首条受理用户消息折叠空白后的前 80 个 Unicode 码点作为标题预览；保留自定义标题，不额外调用模型。消息右下角显示服务端时间，跨日带日期；尝试统计只显示已用模型请求数、工具执行数和按服务端起止时间计算的耗时，运行时更新、终态固定，刷新／重连不重新计时。页面不展示总额度，预算保护保留；浅色配色对齐业务前端青蓝品牌，深色保留可读性。继续／重试仍未开放。
 - `apps/agent-web/src/agent-events/` 在完整应用 snapshot 和水位 H 后订阅，只在可靠 product 成功连续应用后推进游标；control、delta 和心跳不推进。临时文字仅按匹配输出流和连续索引拼接，终态以可靠消息／结果收敛；缺口或换流重取快照，旧回包和旧订阅不能覆盖当前会话。刷新、重连或关闭 SSE 都不启动／停止执行；Bearer 仅存页面内存，刷新后重新输入身份并按 URL 会话 UUID 恢复展示。测试夹具不进入真实页面。23 号业务接口仍为设计提案，未向 `apps/server` 增加内部接口或业务写入能力。
 - `src/execution/attempt-budget.ts` 为每次新 Attempt 提供真实预算投影：默认 600000ms、12 次模型请求授权、10 次工具执行授权。同步门禁按 Attempt 累计，重复授权不增计数，第 N+1 次拒绝且锁存首个超限原因并取消；恰好用尽 N 次仍可完成。预算与单次模型超时、token 用量和费用分开，已用授权失败不退。虚拟时钟验证期限与停止竞争；正式持久预占、提交不明核实、持久 deadline 和恢复保护仍属 W5，不能宣称完整 26 号设计已验收。
 - 业务 UI 继续由 `apps/web` 共用；Agent UI 独立放在 `apps/agent-web`，通过自己的客户端层访问远程 Agent API／事件。Electron 负责装载及受限桥接，Pi 执行统一归 `apps/agent`，不进入安装包。

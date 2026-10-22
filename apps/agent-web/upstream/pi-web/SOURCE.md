@@ -27,11 +27,13 @@ git -C .local/upstream/pi-web checkout --detach 7c0778a8bc7342f1ededc6f5fb190dc6
 | `lib/markdown-blocks.ts`            | `src/lib/markdown-blocks.ts`，保留流式 Markdown 分块算法，补齐严格索引检查与来源注释。                                                                                                                                                            |
 | `lib/markdown-list-continuation.ts` | `src/lib/markdown-list-continuation.ts`，保留列表／任务清单／中文序号续行及代码围栏保护，补齐严格索引检查与来源注释。                                                                                                                             |
 | `components/ChatInput.tsx`          | `src/components/ChatInput.tsx`，提取 textarea 自动高度、beforeinput 列表续行和输入法确认保护，改为纯文本受控草稿；移除附件、命令、历史、模型选择、会话与请求逻辑。W3 增加发送回调、真实可用状态及 ⌘／Ctrl + Enter；请求逻辑集中在自身服务客户端。 |
-| `app/globals.css`                   | `src/styles/pi-web.css`，提取 light／dark／Mist 主题变量与纯文本 Markdown、表格样式；移除 Next、xterm、文件面板及其余样式。页面布局在 `src/styles/global.css` 独立维护。                                                                          |
+| `app/globals.css`                   | `src/styles/pi-web.css`，保留主题变量接口与纯文本 Markdown、表格样式；主题色由本仓库按业务前端品牌覆盖为 light／dark，移除 Mist、Next、xterm、文件面板及其余样式。页面布局在 `src/styles/global.css` 独立维护。                                   |
 
 未复制上游 Next API、Pi 执行器、JSONL／本地会话恢复、文件系统、项目／终端、登录／凭据、本地存储、服务工作线程、通知推送、演示工程或截图。上游整体包含服务端代码，不能当成仅前端项目直接运行。后续真实执行集中在 `apps/agent`，通过共享契约连接本界面。
 
 W3 的页面、会话控制器、产品投影与 Agent HTTP／SSE 客户端为本仓库新增实现，继续使用已适配的 Markdown 与输入基础代码，没有继续复制上游源码。页面只展示服务端真实产品记录，没有预置模型回答；只有明确点击发送或发送快捷键提交命令，刷新和订阅不会启动任务。
+
+聊天展示调整沿用 `apps/web/src/styles/global.css` 的青蓝主色 `#1d9db1`、悬停色 `#138ea3`、浅选中色 `#eaf8fa`、正文及边框变量值，并为深色模式配置同品牌的可读配色。消息底部时间和尝试统计样式由本仓库新增；没有复制业务页面，也未引入额外上游代码或依赖。
 
 ## 来源摘要
 
