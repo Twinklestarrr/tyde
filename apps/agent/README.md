@@ -1,6 +1,6 @@
 # Agent 服务
 
-独立 Fastify 服务，默认监听 `http://127.0.0.1:3002`。W1 提供健康、Swagger、受控身份和命令摘要基础；W2 增加 Pi 1.3.0 内存执行、MaaS 协议校验及无界面验证入口。当前 HTTP 接口仍只有 `GET /health/live` 和 `/api/v1/docs/`，健康响应只表示 HTTP 进程存活，不代表 MaaS 已验通或产品任务可执行。
+独立 Fastify 服务，默认监听 `http://127.0.0.1:3002`。W1 提供健康、Swagger、受控身份和命令摘要基础；W2 增加 Pi 1.3.0 内存执行、MaaS 协议校验及无界面验证入口。W3 增加 `/api/agent/v1/conversations` 下的开发内存 API、任务协调与产品 SSE。健康响应仍只表示 HTTP 进程存活；聊天需要显式身份和服务端模型配置。
 
 在仓库根目录使用 Node.js 24 与 pnpm 11 安装依赖后：
 
@@ -13,15 +13,49 @@ pnpm --filter @tyde/agent start
 
 配置可通过 shell 注入，或复制 `.env.example` 为本目录 `.env`。`dev` 和 `start` 按需读取该文件，shell 已有变量优先；未配置时使用回环地址和 3002 端口。`NODE_ENV` 仅接受 `development`、`test`、`production`。`AGENT_HOST` 不含协议或端口，`AGENT_PORT` 为 1～65535 的整数。
 
-W1 已提供受控测试身份适配器，默认 `AGENT_AUTH_MODE=disabled`。后续资源接口通过 `app.agentAccess.authenticate(request)` 取得服务端验证后的用户，再调用 `requireOwnedConversation` 校验可信存储中的会话归属；不存在、已删除或其他用户会话统一返回 404。请求 body、query、Cookie 和自报用户头不能证明身份。当前对话／命令资源路由仍未实现，适配器由隔离测试路由验证，不新增模拟成功的业务接口。
+W1 已提供受控测试身份适配器，默认 `AGENT_AUTH_MODE=disabled`。资源接口通过 `app.agentAccess.authenticate(request)` 取得服务端验证后的用户，再调用 `requireOwnedConversation` 校验可信存储中的会话归属；不存在、已删除或其他用户会话统一返回 404。请求 body、query、Cookie 和自报用户头不能证明身份。会话、命令、快照与 SSE 已复用此边界；SSE 每批发送及存活期间复核身份与归属，身份撤销后关闭。
 
 需要本机开发身份时，显式设置 `AGENT_AUTH_MODE=development`、`AGENT_TEST_USER_ID` 和 `AGENT_TEST_BEARER_TOKEN`。用户标识固定在服务端；凭证须至少 32 字符，可在本机使用 `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"` 生成，存入忽略的 `.env`，请求时放入 `Authorization: Bearer …`。此模式仅允许 `development`／`test` 环境，且 `AGENT_HOST` 必须为字面地址 `127.0.0.1` 或 `::1`；禁止在生产、主机名或其他监听地址启用。不要把测试凭证提交到仓库、放入前端 `VITE_*` 变量或 URL。
 
 平台身份预留 `createApp(config, { identityAdapter })` 服务端注入点，后续由适配器验证真实平台 Bearer 及撤销状态；开发身份与平台适配器不能同时装配。默认未装配时资源身份验证失败关闭，格式合法的 Bearer 因无法验证返回 503；缺失／格式非法的凭证，以及已装配适配器判定无效的凭证返回 401。匿名健康检查和 Swagger 不变。`pnpm --filter @tyde/agent test` 覆盖显式配置、凭证验证、客户端伪造身份、归属／删除隔离、平台撤销及验证异常。
 
+## W3 浏览器聊天与本机身份
+
+先实际核对 `node --version` 为 24.19.0、`pnpm --version` 为 11.23.0；`.nvmrc` 不会自动切换终端，使用相应版本管理器切换后再执行。
+
+保留现有 `apps/agent/.env`，仅补齐缺少的本机身份项。先执行下面命令生成一个新的本机凭据，再填入配置；它与模型 Key 是两种凭据，不互相替代：
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+```
+
+```dotenv
+NODE_ENV=development
+AGENT_HOST=127.0.0.1
+AGENT_AUTH_MODE=development
+AGENT_TEST_USER_ID=local-agent-user
+AGENT_TEST_BEARER_TOKEN=填入刚生成的凭据
+```
+
+真实聊天沿用本文件下方说明的服务端 `AGENT_MODEL_BASE_URL`／`AGENT_MODEL_API_KEY`／可选 `AGENT_MODEL_ID`。不要覆盖已有值，不把任何凭据放入 `VITE_*`。在仓库根分别启动 `pnpm dev:agent` 和 `pnpm dev:agent-web`，浏览器打开 `http://127.0.0.1:3003`，在身份框输入刚配置的开发 Bearer，点击连接和新建会话。页面只在内存持有身份凭据，刷新后重新输入，按 URL 会话 ID 从服务恢复展示。
+
+`src/runtime/memory-runtime.ts` 维护同进程会话、命令裁决、输入消费、产品投影和最多 10000 条冻结事件；`src/api/` 负责严格 JSON、身份、Swagger、SSE 串行发送与有界背压。开发模式只支持 `business_query` 的 `start_task` 和 `stop_attempt`，其他命令及 `scheduling_draft` 返回 422，页面不开放。普通问答完成后追问创建新 Task，同一 Conversation 懒绑定且固定复用一个 Pi Session；停止或失败目标不能靠新 Task 绕过，可另开会话。
+
+| 路径（均在 `/api/agent/v1` 下）                                                              | 能力                                             |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `POST/GET /conversations`                                                                    | 创建空会话（不自动重试）、当前用户列表与签名分页 |
+| `GET /conversations/{id}`、`/{id}/snapshot`                                                  | 概况、一致产品快照与水位 H                       |
+| `GET /conversations/{id}/messages`、`/{id}/tasks/{task_id}`、`/{id}/results/{result_id}`     | 历史、任务与不可变结果                           |
+| `POST /conversations/{id}/commands`、`GET /conversations/{id}/commands/by-key/{request_key}` | 原 key 幂等裁决与只读核实                        |
+| `GET /conversations/{id}/events?stream_id=…&after_seq=…`                                     | H 之后顺序补读；control／delta／心跳不推进游标   |
+
+每个 Attempt 默认 600000ms、12 次模型发送授权、10 次工具执行授权。放行前原子预占、失败不退、同 key 重放不重置；期限与停止、完成共用同步裁决，最终发送前再次检查资格，单请求超时受剩余时长限制。用量缺失依然是 null，与次数预算和费用分开。虚拟时钟覆盖边界；本轮不表示 26 号的正式持久预占、持久 deadline、恢复保护或真实十分钟落库验收已完成。
+
+停止的 202 只确认受理，任务先显示 stopping，执行收敛才显示 stopped。断开 SSE、切换、刷新均不停止或启动任务。服务进程退出后全部会话、幂等记录和旧游标失效，404 会提示新建会话；不使用 JSONL 或数据库兜底。
+
 ## W2 Pi 与模型接入
 
-模型主入口采用服务端 URL 与 Key，复用 Pi 内置的 `openai-completions` 适配、上下文和工具循环。默认官方 DeepSeek，其他兼容地址显式配置模型 ID。24 号平台转发作为独立可选路径保留，主入口无需平台身份模块、路由版本或委托头。该落点遵循本轮最新确认的简化接入方式，外部设计文档未据此改写；两条路径均不自动切换供应商、模型或鉴权方式。
+模型主入口采用服务端 URL 与 Key，复用 Pi 内置的 `openai-completions` 适配、上下文和工具循环。默认官方 DeepSeek，其他兼容地址显式配置模型 ID。24 号平台转发作为独立可选路径保留，主入口无需平台身份模块、路由版本或委托头。当前 24 号设计已明确 URL／Key 是长期主入口，专用平台鉴权和路由握手属于可选扩展；两条路径均不自动切换供应商、模型或鉴权方式。
 
 公开 npm 依赖 `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` 均精确锁定 `1.3.0`；设计核对的上游源码提交为 `71023aec1546d6d677a65669c5665c0927ce0dd0`，没有使用 pi-web 的 1.2.0 或 main。SDK 直接依赖集中在 `src/pi/`；`src/maas/` 校验最终请求及模型流；`src/cli/model-smoke.ts` 是主验收入口，`src/cli/smoke.ts` 验可选平台契约。
 
@@ -56,13 +90,13 @@ pnpm --filter @tyde/agent smoke:model --stop-after-ms 2000
 
 配置检查不发送模型请求。默认冒烟发起两轮真实调用，用随机口令核对上下文召回，边接收边显示临时文字，再输出结构化结局。停止计时从 prompt 开始，只有收到模型文字、读取中的 HTTP 200 流被取消且本地结局为 stopped 才通过；尚无文字或模型已完成时提示调整停止时机。SIGINT／SIGTERM 请求停止；不将停止后的迟到输出当正常结果。
 
-其他 OpenAI 兼容服务使用自己的 URL、Key、模型 ID；base URL 不包含 `/chat/completions`。后续普通平台代理也沿用这一配置方式，不要求 24 号专用身份／路由头。格式兼容仍需实际验证，错误会明确返回，不自行猜模型、删除不支持参数重试或回退到默认 DeepSeek。当前通过无界面命令验收，页面接入在 W3；正式部署的授权、持久化和运维仍须按对应工作包落实。直连不发送平台委托／路由头，也不伪造平台响应身份。24 号专用契约验收使用下方独立入口。
+其他 OpenAI 兼容服务使用自己的 URL、Key、模型 ID；base URL 不包含 `/chat/completions`。后续普通平台代理也沿用这一配置方式，不要求 24 号专用身份／路由头。格式兼容仍需实际验证，错误会明确返回，不自行猜模型、删除不支持参数重试或回退到默认 DeepSeek。当前同时提供无界面命令和 W3 浏览器验收；正式部署的授权、持久化和运维仍须按对应工作包落实。直连不发送平台委托／路由头，也不伪造平台响应身份。24 号专用契约验收使用下方独立入口。
 
 ### 执行与资源边界
 
 会话、设置、认证存储和资源加载器均显式使用内存实现；默认不构造内置终端／文件工具，不自动发现本机 Skills、Extensions、Packages、提示词或凭据。自动故障重试、压缩、摘要及预热路径关闭。工具必须显式注入白名单和参数校验，本阶段无真实业务写工具，也未交付 W4 演示工具／Skill。
 
-模型流与 22 号产品 SSE 分开，不提供产品事件游标。合法 finish 与完整 `[DONE]`、没有先前错误以及相应 profile 的参数、身份和用量检查共同决定本轮成功；断流、残缺事件、错误后 DONE 和多工具调用均失败关闭。只有完整参数校验通过后工具才可放行，首期每轮至多一个工具；主入口目前只验文字对话，不装配业务工具。
+模型流与 22 号产品 SSE 分开；产品事件游标由 W3 协调器独立维护，不透传模型 SSE。合法 finish 与完整 `[DONE]`、没有先前错误以及相应 profile 的参数、身份和用量检查共同决定本轮成功；断流、残缺事件、错误后 DONE 和多工具调用均失败关闭。只有完整参数校验通过后工具才可放行，首期每轮至多一个工具；主入口目前只验文字对话，不装配业务工具。
 
 停止会撤销本次执行资格并传播 AbortSignal，迟到文字不恢复旧执行，停止后不放行下一轮模型／工具。停止或失败前已接受的文字保留为原生 aborted／error 事实；结构化结果的 text 仅用于完整成功回答，失败片段不成为交付结果或可执行工具。授权解析与执行屏障的等待同样可取消并有准备时限。模型超时分为独立建连、响应头、首个有效进展、进展空闲和总预算；默认分别为 3、15、60、45、180 秒，上限为 300 秒。受控 HTTP 传输使用精确锁定的 Undici，单次请求独立持有并释放连接资源，不安装重试或重定向拦截器；平台取消传播及供应商实际停止、计费行为仍须真实联调。
 
@@ -97,6 +131,6 @@ pnpm --filter @tyde/agent smoke:maas --stop-after-ms 2000
 
 `--check-config` 加载配置并调用身份模块，随后退出；不会发送模型请求，也不表示平台路由已通过。模块加载、首次授权和会话装配共用一个准备预算，取配置的总预算；超时或 SIGINT／SIGTERM 以非零状态退出，迟到解析不会启动模型请求。独立 CLI 在结局输出和本地 Session 清理后最多再保留 1 秒退出窗口，防止身份模块遗留活动句柄；作为库使用的适配器不会退出服务进程。默认冒烟发起两轮真实模型请求，用随机口令验证原生上下文连续性，输出临时流式文字和结构化结果。停止计时从 prompt 开始；仅已收到真实文字、HTTP 200 的模型流取消且本地结果为 stopped 时通过。停止发生在准备阶段、尚无文字进展或远端已完成时均失败，提示调整停止时机，不能据此宣称执行中流式停止已验通。执行中的 SIGINT／SIGTERM 请求本地停止。命令失败不回退为模拟回答。
 
-隔离测试使用受控本机接口替身核对 SDK 真实路径、请求／响应、停止和故障。使用方尚未提供实际模型 Key，真实模型验收待配置后执行；平台转发另行按平台条件验收。HTTP 产品会话／任务／查询／SSE、页面发送、正式平台身份适配和 PostgreSQL 仍待后续工作包。页面当前只展示健康状态与草稿，真实聊天使用 `smoke:model`。
+隔离测试使用受控本机接口替身核对 SDK 真实路径、请求／响应、停止和故障。用户已提供 DeepSeek Flash 的 W2 真实两轮召回、流式与本地停止通过日志；DeepSeek V4 Pro 仅配置检查，可选平台路径尚未真实联调。W3 页面已接通同一模型入口，真实浏览器结果见 [W3 验证记录](../../docs/AGENT_W3_VALIDATION.md)。正式平台身份与 PostgreSQL 仍待后续工作包。
 
 协作边界及后续工作见 [Agent 开发说明](../../docs/AGENT_DEVELOPMENT.md)。

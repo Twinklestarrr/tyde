@@ -311,11 +311,64 @@ export const Applied202ResponseSchema = /*#__PURE__*/ Type.Intersect([
 ]);
 export type Applied202Response = Static<typeof Applied202ResponseSchema>;
 
+export const AttemptBudgetViewSchema = /*#__PURE__*/ Type.Object(
+  {
+    policy_version: /*#__PURE__*/ Type.Integer({
+      minimum: 1,
+      description: '当前规则版本1；相同语义仅调整数值不要求升规则版本。',
+    }),
+    max_duration_ms: /*#__PURE__*/ Type.Integer({
+      minimum: 1,
+      description: 'task固定快照上限，首期默认600000。',
+    }),
+    max_model_requests: /*#__PURE__*/ Type.Integer({
+      minimum: 1,
+      description: 'task固定快照上限，首期默认12。',
+    }),
+    max_tool_calls: /*#__PURE__*/ Type.Integer({
+      minimum: 1,
+      description: 'task固定快照上限，首期默认10。',
+    }),
+    execution_deadline_at: /*#__PURE__*/ oneOf([
+      /*#__PURE__*/ Type.String({ format: 'date-time' }),
+      /*#__PURE__*/ Type.Null({}),
+    ]),
+    model_requests_used: /*#__PURE__*/ Type.Integer({
+      minimum: 0,
+      description:
+        '本A原子发送授权预占次数；失败不退，授权后是否实际发出未知仍占用。非平台计费量。',
+    }),
+    tool_calls_used: /*#__PURE__*/ Type.Integer({
+      minimum: 0,
+      description: '本A原子工具执行授权预占次数；宿主对账HTTP不计Pi工具但仍受deadline。',
+    }),
+    limit_exceeded_kind: /*#__PURE__*/ oneOf([
+      /*#__PURE__*/ Type.Union([
+        /*#__PURE__*/ Type.Literal('duration'),
+        /*#__PURE__*/ Type.Literal('model_requests'),
+        /*#__PURE__*/ Type.Literal('tool_calls'),
+      ]),
+      /*#__PURE__*/ Type.Null({}),
+    ]),
+    limit_exceeded_at: /*#__PURE__*/ oneOf([
+      /*#__PURE__*/ Type.String({ format: 'date-time' }),
+      /*#__PURE__*/ Type.Null({}),
+    ]),
+  },
+  {
+    additionalProperties: false,
+    description:
+      '受控A的当前预算投影，值来自固定execution_policy.attempt_limits及本A；队列deadline为空，开始后固定；kind/at同空或同非空，由语义校验。',
+  },
+);
+export type AttemptBudgetView = Static<typeof AttemptBudgetViewSchema>;
+
 export const AttemptErrorSchema = /*#__PURE__*/ Type.Object(
   { code: /*#__PURE__*/ Type.String({}), summary: /*#__PURE__*/ Type.String({}) },
   {
     additionalProperties: false,
-    description: '允许产品展示的脱敏诊断，不含堆栈、凭据、完整工具输入或原生状态。',
+    description:
+      '允许产品展示的脱敏诊断，不含堆栈、凭据、完整工具输入或原生状态。 累计超限使用ATTEMPT_DURATION_LIMIT_EXCEEDED、ATTEMPT_MODEL_REQUEST_LIMIT_EXCEEDED、ATTEMPT_TOOL_CALL_LIMIT_EXCEEDED；code保持开放。',
   },
 );
 export type AttemptError = Static<typeof AttemptErrorSchema>;
@@ -346,6 +399,12 @@ export const AttemptViewSchema = /*#__PURE__*/ Type.Object(
       /*#__PURE__*/ Type.Null({}),
     ]),
     error: /*#__PURE__*/ oneOf([AttemptErrorSchema, /*#__PURE__*/ Type.Null({})]),
+    budget: /*#__PURE__*/ Type.Optional(
+      /*#__PURE__*/ oneOf([AttemptBudgetViewSchema, /*#__PURE__*/ Type.Null({})], {
+        description:
+          '仅历史冻结payload可省略，历史未追踪可null；受控新A当前查询和新事件必须为非空完整投影。旧事件不重写。',
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -1610,6 +1669,7 @@ export const agentContractSchemas = {
   Applied202Response: Applied202ResponseSchema,
   AppliedCommand: AppliedCommandSchema,
   AppliedResponse: AppliedResponseSchema,
+  AttemptBudgetView: AttemptBudgetViewSchema,
   AttemptError: AttemptErrorSchema,
   AttemptOutcome: AttemptOutcomeSchema,
   AttemptView: AttemptViewSchema,
@@ -1707,14 +1767,14 @@ export type AgentContractTypes = {
 export const agentContractSources = [
   {
     file: '21-commands.openapi.json',
-    designVersion: '1.0.0-design',
+    designVersion: '1.1.0-design',
     openapi: '3.1.1',
-    sha256: '911d2f4b8071bce4fb58877d04635870a5f1fe68da1f28fc3e193306fc44ce02',
+    sha256: '4dab294a8f543623c4efb265ae90b26169b0501c37173d8a574b19d3a747d39b',
   },
   {
     file: '22-reads-events.openapi.json',
-    designVersion: '1.0.0-design',
+    designVersion: '1.1.0-design',
     openapi: '3.1.1',
-    sha256: '0b07ca461bf9ef28718b636dae6b1bd88054441b0076c3aa437f9be6c6dd099d',
+    sha256: '33bccd277ca3999a7420a0e9eb4ab56309b9e8241ac7bd55e13809009bd31702',
   },
 ] as const;

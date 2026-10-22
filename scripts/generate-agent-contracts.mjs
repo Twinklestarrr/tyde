@@ -11,6 +11,7 @@ const directory = new URL('../packages/shared/src/agent/contracts/', import.meta
 const files = ['21-commands.openapi.json', '22-reads-events.openapi.json'];
 const schemas = {};
 const sources = [];
+const operations = {};
 const rename = (name) => (name === 'ErrorDetails' ? 'CommandErrorDetails' : name);
 const referenceName = (reference) => rename(reference.split('/').at(-1));
 
@@ -34,6 +35,10 @@ for (const file of files) {
     openapi: document.openapi,
     sha256: createHash('sha256').update(bytes).digest('hex'),
   });
+  for (const [path, item] of Object.entries(document.paths)) {
+    if (path in operations) throw new Error(`Conflicting contract path: ${path}`);
+    operations[path] = normalize(item);
+  }
   for (const [originalName, value] of Object.entries(document.components.schemas)) {
     const name = rename(originalName);
     const normalized = normalize(value);
@@ -187,6 +192,7 @@ const output = {
   'generated.ts': typebox,
   'validator.generated.ts': standaloneModule,
   'document.generated.ts': `${banner}export const agentContractDocument = ${JSON.stringify(contractDocument)} as const;\n`,
+  'operations.generated.ts': `${banner}export const agentContractOperations = ${JSON.stringify(operations)} as const;\n`,
 };
 const check = process.argv.includes('--check');
 let mismatched = false;

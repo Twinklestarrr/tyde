@@ -8,6 +8,11 @@ import {
   type AgentAccess,
   type PlatformIdentityAdapter,
 } from './auth/access.js';
+import { AgentMemoryRuntime } from './runtime/memory-runtime.js';
+import { readDirectModelConfig } from './maas/direct-model.js';
+import { createPiDirectModelSession } from './pi/session.js';
+import { registerAgentRoutes } from './api/routes.js';
+import { transformAgentOpenApi } from './api/documentation.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -17,7 +22,7 @@ declare module 'fastify' {
 
 export async function createApp(
   config: AgentConfig,
-  options: { identityAdapter?: PlatformIdentityAdapter } = {},
+  options: { identityAdapter?: PlatformIdentityAdapter; runtime?: AgentMemoryRuntime } = {},
 ) {
   const agentAccess = createAgentAccess(config, options.identityAdapter);
   const app = Fastify({
@@ -31,15 +36,32 @@ export async function createApp(
 
   // 动态 OpenAPI 收集器必须先于接口注册。
   await app.register(swagger, {
+    transformObject: (document) =>
+      'openapiObject' in document
+        ? (transformAgentOpenApi(document.openapiObject) as typeof document.openapiObject)
+        : document.swaggerObject,
     openapi: {
       openapi: '3.0.3',
       info: {
         title: 'tyde Agent API',
         version: '0.1.0',
         description:
-          'HTTP 仅提供进程存活检查；W2 Pi 内存执行与 MaaS 校验由独立无界面入口验证，不代表产品任务接口、平台授权或数据库已接入。',
+          'W3 开发内存模式：私有会话、问答任务、幂等命令、停止及产品 SSE 仅在同一服务进程存活期间有效。模型使用服务端 URL/Key；未接 PostgreSQL、重启恢复、业务工具或正式平台授权。',
       },
-      tags: [{ name: 'Health', description: 'Agent 服务进程存活检查，不代表模型或数据库就绪。' }],
+      components: {
+        securitySchemes: {
+          AgentBearer: {
+            type: 'http',
+            scheme: 'bearer',
+            description:
+              '服务端验证的产品身份凭据；本机可显式启用受控开发身份。不是模型 API Key，不接受客户端自报用户。',
+          },
+        },
+      },
+      tags: [
+        { name: 'Health', description: 'Agent 服务进程存活检查，不代表模型或数据库就绪。' },
+        { name: 'Agent', description: '开发内存模式的私有聊天、任务和事件。' },
+      ],
     },
   });
   await app.register(swaggerUi, {
@@ -62,6 +84,17 @@ export async function createApp(
     },
     async () => ({ service: 'tyde-agent', status: 'ok' }),
   );
+
+  let modelConfig: ReturnType<typeof readDirectModelConfig> | undefined;
+  const runtime =
+    options.runtime ??
+    new AgentMemoryRuntime({
+      createSession: async (_conversationId, barriers) => {
+        modelConfig ??= readDirectModelConfig();
+        return createPiDirectModelSession({ config: modelConfig, barriers });
+      },
+    });
+  await registerAgentRoutes(app, runtime);
 
   return app;
 }

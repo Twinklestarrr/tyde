@@ -2,15 +2,17 @@
 import { useEffect, useRef } from 'react';
 import { getMarkdownListContinuation } from '../lib/markdown-list-continuation';
 
-/** W1 accepts a local draft; transport is intentionally unavailable until its contract exists. */
+/** Plain text composer; all remote commands remain in the Agent client layer. */
 export function ChatInput({
   value,
   onChange,
   unavailableReason,
+  onSend,
 }: {
   value: string;
   onChange: (value: string) => void;
-  unavailableReason: string;
+  unavailableReason?: string;
+  onSend?: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
@@ -56,7 +58,7 @@ export function ChatInput({
         id="agent-draft"
         rows={2}
         value={value}
-        placeholder="写下你的需求，后续将接入真实对话…"
+        placeholder="写下你的问题…"
         onChange={(event) => onChange(event.target.value)}
         onCompositionStart={() => {
           composing.current = true;
@@ -71,16 +73,23 @@ export function ChatInput({
             composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
           const recentlyComposed = Date.now() - compositionEndedAt.current < 80;
           if (!inComposition && recentlyComposed) event.preventDefault();
+          if (!inComposition && !recentlyComposed && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            if (!unavailableReason && value.trim() && onSend) onSend();
+          }
         }}
         aria-describedby="agent-send-state"
       />
       <div className="chat-input-toolbar">
-        <span id="agent-send-state">{unavailableReason}</span>
+        <span id="agent-send-state">
+          {unavailableReason || 'Enter 换行 · ⌘ / Ctrl + Enter 发送'}
+        </span>
         <button
           className="send-button"
           type="button"
-          disabled
-          aria-label="发送消息（对话接口尚未接入）"
+          disabled={Boolean(unavailableReason) || !value.trim() || !onSend}
+          onClick={onSend}
+          aria-label="发送消息"
         >
           发送 ↑
         </button>

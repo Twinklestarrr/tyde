@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
   "info": {
     "title": "Agent 五类命令接口设计",
-    "version": "1.0.0-design",
+    "version": "1.1.0-design",
     "description": "文档级 OpenAPI 设计稿；复用平台 Bearer 身份，不包含 GET、SSE 或服务实现。"
   },
   "x-design-status": "design_only",
@@ -19,14 +19,18 @@
     "响应 command.outcome_code 与持久拒绝 error.code 必须一致；kind、outcome、decision 关联及 HTTP 状态的对应由语义验证，不宣称 Schema 可执行跨字段比较。",
     "decision 和持久 error 是冻结的原裁决快照；不返回当前执行状态来替换原受理事实。",
     "旧 key 命中且仍可访问时返回原 HTTP 状态、command、decision、error；只有 request_id/replayed 可不同。新 key 正确复用 A2 的 replayed 仍为 false。",
-    "新 key 的 A2 复用仅适用于 continue_task/retry_task：同 C/T、同 kind、同原 A1，A2.previous=A1 且 start_reason 匹配，A2 是本 Pi 当前未结束尝试，T 为 queued/running 且没有已受理停止；再比较 A2.trigger_command 的完整 v1 语义 hash，必须包括其原 expected_task_version。无需该原版本等于 A2 推进后的当前 T 版本；有意改为新版本不属于同语义复用。",
+    "新 key 的 A2 复用仅适用于 continue_task/retry_task：同 C/T、同 kind、同原 A1，A2.previous=A1 且 start_reason 匹配，A2 是本 Pi 当前未结束尝试，T 为 queued/running 且没有已受理停止、A2未锁存预算超限；再比较 A2.trigger_command 的完整 v1 语义 hash，必须包括其原 expected_task_version。无需该原版本等于 A2 推进后的当前 T 版本；有意改为新版本不属于同语义复用。",
     "协调顺序：先校验入口/身份/路径访问，再规范化并查旧 key；同 key 同 hash 重放、异 hash 冲突。新 key 验证 task/attempt 路径归属后进入协调事务，复核访问与旧 key，再判断 A2 复用或新裁决；accepted 不得提交，数据库明确提交后才响应。",
     "补充/继续/重试的新裁决按固定优先级：TASK_COMPLETED、STOP_IN_PROGRESS、STALE_ATTEMPT_TARGET、TASK_STATE_CONFLICT、TASK_VERSION_CONFLICT、TASK_SCOPE_CONFLICT；continue/retry 的精确 A2 复用先于这些现态检查。start_task 独立检查 UNFINISHED_TASK_EXISTS，不按正文复用目标；provide_input 不以不同 key 复用补充尝试。",
-    "stop_attempt 独立处理请求指定 A：先识别目标已结束，再识别同目标停止意图已登记，否则新登记；不按当前最新 A2 重新定位、不校验 expected_task_version。已结束的 A2 不能被旧 A1 的新 key 跳过而创建 A3。",
+    "stop_attempt 独立处理请求指定 A：先识别目标已结束，再识别同目标停止意图已登记；未结束且已锁存预算超限时TASK_STATE_CONFLICT，否则新登记；不按当前最新 A2 重新定位、不校验 expected_task_version。已结束的 A2 不能被旧 A1 的新 key 跳过而创建 A3。",
     "无权访问或删除策略优先于旧数据披露；跨会话异语义 key 冲突不得返回原命令 ID 或正文。",
     "Unconfirmed 的 command=null 不表示命令一定没执行；提交结果不明时保留同 URL、同正文、同 key 核实。",
     "已发布请求schema_version的解析与hash规则随接口升级保留；fix_request不授权自动换key重做结果未知的动作。",
-    "JSON解析拒绝不合法Unicode字符串（包括孤立代理项），不能将JCS不能编码的输入拖到提交阶段。所有示例为独立场景，不是同一顺序执行脚本。"
+    "JSON解析拒绝不合法Unicode字符串（包括孤立代理项），不能将JCS不能编码的输入拖到提交阶段。所有示例为独立场景，不是同一顺序执行脚本。",
+    "第26份累计attempt预算固定在task快照，首期600000ms/12次模型HTTP授权/10次工具执行授权；请求不接受budget、期限、计数或上限覆盖。当前默认策略不进入Q原语义hash；同key重放及同A2复用不重置预算，decision保持原裁决冻结。",
+    "预算超限是异步执行失败，不新增命令拒绝码；超限锁存后A未结束时，新stop以409 TASK_STATE_CONFLICT/refresh_then_decide拒绝，不写stop_requested_at，不返回TARGET_ALREADY_ENDED。用户stop先受理则按stopped收尾；已提交completed不被迟到停止或超限覆盖。",
+    "精确同语义A2复用还要求A2.limit_exceeded_kind为空；原复用语义匹配但A2已锁存限制且收尾时，新key先以409 TASK_STATE_CONFLICT/refresh_then_decide拒绝，不按旧A1创建A3；旧同key裁决仍冻结重放。",
+    "预算预占与Task.row_version及task.updated outbox同事务，按稳定授权producer_key核实提交不明（模型可用budget:model:{model_request_id}，工具可用budget:tool:{attempt_id}:{source_native_entry_id}:{native_tool_call_id}），不盲加两次；同宿主重复回调不重派，崩溃后发送未知不自动重派。复用既有outbox唯一约束，不新建模型账本/恢复引擎或公开字段。"
   ],
   "paths": {
     "/api/agent/v1/conversations/{conversation_id}/commands": {

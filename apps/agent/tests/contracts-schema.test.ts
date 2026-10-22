@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   agentContractSchemas,
   agentContractSources,
+  agentContractOperations,
   validateAgentContract,
   type AgentContractName,
 } from '../../../packages/shared/src/agent/contracts/index.js';
@@ -102,7 +103,7 @@ const product = (event_type: string, payload: unknown) => ({
 });
 
 test('公开契约包含全部去重定义，并记录两份原始设计快照的真实摘要', async () => {
-  assert.equal(Object.keys(agentContractSchemas).length, 98);
+  assert.equal(Object.keys(agentContractSchemas).length, 99);
   for (const source of agentContractSources) {
     const bytes = await readFile(
       new URL(
@@ -113,6 +114,8 @@ test('公开契约包含全部去重定义，并记录两份原始设计快照�
     assert.equal(createHash('sha256').update(bytes).digest('hex'), source.sha256);
     const document = JSON.parse(bytes.toString('utf8'));
     assert.equal(source.designVersion, document.info.version);
+    assert.equal(source.designVersion, '1.1.0-design');
+    for (const path of Object.keys(document.paths)) assert.ok(path in agentContractOperations);
     for (const name of Object.keys(document.components.schemas)) {
       assert.ok(
         (name === 'ErrorDetails' ? 'CommandErrorDetails' : name) in agentContractSchemas,
@@ -120,6 +123,40 @@ test('公开契约包含全部去重定义，并记录两份原始设计快照�
       );
     }
   }
+});
+
+test('预算兼容历史投影，新预算检查计数上限及首因时间成对出现', () => {
+  const budget = {
+    policy_version: 1,
+    max_duration_ms: 600000,
+    max_model_requests: 12,
+    max_tool_calls: 10,
+    execution_deadline_at: '2026-10-22T08:10:00Z',
+    model_requests_used: 12,
+    tool_calls_used: 10,
+    limit_exceeded_kind: null,
+    limit_exceeded_at: null,
+  };
+  assert.equal(validateAgentContract('AttemptView', attempt), true);
+  assert.equal(validateAgentContract('AttemptView', { ...attempt, budget: null }), true);
+  assert.equal(validateAgentContract('AttemptView', { ...attempt, budget }), true);
+  assert.equal(validateAgentContract('AttemptBudgetView', budget), true);
+  for (const extension of [
+    { model_requests_used: 13 },
+    { tool_calls_used: 11 },
+    { limit_exceeded_kind: 'duration' },
+    { limit_exceeded_at: now },
+    { limit_exceeded_at: '2026-02-30T08:00:00Z', limit_exceeded_kind: 'duration' },
+  ])
+    assert.equal(validateAgentContract('AttemptBudgetView', { ...budget, ...extension }), false);
+  assert.equal(
+    validateAgentContract('AttemptBudgetView', {
+      ...budget,
+      limit_exceeded_kind: 'duration',
+      limit_exceeded_at: now,
+    }),
+    true,
+  );
 });
 
 test('五类命令互斥，拒绝越权字段、null、非法版本和不属于该命令的字段', () => {

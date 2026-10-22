@@ -4,7 +4,7 @@
 
 React + Electron + Fastify + PostgreSQL 的 pnpm Monorepo。Web 与桌面共用 `apps/web`，使用 Tailwind CSS、shadcn/ui、TanStack Router 和 React Query。认证入口提供“验证码登录 / 密码登录”双页签，默认验证码登录；认证操作均访问当前后端，支持短信或密码登录、统一注册、会话恢复及退出。前端不生成或在本地校验验证码；当前短信仅 mock，发码成功后保留服务端提示，并展示与后端共用的固定测试码。后端已升级统一账号，所有账号自带领航员/策略官/执行专家，提供当前会话角色切换、登录后独立创建组织、本人全部组织摘要、刷新令牌、密码重置、用户资料更新、组织成员与审批、成员导入及文件上传台账；客户端已接入真实角色切换与组织创建，多组织选择尚未接入，真实短信尚未接入。后端字段和迁移说明见 [认证后端上下文](docs/AUTH_BACKEND.md)。
 
-Agent W1 已提供两个应用骨架、pi-web 前端基础代码、21／22 号 v0.1 共享契约、事件解析及受控开发身份。W2 增加固定 Pi 1.3.0、内存多轮、流式、停止／故障处理与无界面验收入口。模型主入口通过服务端 URL 与 Key 配置，默认官方 DeepSeek；24 号平台转发保留为独立可选路径。当前未提供实际 Key，真实模型验收待使用方执行。产品任务 HTTP、页面发送、持久化与 Electron 装配仍待后续工作包。分工和边界见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
+Agent W1 已提供两个应用骨架、pi-web 前端基础代码、21／22 号 v0.1 共享契约、事件解析及受控开发身份。W2 增加固定 Pi 1.3.0、内存多轮、流式、停止／故障处理与无界面验收入口。模型主入口通过服务端 URL 与 Key 配置，默认官方 DeepSeek；24 号平台转发保留为独立可选路径。W3 已接入私有会话、任务命令、快照历史、产品 SSE、页面多轮聊天与停止。用户已提供 W2 Flash 真实两轮召回、流式及停止通过的日志；W3 浏览器验收和内存限制见 [验证记录](docs/AGENT_W3_VALIDATION.md)。PostgreSQL、正式平台身份与 Electron 装配仍待后续工作包。分工和边界见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
 
 ## 环境
 
@@ -15,16 +15,16 @@ Agent W1 已提供两个应用骨架、pi-web 前端基础代码、21／22 号 v
 
 ## Agent 独立开发
 
-完成 `pnpm install` 后分别启动两个终端，无需业务数据库或模型密钥：
+完成 `pnpm install` 后分别启动两个终端。启动页面无需业务数据库；真实聊天需要服务端模型 URL／Key 及显式开发身份配置，步骤见 [Agent 服务](apps/agent/README.md#w3-浏览器聊天与本机身份)：
 
 ```sh
 pnpm dev:agent      # http://127.0.0.1:3002，Swagger /api/v1/docs/
 pnpm dev:agent-web  # http://127.0.0.1:3003
 ```
 
-页面通过自身客户端真实查询 Agent `/health/live`，可编辑本地输入草稿；发送尚未接入。服务连接正常仅说明 HTTP 进程存活。端口、环境变量与生产代理说明见 [Agent 服务](apps/agent/README.md) 和 [Agent 界面](apps/agent-web/README.md)，pi-web 固定版本及导入范围见 [上游记录](apps/agent-web/upstream/pi-web/SOURCE.md)。
+页面通过自身客户端访问 Agent API 与产品 SSE，支持新建／切换会话、自由输入、连续追问、流式、停止、历史及同进程重连。开发身份凭据只放页面内存，刷新后重新输入；服务重启会清空会话。端口、环境变量与生产代理说明见 [Agent 服务](apps/agent/README.md) 和 [Agent 界面](apps/agent-web/README.md)，pi-web 固定版本及导入范围见 [上游记录](apps/agent-web/upstream/pi-web/SOURCE.md)。
 
-`@tyde/shared/agent` 导出命令、查询与 SSE 的 DTO、Schema 和 `validateAgentContract`。本地源快照与生成规则见 [契约说明](packages/shared/src/agent/contracts/README.md)；`pnpm check:agent-contracts` 校验生成代码一致性，`pnpm test:agent` 另覆盖 Pi／MaaS 隔离回归。测试夹具不参与页面请求或生产响应。2026-10-22 核对当前 21／22 号外部 JSON 与仓库快照逐字节一致，未覆盖生成代码。
+`@tyde/shared/agent` 导出命令、查询与 SSE 的 DTO、Schema 和 `validateAgentContract`。本地源快照与生成规则见 [契约说明](packages/shared/src/agent/contracts/README.md)；`pnpm check:agent-contracts` 校验生成代码一致性，`pnpm test:agent` 另覆盖 Pi／MaaS 隔离回归。测试夹具不参与页面请求或生产响应。W3 重新核对并同步当前 21／22 号 `1.1.0-design` 快照，公开 schema_version 仍为 1；新增真实 Attempt 预算视图，生成 99 个 Schema。
 
 ```sh
 pnpm typecheck:agent
@@ -48,7 +48,7 @@ pnpm --filter @tyde/agent smoke:model
 pnpm --filter @tyde/agent smoke:model --stop-after-ms 2000
 ```
 
-配置检查不发送模型请求；默认冒烟验证两轮与上下文召回，停止时机可调整。完整配置见 [Agent 服务](apps/agent/README.md#url-与-key-本地验收)。原 `smoke:maas` 只用于可选的 24 号平台契约验收，独立要求平台身份／路由配置，两条路径不会自动回退。页面当前仍只显示连接与草稿。隔离测试不代表真实模型验通，内存模式不承诺重启恢复或持久提交。
+配置检查不发送模型请求；默认冒烟验证两轮与上下文召回，停止时机可调整。完整配置见 [Agent 服务](apps/agent/README.md#url-与-key-本地验收)。原 `smoke:maas` 只用于可选的 24 号平台契约验收，独立要求平台身份／路由配置，两条路径不会自动回退。页面已使用同一服务端 URL／Key 模型入口。隔离测试与真实浏览器验收分开记录，内存模式不承诺重启恢复或持久提交。
 
 业务开发、Vercel 与桌面构建入口继续按原流程运行；Agent 独立部署与双视图装配后续接入。
 

@@ -160,12 +160,73 @@ export const agentContractDocument = {
       required: ['schema_version', 'request_id', 'replayed', 'command', 'decision', 'error'],
       additionalProperties: false,
     },
+    AttemptBudgetView: {
+      type: 'object',
+      properties: {
+        policy_version: {
+          type: 'integer',
+          minimum: 1,
+          description: '当前规则版本1；相同语义仅调整数值不要求升规则版本。',
+        },
+        max_duration_ms: {
+          type: 'integer',
+          minimum: 1,
+          description: 'task固定快照上限，首期默认600000。',
+        },
+        max_model_requests: {
+          type: 'integer',
+          minimum: 1,
+          description: 'task固定快照上限，首期默认12。',
+        },
+        max_tool_calls: {
+          type: 'integer',
+          minimum: 1,
+          description: 'task固定快照上限，首期默认10。',
+        },
+        execution_deadline_at: {
+          oneOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
+        },
+        model_requests_used: {
+          type: 'integer',
+          minimum: 0,
+          description:
+            '本A原子发送授权预占次数；失败不退，授权后是否实际发出未知仍占用。非平台计费量。',
+        },
+        tool_calls_used: {
+          type: 'integer',
+          minimum: 0,
+          description: '本A原子工具执行授权预占次数；宿主对账HTTP不计Pi工具但仍受deadline。',
+        },
+        limit_exceeded_kind: {
+          oneOf: [
+            { type: 'string', enum: ['duration', 'model_requests', 'tool_calls'] },
+            { type: 'null' },
+          ],
+        },
+        limit_exceeded_at: { oneOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+      },
+      required: [
+        'policy_version',
+        'max_duration_ms',
+        'max_model_requests',
+        'max_tool_calls',
+        'execution_deadline_at',
+        'model_requests_used',
+        'tool_calls_used',
+        'limit_exceeded_kind',
+        'limit_exceeded_at',
+      ],
+      additionalProperties: false,
+      description:
+        '受控A的当前预算投影，值来自固定execution_policy.attempt_limits及本A；队列deadline为空，开始后固定；kind/at同空或同非空，由语义校验。',
+    },
     AttemptError: {
       type: 'object',
       properties: { code: { type: 'string' }, summary: { type: 'string' } },
       required: ['code', 'summary'],
       additionalProperties: false,
-      description: '允许产品展示的脱敏诊断，不含堆栈、凭据、完整工具输入或原生状态。',
+      description:
+        '允许产品展示的脱敏诊断，不含堆栈、凭据、完整工具输入或原生状态。 累计超限使用ATTEMPT_DURATION_LIMIT_EXCEEDED、ATTEMPT_MODEL_REQUEST_LIMIT_EXCEEDED、ATTEMPT_TOOL_CALL_LIMIT_EXCEEDED；code保持开放。',
     },
     AttemptOutcome: {
       type: 'string',
@@ -184,6 +245,11 @@ export const agentContractDocument = {
         stop_requested_at: { oneOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
         ended_at: { oneOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
         error: { oneOf: [{ $ref: '#/$defs/AttemptError' }, { type: 'null' }] },
+        budget: {
+          oneOf: [{ $ref: '#/$defs/AttemptBudgetView' }, { type: 'null' }],
+          description:
+            '仅历史冻结payload可省略，历史未追踪可null；受控新A当前查询和新事件必须为非空完整投影。旧事件不重写。',
+        },
       },
       required: [
         'id',

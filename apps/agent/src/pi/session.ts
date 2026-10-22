@@ -61,9 +61,15 @@ export interface PiMemoryTool {
 /** 后续保存屏障的等待点。拒绝后锁住会话，禁止工具或下一轮模型。 */
 export interface PiMemoryBarriers {
   beforeModel?(state: PiNativeState): Promise<void>;
+  /** 授权后、实际模型发送前再次校验资格，不重复计数。 */
+  beforeModelDispatch?(): Promise<void>;
   afterAssistant?(state: PiNativeState, message: AssistantMessage): Promise<void>;
   beforeTool?(state: PiNativeState, toolName: string): Promise<void>;
+  beforeToolDispatch?(): Promise<void>;
   afterTool?(state: PiNativeState): Promise<void>;
+  /** 当前 Attempt 的信号和剩余时间；不能缓存为整个 Pi 会话的固定值。 */
+  executionSignal?(): AbortSignal;
+  executionRemainingMs?(): number;
 }
 
 interface PiMemoryCommonOptions {
@@ -328,9 +334,11 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
           ) {
             throw new Error('PI_EXECUTION_REVOKED');
           }
-          const signal = streamOptions?.signal
-            ? AbortSignal.any([streamOptions.signal, run.controller.signal])
-            : run.controller.signal;
+          const signal = AbortSignal.any([
+            run.controller.signal,
+            ...(streamOptions?.signal ? [streamOptions.signal] : []),
+            ...(options.barriers?.executionSignal ? [options.barriers.executionSignal()] : []),
+          ]);
           let connection: NativeConnection;
           try {
             connection = await waitForPreparation(run, () => options.connect(signal, toolMap));
@@ -343,6 +351,9 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
             throw cause;
           }
           if (!permitted(run)) throw new Error('PI_EXECUTION_REVOKED');
+          if (!(await barrier(run, options.barriers?.beforeModelDispatch))) {
+            throw new Error('PI_EXECUTION_REVOKED');
+          }
           observation = connection.transport.observation;
           const upstream = streamSimple(model, transcript, {
             signal,
@@ -429,10 +440,17 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
           ) {
             throw new Error('PI_TOOL_EXECUTION_REVOKED');
           }
+          if (!(await barrier(run, options.barriers?.beforeToolDispatch))) {
+            throw new Error('PI_TOOL_EXECUTION_REVOKED');
+          }
           let text: string;
           try {
             text = await tool.execute(args as Record<string, unknown>, {
-              signal: signal ?? run.controller.signal,
+              signal: AbortSignal.any([
+                run.controller.signal,
+                ...(signal ? [signal] : []),
+                ...(options.barriers?.executionSignal ? [options.barriers.executionSignal()] : []),
+              ]),
               toolCallId,
             });
           } catch {
@@ -617,11 +635,15 @@ export function createPiMemorySession(options: PiMemorySessionOptions) {
       return {
         apiKey,
         samplingParams: { parallel_tool_calls: false },
-        transport: createMaasTransport({ ...config, serviceToken: apiKey }, context, {
-          fetch: options.fetch,
-          signal,
-          tools,
-        }),
+        transport: createMaasTransport(
+          { ...boundedConfig(config, options.barriers), serviceToken: apiKey },
+          context,
+          {
+            fetch: options.fetch,
+            signal,
+            tools,
+          },
+        ),
       };
     },
   });
@@ -637,7 +659,11 @@ export function createPiDirectModelSession(options: PiDirectModelSessionOptions)
     bootstrapApiKey: config.apiKey,
     connect: async (signal, tools) => ({
       apiKey: config.apiKey,
-      transport: createDirectModelTransport(config, { fetch: options.fetch, signal, tools }),
+      transport: createDirectModelTransport(boundedConfig(config, options.barriers), {
+        fetch: options.fetch,
+        signal,
+        tools,
+      }),
       samplingParams:
         config.provider === 'deepseek' ? { thinking: { type: 'disabled' } } : undefined,
     }),
@@ -645,3 +671,16 @@ export function createPiDirectModelSession(options: PiDirectModelSessionOptions)
 }
 
 export type PiMemorySession = Awaited<ReturnType<typeof createNativeMemorySession>>;
+
+function boundedConfig<T extends NativeModelConfig>(config: T, barriers?: PiMemoryBarriers): T {
+  const remaining = barriers?.executionRemainingMs?.();
+  if (remaining === undefined) return config;
+  if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('PI_EXECUTION_REVOKED');
+  const cap = Math.max(1, Math.floor(remaining));
+  return {
+    ...config,
+    timeouts: Object.fromEntries(
+      Object.entries(config.timeouts).map(([key, value]) => [key, Math.min(value, cap)]),
+    ) as NativeModelConfig['timeouts'],
+  };
+}

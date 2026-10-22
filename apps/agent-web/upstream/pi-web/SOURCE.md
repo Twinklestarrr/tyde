@@ -21,17 +21,17 @@ git -C .local/upstream/pi-web checkout --detach 7c0778a8bc7342f1ededc6f5fb190dc6
 
 ## 引入范围
 
-| 上游文件                            | 本地文件与适配                                                                                                                                                                                                                      |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/MarkdownBody.tsx`       | `src/components/MarkdownBody.tsx`，保留 memo 分块展示、列表编号宽度、表格滚动；改为直接使用 react-markdown／remark-gfm，移除文件、图片、音视频、Mermaid、数学及应用路由能力。原始 HTML 不执行，图片仅显示标签，链接仅允许 HTTP(S)。 |
-| `lib/markdown-blocks.ts`            | `src/lib/markdown-blocks.ts`，保留流式 Markdown 分块算法，补齐严格索引检查与来源注释。                                                                                                                                              |
-| `lib/markdown-list-continuation.ts` | `src/lib/markdown-list-continuation.ts`，保留列表／任务清单／中文序号续行及代码围栏保护，补齐严格索引检查与来源注释。                                                                                                               |
-| `components/ChatInput.tsx`          | `src/components/ChatInput.tsx`，提取 textarea 自动高度、beforeinput 列表续行和输入法确认保护，改为纯文本受控草稿；移除附件、命令、历史、模型选择、会话与请求逻辑。发送接口尚未开放。                                                |
-| `app/globals.css`                   | `src/styles/pi-web.css`，提取 light／dark／Mist 主题变量与纯文本 Markdown、表格样式；移除 Next、xterm、文件面板及其余样式。页面布局在 `src/styles/global.css` 独立维护。                                                            |
+| 上游文件                            | 本地文件与适配                                                                                                                                                                                                                                    |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `components/MarkdownBody.tsx`       | `src/components/MarkdownBody.tsx`，保留 memo 分块展示、列表编号宽度、表格滚动；改为直接使用 react-markdown／remark-gfm，移除文件、图片、音视频、Mermaid、数学及应用路由能力。原始 HTML 不执行，图片仅显示标签，链接仅允许 HTTP(S)。               |
+| `lib/markdown-blocks.ts`            | `src/lib/markdown-blocks.ts`，保留流式 Markdown 分块算法，补齐严格索引检查与来源注释。                                                                                                                                                            |
+| `lib/markdown-list-continuation.ts` | `src/lib/markdown-list-continuation.ts`，保留列表／任务清单／中文序号续行及代码围栏保护，补齐严格索引检查与来源注释。                                                                                                                             |
+| `components/ChatInput.tsx`          | `src/components/ChatInput.tsx`，提取 textarea 自动高度、beforeinput 列表续行和输入法确认保护，改为纯文本受控草稿；移除附件、命令、历史、模型选择、会话与请求逻辑。W3 增加发送回调、真实可用状态及 ⌘／Ctrl + Enter；请求逻辑集中在自身服务客户端。 |
+| `app/globals.css`                   | `src/styles/pi-web.css`，提取 light／dark／Mist 主题变量与纯文本 Markdown、表格样式；移除 Next、xterm、文件面板及其余样式。页面布局在 `src/styles/global.css` 独立维护。                                                                          |
 
 未复制上游 Next API、Pi 执行器、JSONL／本地会话恢复、文件系统、项目／终端、登录／凭据、本地存储、服务工作线程、通知推送、演示工程或截图。上游整体包含服务端代码，不能当成仅前端项目直接运行。后续真实执行集中在 `apps/agent`，通过共享契约连接本界面。
 
-本地页面展示的是功能准备状态和真实健康响应，没有预置模型回答。编辑草稿不创建任务或模型调用。
+W3 的页面、会话控制器、产品投影与 Agent HTTP／SSE 客户端为本仓库新增实现，继续使用已适配的 Markdown 与输入基础代码，没有继续复制上游源码。页面只展示服务端真实产品记录，没有预置模型回答；只有明确点击发送或发送快捷键提交命令，刷新和订阅不会启动任务。
 
 ## 来源摘要
 

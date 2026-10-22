@@ -3,6 +3,8 @@ import type { AgentContractName, AgentContractTypes } from './generated.js';
 import * as structuralValidators from './validator.generated.js';
 
 export * from './generated.js';
+export { agentContractDocument } from './document.generated.js';
+export { agentContractOperations } from './operations.generated.js';
 
 interface JsonSchema {
   $ref?: string;
@@ -143,6 +145,14 @@ function semanticCheck(schema: JsonSchema, value: unknown, name?: string): boole
   }
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     const object = value as Record<string, unknown>;
+    if (name === 'AttemptBudgetView') {
+      if (
+        (object.limit_exceeded_kind === null) !== (object.limit_exceeded_at === null) ||
+        Number(object.model_requests_used) > Number(object.max_model_requests) ||
+        Number(object.tool_calls_used) > Number(object.max_tool_calls)
+      )
+        return false;
+    }
     if (name === 'DateRange' && String(object.end) < String(object.start)) return false;
     if (
       name === 'BusinessContext' &&
