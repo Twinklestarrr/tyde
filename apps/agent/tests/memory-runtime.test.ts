@@ -95,6 +95,7 @@ test('空会话不分配 Pi、查询不执行、标题及归属均按契约校�
   try {
     assert.equal(validateAgentContract('CreateConversationData', conversation), true);
     assert.equal(sessions.size, 0);
+    assert.equal(conversation.conversation.title, '新会话');
     assert.equal(runtime.getSnapshot(principal, id).read_cursor.event_seq, '0');
     assert.deepEqual(runtime.getSnapshot(principal, id).messages, []);
     assert.equal(runtime.getConversation(principal, id).focus_task, null);
@@ -104,6 +105,106 @@ test('空会话不分配 Pi、查询不执行、标题及归属均按契约校�
       statusCode: 422,
     });
     assert.equal(sessions.size, 0);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('首条受理输入生成标题并冻结产品事件，重放、拒绝和后续追问均不改标题', async () => {
+  const { runtime, sessions, id, conversation } = harness();
+  try {
+    const unsupported = runtime.submitCommand(principal, id, {
+      ...prompt('未开放任务不能抢占标题'),
+      task_kind: 'scheduling_draft',
+    });
+    assert.equal(unsupported.statusCode, 422);
+    assert.deepEqual(runtime.getConversation(principal, id), conversation);
+
+    const request = prompt('  第一条\n\t用户问题  ');
+    assert.equal(runtime.submitCommand(principal, id, request).statusCode, 202);
+    const accepted = runtime.getSnapshot(principal, id);
+    assert.equal(accepted.conversation.title, '第一条 用户问题');
+    assert.equal(accepted.conversation.row_version, '2');
+    assert.equal(
+      runtime.listConversations(principal).items[0]!.conversation.title,
+      '第一条 用户问题',
+    );
+    const subscription = runtime.subscribe(principal, id, {
+      streamId: accepted.read_cursor.stream_id,
+      afterEventSeq: '0',
+      onFrame() {},
+    });
+    const titleEvent = subscription.replay.find(
+      (frame) => frame.event_type === 'conversation.updated',
+    );
+    assert.ok(titleEvent?.event_type === 'conversation.updated');
+    assert.equal(validateAgentContract('ProductFrame', titleEvent), true);
+    assert.equal(titleEvent.payload.conversation.title, accepted.conversation.title);
+    assert.equal(titleEvent.payload.conversation.row_version, accepted.conversation.row_version);
+    assert.deepEqual(titleEvent.payload.conversation.activity, titleEvent.activity);
+    assert.equal(titleEvent.activity.last_message_seq, '2');
+    assert.equal(subscription.replay.at(-1)!.event_seq, accepted.read_cursor.event_seq);
+    assert.equal(Object.isFrozen(titleEvent.payload.conversation), true);
+    const frozenTitle = structuredClone(titleEvent);
+    subscription.close();
+
+    assert.equal(runtime.submitCommand(principal, id, request).body.replayed, true);
+    assert.equal(runtime.submitCommand(principal, id, prompt('拒绝的新问题')).statusCode, 409);
+    assert.equal(
+      runtime.submitCommand(principal, id, { ...request, input: { text: '同 key 改标题' } }).body
+        .error?.code,
+      'IDEMPOTENCY_KEY_CONFLICT',
+    );
+    assert.deepEqual(runtime.getSnapshot(principal, id), accepted);
+
+    await tick();
+    sessions.get(id)!.reply('第一轮完成');
+    await tick();
+    assert.equal(runtime.submitCommand(principal, id, prompt('第二轮不是新标题')).statusCode, 202);
+    assert.equal(runtime.getConversation(principal, id).conversation.title, '第一条 用户问题');
+    assert.equal(runtime.getConversation(principal, id).conversation.row_version, '2');
+    assert.deepEqual(titleEvent, frozenTitle);
+    const replay = runtime.subscribe(principal, id, {
+      streamId: accepted.read_cursor.stream_id,
+      afterEventSeq: '0',
+      onFrame() {},
+    });
+    assert.equal(
+      replay.replay.filter((frame) => frame.event_type === 'conversation.updated').length,
+      1,
+    );
+    replay.close();
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('标题预览按 Unicode 码点截断，明确自定义标题包括“新会话”均保留', async () => {
+  const { runtime, id } = harness();
+  try {
+    const text = `${'字'.repeat(79)}😀末尾`;
+    assert.equal(runtime.submitCommand(principal, id, prompt(text)).statusCode, 202);
+    const preview = runtime.getConversation(principal, id).conversation.title;
+    assert.equal(Array.from(preview).length, 80);
+    assert.equal(preview, `${'字'.repeat(79)}😀`);
+    assert.equal(preview.isWellFormed(), true);
+    for (const title of ['我的自定义会话', '新会话']) {
+      const custom = runtime.createConversation(principal, { schema_version: 1, title });
+      runtime.submitCommand(principal, custom.conversation.id, prompt('不能覆盖自定义标题'));
+      const current = runtime.getConversation(principal, custom.conversation.id);
+      assert.equal(current.conversation.title, title);
+      assert.equal(current.conversation.row_version, '1');
+      const events = runtime.subscribe(principal, custom.conversation.id, {
+        streamId: current.read_cursor.stream_id,
+        afterEventSeq: '0',
+        onFrame() {},
+      });
+      assert.equal(
+        events.replay.some((frame) => frame.event_type === 'conversation.updated'),
+        false,
+      );
+      events.close();
+    }
   } finally {
     await runtime.close();
   }
@@ -238,7 +339,7 @@ test('先应用快照 H 再订阅不漏竞争事件；冻结回放连续且 delt
       afterEventSeq: snapshot.read_cursor.event_seq,
       onFrame: (frame) => live.push(frame),
     });
-    assert.equal(subscription.replay.length, 3);
+    assert.equal(subscription.replay.length, 4);
     assert.equal(subscription.replay[0]!.event_seq, '1');
     const frozenFirstTask = subscription.replay.find(
       (frame) => frame.event_type === 'task.updated',
@@ -462,11 +563,15 @@ test('事件前缀裁剪与换流、超前游标均明确要求重建，等于�
     const subscribe = (afterEventSeq: string, streamId = conversation.read_cursor.stream_id) =>
       runtime.subscribe(principal, id, { streamId, afterEventSeq, onFrame() {} });
     assert.throws(() => subscribe('0'), { code: 'CURSOR_EXPIRED', statusCode: 410 });
-    const valid = subscribe('1');
+    const pruned = runtime.getSnapshot(principal, id).event_pruned_through_seq;
+    const valid = subscribe(pruned);
     assert.equal(valid.replay.length, 2);
     valid.close();
     assert.throws(() => subscribe('999'), { code: 'CURSOR_AHEAD', statusCode: 409 });
-    assert.throws(() => subscribe('1', randomUUID()), { code: 'STREAM_CHANGED', statusCode: 409 });
+    assert.throws(() => subscribe(pruned, randomUUID()), {
+      code: 'STREAM_CHANGED',
+      statusCode: 409,
+    });
     assert.throws(() => subscribe('01'), { code: 'INVALID_REQUEST' });
   } finally {
     await runtime.close();

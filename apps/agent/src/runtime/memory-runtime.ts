@@ -77,6 +77,7 @@ interface Conversation {
   ownerUserId: string;
   deletedAt: null;
   view: ConversationView;
+  useFirstInputAsTitle: boolean;
   streamId: string;
   head: bigint;
   pruned: bigint;
@@ -143,6 +144,7 @@ export class AgentMemoryRuntime {
         created_at: timestamp,
         activity: { last_activity_at: timestamp, last_message_seq: '0' },
       },
+      useFirstInputAsTitle: body.title === undefined,
       streamId: this.id(),
       head: 0n,
       pruned: 0n,
@@ -554,6 +556,14 @@ export class AgentMemoryRuntime {
       text: '',
     };
     conversation.active = execution;
+    if (conversation.useFirstInputAsTitle) {
+      conversation.view.title = Array.from(request.input.text.replace(/\s+/gu, ' ').trim())
+        .slice(0, 80)
+        .join('');
+      conversation.view.row_version = increment(conversation.view.row_version);
+      conversation.useFirstInputAsTitle = false;
+      this.product(conversation, 'conversation.updated', { conversation: conversation.view });
+    }
     this.product(conversation, 'message.created', { message: input, input_receipt: inputReceipt });
     this.product(conversation, 'message.created', { message: output, input_receipt: null });
     this.product(conversation, 'task.updated', { task });

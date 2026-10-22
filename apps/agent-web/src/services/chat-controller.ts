@@ -2,6 +2,7 @@ import {
   validateAgentContract,
   type CommandRequest,
   type ConversationListItem,
+  type ReadCursor,
   type ResponseEnvelope,
 } from '@tyde/shared/agent';
 import { AgentEventCursor, AgentEventError } from '../agent-events';
@@ -15,6 +16,7 @@ import {
 } from '../agent-events/projection';
 import { AgentApiError, AgentClient } from './agent-client';
 import { taskExecutionPhase } from '../lib/task-state';
+import { mergeConversationItem } from '../lib/conversation-list';
 
 export interface PendingCommand {
   conversationId: string;
@@ -130,7 +132,20 @@ export class ChatController {
       const items = append
         ? new Map(this.state.conversations.map((item) => [item.conversation.id, item]))
         : new Map<string, ConversationListItem>();
-      for (const item of response.data.items) items.set(item.conversation.id, item);
+      for (const item of response.data.items) {
+        const previous = this.state.conversations.find(
+          (entry) => entry.conversation.id === item.conversation.id,
+        );
+        items.set(item.conversation.id, mergeConversationItem(previous, item));
+      }
+      // A list page captured before creation/activity must not remove the open conversation.
+      if (this.state.view) {
+        const selected = this.state.conversations.find(
+          (item) => item.conversation.id === this.state.view?.conversation.id,
+        );
+        if (selected && !items.has(selected.conversation.id))
+          items.set(selected.conversation.id, selected);
+      }
       this.update({ conversations: [...items.values()], listCursor: response.data.next_cursor });
     } catch (error) {
       if (!this.disposed && generation === this.listGeneration)
@@ -185,7 +200,11 @@ export class ChatController {
         streamId: response.data.read_cursor.stream_id,
         eventSeq: response.data.read_cursor.event_seq,
       });
-      this.update({ view, connection: 'connecting' });
+      this.update({
+        view,
+        connection: 'connecting',
+        conversations: this.observeConversation(view, response.data.read_cursor),
+      });
       void this.stream(generation, conversationId, this.reading.signal);
     } catch (error) {
       if (!this.current(generation)) return;
@@ -217,7 +236,14 @@ export class ChatController {
             await cursor.apply(raw, cursor.generation, {
               applyProduct: (frame) => {
                 if (!this.current(generation) || !this.state.view) return;
-                this.update({ view: applyProduct(this.state.view, frame) });
+                const view = applyProduct(this.state.view, frame);
+                this.update({
+                  view,
+                  conversations: this.observeConversation(view, {
+                    stream_id: frame.stream_id,
+                    event_seq: frame.event_seq,
+                  }),
+                });
                 failures = 0;
               },
               onDelta: (frame) => {
@@ -312,6 +338,19 @@ export class ChatController {
         await wait(delay, signal).catch(() => undefined);
       }
     }
+  }
+
+  private observeConversation(view: ChatProjection, cursor: ReadCursor) {
+    const incoming = { conversation: view.conversation, read_cursor: cursor };
+    const previous = this.state.conversations.find(
+      (item) => item.conversation.id === view.conversation.id,
+    );
+    const merged = mergeConversationItem(previous, incoming);
+    return previous
+      ? this.state.conversations.map((item) =>
+          item.conversation.id === view.conversation.id ? merged : item,
+        )
+      : [merged, ...this.state.conversations];
   }
 
   async history(): Promise<void> {

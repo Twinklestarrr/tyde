@@ -13,7 +13,8 @@ const labels: Record<string, string> = {
   target_attempt_id: '明确指定的停止或恢复目标尝试 UUID',
   expected_task_version: '用户决定动作时观察到的任务版本，十进制字符串',
   id: '对象 UUID',
-  title: '会话标题，省略时为新会话，1 至 80 个 Unicode 码点',
+  title:
+    '会话标题，1 至 80 个 Unicode 码点；创建时省略则先显示“新会话”，首条受理用户输入会折叠空白并取前 80 个码点作为预览；显式标题保留，不额外调用模型',
   text: '文字正文，按普通文本或安全 Markdown 展示',
   blocks: '文字块列表，空数组含义由消息类型决定',
   context: '随原输入固定的业务定位信息；不授予会话或业务权限',
@@ -192,7 +193,8 @@ const schemaDescriptions: Record<string, string> = {
   ReauthenticateControlFrame: '身份需要重新验证的控制帧；不授予新的访问资格。',
   RetryControlFrame: '暂时故障或慢消费者的重连建议；不携带可靠事件游标。',
   UserInput: '用户本次正文及明确保留的业务上下文；网络核实时原样复用。',
-  StartTaskCommand: '当前会话没有未完成目标时创建后续任务，复用已绑定的 Pi 原生上下文。',
+  StartTaskCommand:
+    '当前会话没有未完成目标时创建后续任务，复用已绑定的 Pi 原生上下文；会话创建时未指定标题的，首条受理用户输入会折叠空白并取前 80 个 Unicode 码点更新标题，显式标题和后续追问不改标题，不额外调用模型。',
   ProvideInputCommand: '仅向 waiting_input 目标补充输入的产品命令，本轮尚未开放。',
   ContinueTaskCommand: '沿原目标创建后续尝试的产品命令，本轮尚未开放。',
   RetryTaskCommand: '沿原目标和固定配置重试失败尝试的产品命令，本轮尚未开放。',

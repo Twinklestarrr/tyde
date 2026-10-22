@@ -114,6 +114,48 @@ test('snapshot H is installed before subscription; duplicate reliable events do 
   controller.dispose();
 });
 
+test('a reliable title update reaches the sidebar and survives a late list response', async () => {
+  const baseline = snapshot();
+  baseline.conversation.title = '新会话';
+  baseline.conversation.row_version = '1';
+  const lateList = deferred<Response>();
+  const client = new AgentClient('credential', async (url) =>
+    String(url).includes('/snapshot') ? response(baseline) : lateList.promise,
+  );
+  const calls = subscriptions(client);
+  const controller = new ChatController(client);
+  await controller.select(conversationId);
+  const readingList = controller.refreshList();
+  const frame = sample('conversation.updated');
+  frame.event_seq = '11';
+  frame.payload.conversation.title = '第一条消息作为标题';
+  frame.payload.conversation.row_version = '2';
+  await calls[0]!.frame(raw(frame));
+  assert.equal(controller.getSnapshot().view?.conversation.title, '第一条消息作为标题');
+  assert.equal(controller.getSnapshot().conversations[0]?.conversation.title, '第一条消息作为标题');
+  lateList.resolve(
+    response({
+      items: [{ conversation: baseline.conversation, read_cursor: baseline.read_cursor }],
+      has_more: false,
+      next_cursor: null,
+    }),
+  );
+  await readingList;
+  const item = controller.getSnapshot().conversations[0]!;
+  assert.equal(item.conversation.title, '第一条消息作为标题');
+  assert.equal(item.conversation.row_version, '2');
+  assert.equal(item.read_cursor.event_seq, '11');
+  client.list = async () => ({
+    schema_version: 1,
+    request_id: requestId,
+    data: { items: [], has_more: false, next_cursor: null },
+    error: null,
+  });
+  await controller.refreshList();
+  assert.equal(controller.getSnapshot().conversations[0]?.conversation.title, '第一条消息作为标题');
+  controller.dispose();
+});
+
 test('event gap rebuilds the snapshot without posting commands', async () => {
   let reads = 0;
   const client = new AgentClient('credential', async (_url, init) => {
