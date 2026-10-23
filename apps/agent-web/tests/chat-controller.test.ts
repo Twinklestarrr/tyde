@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { CommandRequest, ReadCursor } from '@tyde/shared/agent';
-import type { RawSseEvent } from '../src/agent-events';
+import { AgentEventError, type RawSseEvent } from '../src/agent-events';
 import { AgentClient } from '../src/services/agent-client';
 import { ChatController } from '../src/services/chat-controller';
 import {
@@ -15,6 +15,8 @@ import {
   sample,
   secondConversationId,
   snapshot,
+  toolExecution,
+  toolUpdated,
 } from './chat-fixtures';
 
 type Subscription = {
@@ -367,6 +369,120 @@ test('reauthenticate control clears the current private view and pauses instead 
   await tick();
   assert.equal(controller.getSnapshot().view, null);
   assert.equal(controller.getSnapshot().connection, 'blocked');
+  assert.equal(calls.length, 1);
+  controller.dispose();
+});
+
+test('tool snapshot, reliable replay, reconnect and refresh restore display without commands', async () => {
+  const data = snapshot();
+  data.tool_executions = [toolExecution()];
+  let reads = 0;
+  const client = new AgentClient('credential', async (_url, init) => {
+    assert.equal(init?.method, 'GET');
+    reads += 1;
+    return response(data);
+  });
+  const calls = subscriptions(client);
+  const controller = new ChatController(client);
+  await controller.select(conversationId);
+  assert.equal(calls[0]!.cursor.event_seq, '10');
+  assert.equal(
+    controller.getSnapshot().view?.toolExecutions.get(toolExecution().id)?.status,
+    'running',
+  );
+  const terminal = toolUpdated('succeeded');
+  await calls[0]!.frame(raw(terminal));
+  await calls[0]!.frame(raw(terminal));
+  assert.equal(controller.getSnapshot().view?.toolExecutions.size, 1);
+  assert.equal(
+    controller.getSnapshot().view?.toolExecutions.get(toolExecution().id)?.status,
+    'succeeded',
+  );
+  calls[0]!.fail(new Error('工具完成后的断网'));
+  await new Promise((resolve) => setTimeout(resolve, 530));
+  assert.equal(calls[1]?.cursor.event_seq, '11');
+  assert.equal(reads, 1);
+  data.tool_executions = [toolExecution('succeeded')];
+  data.read_cursor.event_seq = '11';
+  await controller.select(conversationId);
+  assert.equal(
+    controller.getSnapshot().view?.toolExecutions.get(toolExecution().id)?.status,
+    'succeeded',
+  );
+  assert.equal(calls[2]?.cursor.event_seq, '11');
+  assert.equal(reads, 2);
+  controller.dispose();
+});
+
+test('tool callbacks from a previous subscription cannot leak into another conversation', async () => {
+  const client = new AgentClient('credential', async (url) =>
+    response(
+      snapshot(String(url).includes(secondConversationId) ? secondConversationId : conversationId),
+    ),
+  );
+  const calls = subscriptions(client);
+  const controller = new ChatController(client);
+  await controller.select(conversationId);
+  const old = calls[0]!;
+  await controller.select(secondConversationId);
+  await old.frame(raw(toolUpdated('succeeded')));
+  assert.equal(controller.getSnapshot().view?.toolExecutions.size, 0);
+  assert.equal(controller.getSnapshot().view?.conversation.id, secondConversationId);
+  controller.dispose();
+});
+
+test('a missing reliable tool event triggers full snapshot installation without executing work', async () => {
+  let reads = 0;
+  const client = new AgentClient('credential', async (_url, init) => {
+    assert.equal(init?.method, 'GET');
+    const data = snapshot(conversationId, reads++ === 0 ? '10' : '12');
+    if (reads > 1) data.tool_executions = [toolExecution('succeeded')];
+    return response(data);
+  });
+  const calls = subscriptions(client);
+  const controller = new ChatController(client);
+  await controller.select(conversationId);
+  await assert.rejects(calls[0]!.frame(raw(toolUpdated('succeeded', '12'))), /缺/);
+  calls[0]!.fail(
+    new (await import('../src/agent-events')).AgentEventError('EVENT_GAP', '工具事件缺号'),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 280));
+  assert.equal(reads, 2);
+  assert.equal(calls[1]?.cursor.event_seq, '12');
+  assert.equal(
+    controller.getSnapshot().view?.toolExecutions.get(toolExecution().id)?.status,
+    'succeeded',
+  );
+  controller.dispose();
+});
+
+test('contradictory tool terminal state blocks the subscription and retains the accepted result', async () => {
+  const data = snapshot();
+  data.tool_executions = [toolExecution('cancelled')];
+  let reads = 0;
+  const client = new AgentClient('credential', async () => {
+    reads += 1;
+    return response(data);
+  });
+  const calls = subscriptions(client);
+  const controller = new ChatController(client);
+  await controller.select(conversationId);
+  const late = toolUpdated('running');
+  late.payload.tool_execution.row_version = '3';
+  const failure = await calls[0]!.frame(raw(late)).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  assert.ok(failure instanceof AgentEventError);
+  assert.equal(failure.code, 'APPLICATION_FAILED');
+  calls[0]!.fail(failure);
+  await tick();
+  assert.equal(controller.getSnapshot().connection, 'blocked');
+  assert.equal(
+    controller.getSnapshot().view?.toolExecutions.get(toolExecution().id)?.status,
+    'cancelled',
+  );
+  assert.equal(reads, 1);
   assert.equal(calls.length, 1);
   controller.dispose();
 });

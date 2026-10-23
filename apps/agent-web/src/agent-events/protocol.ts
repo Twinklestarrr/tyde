@@ -119,6 +119,9 @@ function validateProductLinks(frame: ProductFrame): void {
       }
       break;
     }
+    case 'tool.updated':
+      belongsToConversation(frame.payload.tool_execution.conversation_id);
+      break;
     case 'input.updated':
     case 'operation.updated':
       break;

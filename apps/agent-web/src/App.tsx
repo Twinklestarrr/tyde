@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { validateAgentContract } from '@tyde/shared/agent';
 import { ChatInput } from './components/ChatInput';
-import { MarkdownBody } from './components/MarkdownBody';
+import { ChatMessages } from './components/ChatMessages';
 import { AttemptStats } from './components/AttemptStats';
-import { MessageTime } from './components/MessageTime';
-import { messageText } from './agent-events/projection';
 import { AgentClient } from './services/agent-client';
 import { ChatController } from './services/chat-controller';
 import { taskExecutionPhase, type TaskExecutionPhase } from './lib/task-state';
@@ -140,7 +138,7 @@ function Workspace({
   }, [state.selectedId]);
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
-  }, [view?.messages, view?.overlays, task?.status]);
+  }, [view?.messages, view?.overlays, view?.toolExecutions, task?.status]);
 
   const send = () => {
     const text = draft;
@@ -352,40 +350,7 @@ function Workspace({
                   <p>直接输入问题，开始真实对话。</p>
                 </div>
               )}
-              {[...view.messages.values()]
-                .sort((a, b) => (BigInt(a.message_seq) < BigInt(b.message_seq) ? -1 : 1))
-                .map((message) => {
-                  const text = messageText(view, message);
-                  return (
-                    <article
-                      className={`chat-message message-${message.message_type}`}
-                      key={message.id}
-                    >
-                      <div className="message-author">
-                        {message.message_type === 'user_input'
-                          ? '你'
-                          : message.message_type === 'notice'
-                            ? '提示'
-                            : 'tyde Agent'}
-                        <span>
-                          {message.status === 'in_progress'
-                            ? '生成中'
-                            : message.status === 'interrupted'
-                              ? '输出已中断'
-                              : ''}
-                        </span>
-                      </div>
-                      {text ? (
-                        <MarkdownBody>{text}</MarkdownBody>
-                      ) : (
-                        <p className="generating-text">
-                          {message.status === 'in_progress' ? '仍在生成…' : '此条输出没有正文。'}
-                        </p>
-                      )}
-                      <MessageTime timestamp={message.created_at} calendarDay={calendarDay} />
-                    </article>
-                  );
-                })}
+              <ChatMessages view={view} calendarDay={calendarDay} />
               {task?.latest_attempt.error && (
                 <div className="attempt-error">
                   <strong>{TASK_LABELS[task.status]}</strong>

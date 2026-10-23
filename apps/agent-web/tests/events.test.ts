@@ -15,6 +15,8 @@ import {
   type EventBaseline,
   type RawSseEvent,
 } from '../src/agent-events';
+import { snapshot, toolUpdated } from './chat-fixtures';
+import { applyProduct, fromSnapshot } from '../src/agent-events/projection';
 
 interface EventSamples {
   baseline: EventBaseline;
@@ -53,7 +55,7 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
   return { promise, resolve };
 }
 
-test('test fixtures cover all seven public product events and every control variant', () => {
+test('W3 frozen fixtures cover seven original product events and every control variant', () => {
   assert.deepEqual(
     new Set(samples.product.map((frame) => frame.event_type)),
     new Set([
@@ -352,4 +354,57 @@ test('unknown reliable events block application instead of being silently ignore
     errorCode('INVALID_FRAME'),
   );
   assert.equal(cursor.lastApplied.eventSeq, '10');
+});
+
+test('W4 tool events validate links and deduplicate without advancing for unknown events', async () => {
+  const cursor = new AgentEventCursor(samples.baseline);
+  const applied: string[] = [];
+  const frame = toolUpdated();
+  assert.equal(validateAgentContract('ProductFrame', frame), true);
+  assert.deepEqual(decodeAgentEvent(raw(frame)), frame);
+  const handlers = {
+    applyProduct: (value: ProductFrame) => {
+      applied.push(value.event_seq);
+    },
+  };
+  assert.equal(await cursor.apply(raw(frame), cursor.generation, handlers), 'applied');
+  assert.equal(await cursor.apply(raw(frame), cursor.generation, handlers), 'duplicate');
+  assert.deepEqual(applied, ['11']);
+  assert.equal(cursor.lastApplied.eventSeq, '11');
+  const foreign = toolUpdated('succeeded', '12');
+  foreign.payload.tool_execution.conversation_id = '10000000-0000-4000-8000-000000000099';
+  assert.throws(() => decodeAgentEvent(raw(foreign)), errorCode('INVALID_FRAME'));
+  const unknown = { ...toolUpdated('succeeded', '12'), event_type: 'tool.future' };
+  await assert.rejects(
+    cursor.apply(
+      { ...raw(toolUpdated('succeeded', '12')), data: JSON.stringify(unknown) },
+      cursor.generation,
+      handlers,
+    ),
+    errorCode('INVALID_FRAME'),
+  );
+  assert.equal(cursor.lastApplied.eventSeq, '11');
+});
+
+test('a contradictory terminal tool event preserves both projection and reliable cursor', async () => {
+  const cursor = new AgentEventCursor(samples.baseline);
+  let view = fromSnapshot(snapshot());
+  const handlers = {
+    applyProduct: (frame: ProductFrame) => {
+      view = applyProduct(view, frame);
+    },
+  };
+  await cursor.apply(raw(toolUpdated('cancelled')), cursor.generation, handlers);
+  const late = toolUpdated('running', '12');
+  late.payload.tool_execution.row_version = '3';
+  await assert.rejects(
+    cursor.apply(raw(late), cursor.generation, handlers),
+    errorCode('APPLICATION_FAILED'),
+  );
+  assert.equal(cursor.lastApplied.eventSeq, '11');
+  assert.equal([...view.toolExecutions.values()][0]?.status, 'cancelled');
+  await assert.rejects(
+    cursor.apply(raw(toolUpdated('succeeded', '13')), cursor.generation, handlers),
+    errorCode('BASELINE_REQUIRED'),
+  );
 });

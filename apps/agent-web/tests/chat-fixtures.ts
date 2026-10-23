@@ -5,6 +5,7 @@ import type {
   ProductFrame,
   SnapshotData,
   TaskView,
+  ToolExecutionSummary,
 } from '@tyde/shared/agent';
 import type { RawSseEvent } from '../src/agent-events';
 
@@ -86,4 +87,46 @@ export function deferred<T>() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+/** Minimal synthetic projection only; no demo personnel, rules or tool implementation. */
+export function toolExecution(
+  status: ToolExecutionSummary['status'] = 'running',
+): ToolExecutionSummary {
+  const task = runningTask();
+  return {
+    id: 'e0000000-0000-4000-8000-000000000001',
+    conversation_id: conversationId,
+    task_id: task.id,
+    attempt_id: task.latest_attempt.id,
+    model_request_id: 'model-request-test-1',
+    tool_call_id: 'tool-call-test-1',
+    tool_name: 'synthetic_readonly_query',
+    status,
+    row_version: status === 'running' ? '1' : '2',
+    started_at: '2026-10-22T08:00:01Z',
+    ended_at: status === 'running' ? null : '2026-10-22T08:00:02Z',
+    is_demo: true,
+    display_label: '合成测试资源 v1',
+    input_summary: '只读查询合成测试记录',
+    result_summary: status === 'succeeded' ? '演示数据：返回 2 条合成测试记录。' : null,
+    result_ref: status === 'succeeded' ? 'f0000000-0000-4000-8000-000000000001' : null,
+    error:
+      status === 'failed'
+        ? { code: 'tool_failed', message: '合成测试工具执行失败。' }
+        : status === 'cancelled'
+          ? { code: 'cancelled', message: '执行已取消。' }
+          : null,
+  };
+}
+export function toolUpdated(
+  status: ToolExecutionSummary['status'] = 'running',
+  sequence = '11',
+): Extract<ProductFrame, { event_type: 'tool.updated' }> {
+  return {
+    ...sample('operation.updated'),
+    event_type: 'tool.updated',
+    event_seq: sequence,
+    payload: { tool_execution: toolExecution(status) },
+  };
 }

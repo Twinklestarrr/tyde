@@ -714,3 +714,90 @@ a:focus-visible {
     background: var(--bg-panel);
   }
 }
+
+/* W4 read-only tool projections remain separate from business operations. */
+.tool-execution-list {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 18px;
+}
+.tool-execution {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.tool-execution-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tool-execution-heading strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.tool-execution-status {
+  color: var(--text-muted);
+}
+.tool-succeeded .tool-execution-status {
+  color: var(--success);
+}
+.tool-failed .tool-execution-status,
+.tool-error {
+  color: var(--warning);
+}
+.tool-cancelled .tool-execution-status {
+  color: var(--text-dim);
+}
+.tool-demo-label {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-selected);
+  color: var(--accent);
+  font-size: 11px;
+}
+.tool-source-label {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+}
+.tool-summary,
+.tool-error {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+.tool-execution-time {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.tool-trace {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.tool-trace summary {
+  cursor: pointer;
+}
+.tool-trace dl {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 9px 0 0;
+}
+.tool-trace dt {
+  color: var(--text-dim);
+}
+.tool-trace dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
