@@ -25,12 +25,19 @@ import {
   type SnapshotData,
   type TaskDetailData,
   type TaskView,
+  type ToolExecutionSummary,
   type UnconfirmedError,
 } from '@tyde/shared/agent';
 import { requireOwnedConversation, type AgentPrincipal } from '../auth/access.js';
 import { prepareCommand } from '../commands/prepare-command.js';
 import { AttemptBudget, type AttemptBudgetClock } from '../execution/attempt-budget.js';
-import type { PiMemoryBarriers, PiMemorySession } from '../pi/session.js';
+import type {
+  PiMemoryBarriers,
+  PiMemorySession,
+  PiModelRequestContext,
+  PiNativeState,
+  PiToolLifecycle,
+} from '../pi/session.js';
 
 export type RuntimeFrame = ProductFrame | EphemeralFrame;
 export type RuntimeSession = Pick<PiMemorySession, 'prompt' | 'stop' | 'dispose'>;
@@ -42,6 +49,30 @@ export interface AgentMemoryRuntimeOptions {
   id?: () => string;
   /** 仅裁剪完整产品事件前缀；过期订阅必须重新建立快照。 */
   maxEventsPerConversation?: number;
+  /** 可信宿主保存屏障；拒绝时不得派发下一次模型或工具。W4 默认仅冻结在内存。 */
+  saveNativeState?(capture: NativeExecutionCapture): Promise<void>;
+  /** W5 may recheck its lease after saving; this hook cannot grant a stopped Attempt permission. */
+  beforeDispatch?(dispatch: NativeDispatch): Promise<void>;
+}
+
+export interface NativeDispatch {
+  conversationId: string;
+  taskId: string;
+  attemptId: string;
+  kind: 'model' | 'tool';
+  modelRequestId: string | null;
+  toolCallId: string | null;
+}
+
+export interface NativeExecutionCapture {
+  conversationId: string;
+  taskId: string;
+  attemptId: string;
+  phase: 'before_model' | 'after_assistant' | 'before_tool' | 'after_tool';
+  modelRequestId: string | null;
+  toolCallId: string | null;
+  capturedAt: string;
+  state: import('../pi/session.js').PiNativeState;
 }
 
 export class AgentRuntimeError extends Error {
@@ -87,6 +118,19 @@ interface Conversation {
   inputs: Map<string, InputReceipt>;
   events: ProductFrame[];
   listeners: Set<(frame: RuntimeFrame) => void>;
+  toolExecutions: Map<string, ToolExecutionSummary>;
+  nativeCaptures: Map<string, NativeExecutionCapture>;
+  modelExecutions: Map<string, Execution>;
+  toolResultLinks: Map<
+    string,
+    {
+      attemptId: string;
+      modelRequestId: string;
+      toolCallId: string;
+      sourceNativeEntryId: string;
+      resultNativeEntryId: string;
+    }
+  >;
   session?: Promise<RuntimeSession>;
   active?: Execution;
 }
@@ -154,6 +198,10 @@ export class AgentMemoryRuntime {
       inputs: new Map(),
       events: [],
       listeners: new Set(),
+      toolExecutions: new Map(),
+      nativeCaptures: new Map(),
+      modelExecutions: new Map(),
+      toolResultLinks: new Map(),
     };
     this.conversations.set(conversation.view.id, conversation);
     return structuredClone({
@@ -219,6 +267,7 @@ export class AgentMemoryRuntime {
       input_receipts: this.inputsFor(conversation, [...messages, ...pinned], focus?.id),
       results: this.resultsFor(conversation, [...messages, ...pinned], focus?.result_id),
       operations: [],
+      tool_executions: this.toolsFor(conversation, [...messages, ...pinned], focus?.id),
       page: this.page(conversation, messages, conversation.view.activity.last_message_seq),
       read_cursor: this.cursor(conversation),
       event_pruned_through_seq: conversation.pruned.toString(),
@@ -262,6 +311,7 @@ export class AgentMemoryRuntime {
       input_receipts: this.inputsFor(conversation, messages),
       results: this.resultsFor(conversation, messages),
       operations: [],
+      tool_executions: this.toolsFor(conversation, messages),
       page: this.page(conversation, messages, query.upperMessageSeq),
       read_cursor: this.cursor(conversation),
     });
@@ -273,6 +323,7 @@ export class AgentMemoryRuntime {
     return structuredClone({
       task,
       operations: [],
+      tool_executions: this.toolsFor(conversation, [], task.id),
       result: task.result_id ? conversation.results.get(task.result_id)! : null,
       read_cursor: this.cursor(conversation),
     });
@@ -283,7 +334,12 @@ export class AgentMemoryRuntime {
     if (!validateAgentContract('UUID', resultId)) throw invalid();
     const result = conversation.results.get(resultId.toLowerCase());
     if (!result) throw missing();
-    return structuredClone({ result, operations: [], read_cursor: this.cursor(conversation) });
+    return structuredClone({
+      result,
+      operations: [],
+      tool_executions: this.toolsFor(conversation, [], result.task_id),
+      read_cursor: this.cursor(conversation),
+    });
   }
 
   getCommand(principal: AgentPrincipal, id: string, requestKey: string): CommandLookupData {
@@ -627,9 +683,15 @@ export class AgentMemoryRuntime {
       budget.start(this.now());
       if (!conversation.session) {
         conversation.session = this.options.createSession(conversation.view.id, {
-          beforeModel: async () => {
+          beforeModel: async (state, request) => {
             const active = this.requireExecution(conversation);
-            active.budget.authorizeModel(this.id());
+            const modelRequestId = request?.modelRequestId ?? this.id();
+            const previous = conversation.modelExecutions.get(modelRequestId);
+            if (previous && previous !== active) throw new Error('MODEL_REQUEST_ID_REUSED');
+            active.budget.authorizeModel(modelRequestId);
+            conversation.modelExecutions.set(modelRequestId, active);
+            await this.saveNative(conversation, active, state, 'before_model', { modelRequestId });
+            this.requireExecution(conversation).budget.assertCanProceed();
             const receipt = conversation.inputs.get(active.commandId)!;
             if (receipt.input_state === 'pending') {
               const consumed: InputReceipt = {
@@ -641,15 +703,42 @@ export class AgentMemoryRuntime {
               this.product(conversation, 'input.updated', { input_receipt: consumed });
             }
           },
-          beforeModelDispatch: async () => {
-            this.requireExecution(conversation).budget.assertCanProceed();
+          beforeModelDispatch: async (request) => {
+            const active = this.executionFor(conversation, request);
+            await this.dispatchGate(conversation, active, 'model', request);
           },
-          beforeTool: async () => {
-            this.requireExecution(conversation).budget.authorizeTool(this.id());
+          afterAssistant: async (state, _message, request) => {
+            const active = this.executionFor(conversation, request);
+            await this.saveNative(conversation, active, state, 'after_assistant', request);
           },
-          beforeToolDispatch: async () => {
-            this.requireExecution(conversation).budget.assertCanProceed();
+          beforeTool: async (state, _toolName, call) => {
+            const active = this.executionFor(conversation, call);
+            active.budget.authorizeTool(call?.toolCallId ?? this.id());
+            await this.saveNative(
+              conversation,
+              active,
+              state,
+              'before_tool',
+              call,
+              call?.toolCallId,
+            );
           },
+          beforeToolDispatch: async (call) => {
+            const active = this.executionFor(conversation, call);
+            await this.dispatchGate(conversation, active, 'tool', call, call?.toolCallId);
+          },
+          afterTool: async (state, call) => {
+            const active = this.executionFor(conversation, call, true);
+            await this.saveNative(
+              conversation,
+              active,
+              state,
+              'after_tool',
+              call,
+              call?.toolCallId,
+            );
+          },
+          onToolLifecycle: async (event) => this.updateTool(conversation, event),
           executionSignal: () => this.requireExecution(conversation).budget.signal,
           executionRemainingMs: () => this.requireExecution(conversation).budget.remainingMs(),
         });
@@ -715,6 +804,12 @@ export class AgentMemoryRuntime {
 
   private complete(conversation: Conversation, execution: Execution, text: string): void {
     const { task, output } = execution;
+    if (
+      [...conversation.toolExecutions.values()].some(
+        (tool) => tool.attempt_id === task.latest_attempt.id && tool.status === 'running',
+      )
+    )
+      throw new Error('TOOL_NOT_CONVERGED');
     const timestamp = this.timestamp();
     const result: ResultView = frozen({
       id: this.id(),
@@ -752,6 +847,7 @@ export class AgentMemoryRuntime {
     code = 'PI_EXECUTION_FAILED',
   ): void {
     const { task, output, budget } = execution;
+    this.cancelRunningTools(conversation, execution);
     budget.finish();
     task.status = outcome;
     task.active_attempt_id = null;
@@ -790,6 +886,152 @@ export class AgentMemoryRuntime {
       throw new Error('ATTEMPT_EXECUTION_REVOKED');
     }
     return execution;
+  }
+
+  private executionFor(
+    conversation: Conversation,
+    request?: PiModelRequestContext,
+    captureAfterRevocation = false,
+  ): Execution {
+    const execution = request
+      ? conversation.modelExecutions.get(request.modelRequestId)
+      : conversation.active;
+    if (!execution || !this.current(conversation, execution))
+      throw new Error('ATTEMPT_EXECUTION_REVOKED');
+    if (!captureAfterRevocation) execution.budget.assertCanProceed();
+    return execution;
+  }
+
+  private async saveNative(
+    conversation: Conversation,
+    execution: Execution,
+    state: PiNativeState,
+    phase: NativeExecutionCapture['phase'],
+    request?: PiModelRequestContext,
+    toolCallId?: string,
+  ): Promise<void> {
+    const capture = frozen({
+      conversationId: conversation.view.id,
+      taskId: execution.task.id,
+      attemptId: execution.task.latest_attempt.id,
+      phase,
+      modelRequestId: request?.modelRequestId ?? null,
+      toolCallId: toolCallId ?? null,
+      capturedAt: this.timestamp(),
+      state,
+    });
+    conversation.nativeCaptures.set(capture.attemptId, capture);
+    await this.options.saveNativeState?.(capture);
+    if (!this.current(conversation, execution)) throw new Error('ATTEMPT_EXECUTION_REVOKED');
+  }
+
+  private async dispatchGate(
+    conversation: Conversation,
+    execution: Execution,
+    kind: NativeDispatch['kind'],
+    request?: PiModelRequestContext,
+    toolCallId?: string,
+  ): Promise<void> {
+    await this.options.beforeDispatch?.(
+      frozen({
+        conversationId: conversation.view.id,
+        taskId: execution.task.id,
+        attemptId: execution.task.latest_attempt.id,
+        kind,
+        modelRequestId: request?.modelRequestId ?? null,
+        toolCallId: toolCallId ?? null,
+      }),
+    );
+    if (!this.current(conversation, execution)) throw new Error('ATTEMPT_EXECUTION_REVOKED');
+    execution.budget.assertCanProceed();
+  }
+
+  private updateTool(conversation: Conversation, event: PiToolLifecycle): void {
+    const execution = conversation.modelExecutions.get(event.modelRequestId);
+    if (!execution || !this.current(conversation, execution)) return;
+    const key = `${execution.task.latest_attempt.id}:${event.toolCallId}`;
+    const previous = conversation.toolExecutions.get(key);
+    if (previous && previous.status !== 'running') return;
+    if (previous && event.status === 'running') return;
+    if (event.status === 'running') execution.budget.assertCanProceed();
+    // A stop/limit after the native result was captured still cannot publish success.
+    const cancelled =
+      event.status !== 'running' &&
+      (execution.budget.signal.aborted || execution.task.status !== 'running');
+    const status = cancelled ? 'cancelled' : event.status;
+    const code = cancelled
+      ? execution.budget.limitError
+        ? 'budget_exceeded'
+        : 'cancelled'
+      : event.errorCode;
+    const resultRef = status === 'succeeded' ? this.id() : null;
+    const summary: ToolExecutionSummary = {
+      id: previous?.id ?? this.id(),
+      conversation_id: conversation.view.id,
+      task_id: execution.task.id,
+      attempt_id: execution.task.latest_attempt.id,
+      model_request_id: event.modelRequestId,
+      tool_call_id: event.toolCallId,
+      tool_name: event.toolName,
+      status,
+      row_version: previous ? increment(previous.row_version) : '1',
+      started_at: previous?.started_at ?? event.startedAt,
+      ended_at: status === 'running' ? null : (event.endedAt ?? this.timestamp()),
+      is_demo: event.isDemo,
+      display_label: event.displayLabel,
+      input_summary: event.inputSummary,
+      result_summary: status === 'succeeded' ? event.resultSummary : null,
+      result_ref: resultRef,
+      error: code ? { code, message: this.toolErrorMessage(code) } : null,
+    };
+    if (!validateAgentContract('ToolExecutionSummary', summary))
+      throw new Error('INVALID_TOOL_PROJECTION');
+    if (resultRef) {
+      if (!event.resultNativeEntryId) throw new Error('TOOL_RESULT_NATIVE_LINK_MISSING');
+      conversation.toolResultLinks.set(
+        resultRef,
+        frozen({
+          attemptId: summary.attempt_id,
+          modelRequestId: event.modelRequestId,
+          toolCallId: event.toolCallId,
+          sourceNativeEntryId: event.sourceNativeEntryId,
+          resultNativeEntryId: event.resultNativeEntryId,
+        }),
+      );
+    }
+    conversation.toolExecutions.set(key, frozen(summary));
+    this.product(conversation, 'tool.updated', { tool_execution: summary });
+  }
+
+  private cancelRunningTools(conversation: Conversation, execution: Execution): void {
+    for (const [key, tool] of conversation.toolExecutions) {
+      if (tool.attempt_id !== execution.task.latest_attempt.id || tool.status !== 'running')
+        continue;
+      const code = execution.budget.limitError
+        ? 'budget_exceeded'
+        : execution.task.status === 'stopping'
+          ? 'cancelled'
+          : 'tool_failed';
+      const summary: ToolExecutionSummary = frozen({
+        ...tool,
+        status: code === 'tool_failed' ? 'failed' : 'cancelled',
+        row_version: increment(tool.row_version),
+        ended_at: this.timestamp(),
+        error: { code, message: this.toolErrorMessage(code) },
+      });
+      conversation.toolExecutions.set(key, summary);
+      this.product(conversation, 'tool.updated', { tool_execution: summary });
+    }
+  }
+
+  private toolErrorMessage(code: NonNullable<ToolExecutionSummary['error']>['code']): string {
+    return {
+      invalid_arguments: '工具参数不符合声明，未执行查询',
+      tool_failed: '工具执行失败，未产生可用结果',
+      cancelled: '工具已取消，迟到结果不会恢复执行',
+      budget_exceeded: '执行预算限制已触发，工具已取消',
+      timeout: '工具执行超时，未接受迟到结果',
+    }[code];
   }
 
   private current(conversation: Conversation, execution: Execution): boolean {
@@ -1049,6 +1291,16 @@ export class AgentMemoryRuntime {
     );
   }
 
+  private toolsFor(
+    conversation: Conversation,
+    messages: MessageView[],
+    focusTaskId?: string,
+  ): ToolExecutionSummary[] {
+    const tasks = new Set(messages.map((message) => message.task_id));
+    if (focusTaskId) tasks.add(focusTaskId);
+    return [...conversation.toolExecutions.values()].filter((tool) => tasks.has(tool.task_id));
+  }
+
   private resultsFor(
     conversation: Conversation,
     messages: MessageView[],
@@ -1162,6 +1414,11 @@ export class AgentMemoryRuntime {
   private errorSummary(code: string): string {
     if (code.startsWith('ATTEMPT_') && code.endsWith('_LIMIT_EXCEEDED'))
       return '本次执行达到限制，已停止继续执行';
+    if (['PI_TOOL_ARGUMENTS_INVALID', 'MAAS_TOOL_ARGUMENTS_INVALID'].includes(code))
+      return '模型给出的工具参数不符合声明，未执行工具';
+    if (code === 'PI_TOOL_TIMEOUT') return '只读工具执行超时，迟到结果不会恢复执行';
+    if (code === 'PI_TOOL_FAILED') return '只读工具执行失败，未继续调用模型';
+    if (code === 'PI_NATIVE_BARRIER_FAILED') return '执行状态保存或派发门禁失败，已阻断后续调用';
     return '模型执行失败，请检查服务端模型配置或稍后在新会话中重试';
   }
 }

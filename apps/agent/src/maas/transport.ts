@@ -64,6 +64,8 @@ interface TransportOptions {
   socket?: MaasSocketOptions;
   signal?: AbortSignal;
   tools?: Readonly<Record<string, MaasTool>>;
+  /** Stable host dispatch/authorization identity, generated before the save gate. */
+  modelRequestId?: string;
   limits?: { responseBytes?: number; eventBytes?: number; toolArgumentsBytes?: number };
 }
 
@@ -597,6 +599,7 @@ function createGuardedTransport(
   const all: MaasObservation[] = [];
   const tools = options.tools ?? {};
   const endpoint = `${config.baseUrl}/chat/completions`;
+  let hostDispatchUsed = false;
   const guardedFetch: typeof globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     assert(
@@ -604,11 +607,17 @@ function createGuardedTransport(
       'MAAS_REQUEST_INVALID',
     );
     validatePayload(init.body, config, tools, profile);
+    // A host authorization is a single dispatch, even if an SDK unexpectedly
+    // invokes fetch twice. Standalone transports keep their existing API.
+    if (options.modelRequestId !== undefined) {
+      assert(!hostDispatchUsed, 'MAAS_REQUEST_INVALID');
+      hostDispatchUsed = true;
+    }
     const observation: MaasObservation = {
       profile: profile.kind,
       ...(profile.kind === 'direct-model' ? { provider: profile.config.provider } : {}),
       modelCallId: randomUUID(),
-      modelRequestId: randomUUID(),
+      modelRequestId: options.modelRequestId ?? randomUUID(),
       platformRequestId: null,
       upstreamRequestId: null,
       routeVersion: null,

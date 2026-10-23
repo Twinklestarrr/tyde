@@ -11,6 +11,7 @@ import {
 import { AgentMemoryRuntime } from './runtime/memory-runtime.js';
 import { readDirectModelConfig } from './maas/direct-model.js';
 import { createPiDirectModelSession } from './pi/session.js';
+import type { TrustedPiResources } from './pi/resources.js';
 import { registerAgentRoutes } from './api/routes.js';
 import { transformAgentOpenApi } from './api/documentation.js';
 
@@ -22,8 +23,14 @@ declare module 'fastify' {
 
 export async function createApp(
   config: AgentConfig,
-  options: { identityAdapter?: PlatformIdentityAdapter; runtime?: AgentMemoryRuntime } = {},
+  options: {
+    identityAdapter?: PlatformIdentityAdapter;
+    runtime?: AgentMemoryRuntime;
+    /** Trusted host injection only. Default startup never discovers deployment/demo resources. */
+    resources?: TrustedPiResources;
+  } = {},
 ) {
+  const resources = options.resources;
   const agentAccess = createAgentAccess(config, options.identityAdapter);
   const app = Fastify({
     logger:
@@ -46,7 +53,7 @@ export async function createApp(
         title: 'tyde Agent API',
         version: '0.1.0',
         description:
-          'W3 开发内存模式：私有会话、问答任务、幂等命令、停止及产品 SSE 仅在同一服务进程存活期间有效。模型使用服务端 URL/Key；未接 PostgreSQL、重启恢复、业务工具或正式平台授权。',
+          'W4 开发内存模式：私有会话、问答任务、幂等命令、停止、独立工具过程与产品 SSE 仅在同一进程存活期间有效。工具与 Skill 仅由可信宿主显式注入，默认入口不加载演示资源；只读工具不产生业务操作。未接 PostgreSQL、重启恢复、业务写工具或正式平台授权。',
       },
       components: {
         securitySchemes: {
@@ -91,7 +98,7 @@ export async function createApp(
     new AgentMemoryRuntime({
       createSession: async (_conversationId, barriers) => {
         modelConfig ??= readDirectModelConfig();
-        return createPiDirectModelSession({ config: modelConfig, barriers });
+        return createPiDirectModelSession({ config: modelConfig, barriers, resources });
       },
     });
   await registerAgentRoutes(app, runtime);
