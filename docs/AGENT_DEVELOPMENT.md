@@ -1,5 +1,7 @@
 # Agent 开发与跨端协作
 
+W5（2026-10-22 开始、10-23 收尾）在独立分支和 worktree 实现 PostgreSQL 持久聊天链路；当前运行、迁移、权限、原生提交与故障证据见 [W5 验收记录](AGENT_W5_VALIDATION.md)、[D1 核对](AGENT_W5_D1.md) 和 [运行说明](../apps/agent/README.md)。以下 W1—W3 描述保留阶段背景，其中“尚未接 PostgreSQL／默认内存”以本段和 W5 说明为准。W4 尚未合并联调；W5 不开放 continue/retry/provide_input，不装配 Electron，不等于完整 M3/W6。
+
 2026-10-22 · 协作说明 v0.6 · W3 开发内存 API 与真实聊天闭环
 
 本文供业务前端、Agent 前后端、桌面和业务后端开发共同使用，直接说明工程落点、协作边界与验收要求。内容按当前 tyde 仓库、Agent 架构 v0.10、最小版本计划 v0.3、13—20 号数据设计、21—24 号接口设计及 26 号执行预算设计整理，阅读本文无需访问仓库外的设计目录。
@@ -67,7 +69,7 @@ Pi 仅在 Agent 服务端执行。公开 Pi 依赖继续精确固定为 1.3.0，
 | W2 Pi／模型接入    | 固定 SDK、原生内存循环、URL／Key 主入口、可选平台契约及流式／停止／故障适配；用户已提供 Flash 真实验收日志   | W1；不等待建表                        |
 | W3 Agent 界面      | 已接通内存 API／产品事件、真实多轮、会话切换、停止和重连；操作过程组件已准备，真实演示工具仍属 W4            | W1 后可用样例推进，与 W2 联调         |
 | W4 演示工具／Skill | 参数校验、只读演示查询、真实工具调用与可追溯结果                                                             | W2                                    |
-| W5 数据与持久化    | 原生样本、迁移、仓储、版本事务和提交失败阻断                                                                 | W1 后设计，W2 后验证真实样本          |
+| W5 数据与持久化    | 已接完整原生状态、独立迁移、版本提交、持久命令/outbox/授权及失败阻断；边界见 W5 记录                         | W1 后设计，W2 后验证真实样本          |
 | W6 恢复与桌面      | 重启继续、去重和故障验证，现有 Electron 接入两份前端与远程服务                                               | 恢复依赖 W4／W5，桌面可在 W3 后先接入 |
 
 内存链路跑通仅表示接入成功。完整状态入库、服务重启后可继续、故障保护及 macOS 远程调用均通过，才达到本期完成标准。完整业务页面联动、真实排班、Agent Windows 验收、多实例、正式签名和更新后续推进。
@@ -175,7 +177,7 @@ Electron 需接入第二份前端的构建资源、开发地址、可信 Agent �
 Agent 应用与独立启动／检查命令已实现，部署装配尚待后续工作。业务 API、业务 Web、Electron 开发页面分别使用 3000、3001、5174；Agent 服务和界面分别使用 3002、3003，业务 API 与 Agent 服务地址分开配置。
 
 ```sh
-pnpm dev:agent      # 127.0.0.1:3002，无 .env 也可启动
+pnpm dev:agent      # PG 默认需要独立数据库/已发布快照；显式 memory 可无数据库
 pnpm dev:agent-web  # 127.0.0.1:3003，同源 /agent-api 代理
 pnpm typecheck:agent
 pnpm test:agent
@@ -183,7 +185,7 @@ pnpm build:agent
 pnpm build:agent-web
 ```
 
-`apps/agent/.env.example` 定义环境、监听与可选开发身份（`AGENT_AUTH_MODE`、`AGENT_TEST_USER_ID`、`AGENT_TEST_BEARER_TOKEN`）；`apps/agent-web/.env.example` 的 `AGENT_PROXY_TARGET` 仅供 Vite 服务端读取，可通过 shell 或本目录 `.env.local` 覆盖。HTTP 进程和静态页面可在没有业务数据库、平台会话或模型凭据时启动；真实聊天必须显式配置开发身份和服务端模型。页面凭据只存内存，刷新后重新输入，再按 URL 的会话 UUID 恢复展示；页面自报用户和业务预览 mock 用户都不能授权 Agent。静态部署需要把 `/agent-api/*` 反向代理到 Agent 并去掉前缀；Vite 开发／预览代理不会自动进入生产静态资源。具体用法见 [Agent 服务](../apps/agent/README.md) 与 [Agent 界面](../apps/agent-web/README.md)。
+`apps/agent/.env.example` 定义环境、监听与可选开发身份（`AGENT_AUTH_MODE`、`AGENT_TEST_USER_ID`、`AGENT_TEST_BEARER_TOKEN`）；`apps/agent-web/.env.example` 的 `AGENT_PROXY_TARGET` 仅供 Vite 服务端读取，可通过 shell 或本目录 `.env.local` 覆盖。静态页面可独立启动；Agent HTTP 默认 PG 模式需要独立 Agent 数据库、兼容迁移、最终运行清单及已发布的无凭据模型快照，显式开发 memory 才可无数据库。真实聊天仍需可信身份和服务端模型。页面凭据只存内存，刷新后重新输入，再按 URL 的会话 UUID 恢复展示；页面自报用户和业务预览 mock 用户都不能授权 Agent。静态部署需要把 `/agent-api/*` 反向代理到 Agent 并去掉前缀；Vite 开发／预览代理不会自动进入生产静态资源。具体用法见 [Agent 服务](../apps/agent/README.md) 与 [Agent 界面](../apps/agent-web/README.md)。
 
 模型主验收无需先启动上述服务、页面或数据库。在忽略的 `apps/agent/.env` 填写以下 URL 与实际 Key：
 
@@ -210,14 +212,14 @@ pnpm --filter @tyde/agent smoke:maas --stop-after-ms 2000
 
 配置检查不发送模型请求，也不验证实际 Key 或远端能力。平台入口的模块加载、首次授权和会话装配共用可取消准备预算；身份模块应传递信号并清理自身 I/O，迟到结果不能启动调用。独立 CLI 的结局清理后有最多 1 秒退出窗口，库模式不退出服务进程。默认冒烟均使用两轮真实调用与随机口令核对上下文；停止计时从 prompt 开始，仅已收到文字、HTTP 200 流取消且本地 stopped 才通过。准备阶段停止、无文字或模型提前完成均提示调整时机，不计为流式停止通过。流式文字是临时输出，最终输出结构化内存结局。W3 页面已接真实命令与产品事件，隔离测试与实际模型证据分别记录，不能互相替代。
 
-| 当前入口                                 | 现有行为                                                         | Agent 接入工作                                                                                     |
-| ---------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `pnpm-workspace.yaml`、根 `package.json` | 已纳入两个 Agent 包及独立 dev／build／typecheck／test 命令       | 本阶段入口已落地；不改变原业务命令含义                                                             |
-| `build:packages`、`typecheck`、`lint`    | 共享包构建、递归类型检查及统一 ESLint                            | 验证共享子路径导出、新应用检查和正确的构建依赖顺序                                                 |
-| `dev:electron`                           | `scripts/dev-electron.mjs` 启动或复用业务页面服务并启动 Electron | 加入 Agent 页面地址、就绪检查和清理；连接远程 Agent 时不启动本机 Pi                                |
-| `build:electron`、`package:mac`          | 构建并打包业务前端与桌面宿主                                     | 同时构建两份前端，在 `electron-builder.yml` 加入 Agent 前端资源；Pi 服务端独立部署                 |
-| `build:server`、`build:vercel`           | 业务后端托管业务 Web                                             | 保持业务发布链路，单独定义 Agent 服务部署与接口兼容方式                                            |
-| `db:*`、`test`                           | 业务数据库命令和业务服务端单测                                   | Agent 单独用 `test:agent`；`apps/agent/migrations/` 目前只有预留说明，无迁移命令，不随业务迁移执行 |
+| 当前入口                                 | 现有行为                                                         | Agent 接入工作                                                                                              |
+| ---------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `pnpm-workspace.yaml`、根 `package.json` | 已纳入两个 Agent 包及独立 dev／build／typecheck／test 命令       | 本阶段入口已落地；不改变原业务命令含义                                                                      |
+| `build:packages`、`typecheck`、`lint`    | 共享包构建、递归类型检查及统一 ESLint                            | 验证共享子路径导出、新应用检查和正确的构建依赖顺序                                                          |
+| `dev:electron`                           | `scripts/dev-electron.mjs` 启动或复用业务页面服务并启动 Electron | 加入 Agent 页面地址、就绪检查和清理；连接远程 Agent 时不启动本机 Pi                                         |
+| `build:electron`、`package:mac`          | 构建并打包业务前端与桌面宿主                                     | 同时构建两份前端，在 `electron-builder.yml` 加入 Agent 前端资源；Pi 服务端独立部署                          |
+| `build:server`、`build:vercel`           | 业务后端托管业务 Web                                             | 保持业务发布链路，单独定义 Agent 服务部署与接口兼容方式                                                     |
+| `db:*`、`test`                           | 业务数据库命令和业务服务端单测                                   | Agent 单独用 `test:agent`；W5 使用独立 `migrate:agent`／`check:agent-db`／`test:agent-db`，不随业务迁移执行 |
 
 验收重点包括真实多轮与工具调用、会话归属、停止确认、原生状态往返、重启继续、输入及请求去重、旧写入者阻断、数据库故障保护、桌面重连与退出取消、macOS 安装包调用远程服务。
 
