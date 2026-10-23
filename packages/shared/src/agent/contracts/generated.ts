@@ -1223,6 +1223,134 @@ export const MessagePageSchema = /*#__PURE__*/ Type.Object(
 );
 export type MessagePage = Static<typeof MessagePageSchema>;
 
+export const ToolExecutionErrorSchema = /*#__PURE__*/ Type.Object(
+  {
+    code: /*#__PURE__*/ Type.Union(
+      [
+        /*#__PURE__*/ Type.Literal('invalid_arguments'),
+        /*#__PURE__*/ Type.Literal('tool_failed'),
+        /*#__PURE__*/ Type.Literal('cancelled'),
+        /*#__PURE__*/ Type.Literal('budget_exceeded'),
+        /*#__PURE__*/ Type.Literal('timeout'),
+      ],
+      {
+        description:
+          '工具失败原因：invalid_arguments=参数失败；tool_failed=执行失败；cancelled=停止或资格撤销；budget_exceeded=预算取消；timeout=工具超时。',
+      },
+    ),
+    message: /*#__PURE__*/ Type.String({
+      minLength: 1,
+      maxLength: 500,
+      description: '可展示的安全错误说明，最多 500 个 Unicode 码点。',
+    }),
+  },
+  {
+    description: 'W4 新增工具受控错误，不包含参数、堆栈、路径或原始回执，不表示业务操作效果。',
+    additionalProperties: false,
+  },
+);
+export type ToolExecutionError = Static<typeof ToolExecutionErrorSchema>;
+
+export const ToolExecutionSummarySchema = /*#__PURE__*/ Type.Object(
+  {
+    id: UUIDSchema,
+    conversation_id: UUIDSchema,
+    task_id: UUIDSchema,
+    attempt_id: UUIDSchema,
+    model_request_id: /*#__PURE__*/ Type.String({
+      minLength: 1,
+      maxLength: 200,
+      description: '受控模型派发标识，宿主派发前建立并关联原生请求，不是 HTTP request_id。',
+    }),
+    tool_call_id: /*#__PURE__*/ Type.String({
+      minLength: 1,
+      maxLength: 200,
+      description: 'Pi 原生工具调用标识，同一尝试内用于关联与去重，不授予再次执行权限。',
+    }),
+    tool_name: /*#__PURE__*/ Type.String({
+      minLength: 1,
+      maxLength: 80,
+      description: '显式白名单中注册的真实工具名称。',
+    }),
+    status: /*#__PURE__*/ Type.Union(
+      [
+        /*#__PURE__*/ Type.Literal('running'),
+        /*#__PURE__*/ Type.Literal('succeeded'),
+        /*#__PURE__*/ Type.Literal('failed'),
+        /*#__PURE__*/ Type.Literal('cancelled'),
+      ],
+      {
+        description:
+          '工具状态：running=执行中；succeeded=结果已接受；failed=参数或执行失败；cancelled=停止或预算取消。终态不得回到 running，迟到结果不得改写终态。',
+      },
+    ),
+    row_version: NonNegativeBigIntSchema,
+    started_at: /*#__PURE__*/ Type.String({
+      format: 'date-time',
+      description: '本次工具调用被宿主接纳的 UTC 时间，包含参数失败及取消记录。',
+    }),
+    ended_at: /*#__PURE__*/ oneOf([
+      /*#__PURE__*/ Type.String({
+        format: 'date-time',
+        description: '工具实际收敛的 UTC 时间，不早于 started_at；running 时为空，终态必有时间。',
+      }),
+      /*#__PURE__*/ Type.Null({}),
+    ]),
+    is_demo: /*#__PURE__*/ Type.Boolean({
+      description: '是否来自合成演示资源；为 true 时界面与回答保留演示标识。',
+    }),
+    display_label: /*#__PURE__*/ Type.String({
+      minLength: 1,
+      maxLength: 160,
+      description: '可信资源提供的公开数据来源或演示标识，不含文件路径。',
+    }),
+    input_summary: /*#__PURE__*/ Type.String({
+      maxLength: 500,
+      description: '宿主审核后的安全输入摘要，最多 500 个 Unicode 码点；可为空，不透传敏感参数。',
+    }),
+    result_summary: /*#__PURE__*/ oneOf([
+      /*#__PURE__*/ Type.String({
+        minLength: 1,
+        maxLength: 1000,
+        description: '成功结果的受限安全摘要；空结果也明确表述，非成功时为空。',
+      }),
+      /*#__PURE__*/ Type.Null({}),
+    ]),
+    result_ref: /*#__PURE__*/ oneOf([UUIDSchema, /*#__PURE__*/ Type.Null({})], {
+      description:
+        '不透明结果 UUID，关联内部保留的原生结果；不是 URL、文件路径、业务回执或最终交付 ID；仅成功时非空。',
+    }),
+    error: /*#__PURE__*/ oneOf([ToolExecutionErrorSchema, /*#__PURE__*/ Type.Null({})]),
+  },
+  {
+    description:
+      'W4 本轮新增独立工具过程投影，不属于 OperationSummary，不证明业务写入或正式核验。内部保留原生记录关联，公开仅本白名单。running 的 ended_at/result_summary/result_ref/error 为空；succeeded 的前三者非空且 error 为空；failed/cancelled 的 ended_at/error 非空且结果为空。',
+    additionalProperties: false,
+    examples: [
+      {
+        id: 'd0000000-0000-4000-8000-000000000001',
+        conversation_id: '10000000-0000-4000-8000-000000000001',
+        task_id: '30000000-0000-4000-8000-000000000001',
+        attempt_id: '40000000-0000-4000-8000-000000000002',
+        model_request_id: 'e0000000-0000-4000-8000-000000000001',
+        tool_call_id: 'call_example_1',
+        tool_name: 'readonly_example',
+        status: 'succeeded',
+        row_version: '2',
+        started_at: '2026-10-22T08:02:00Z',
+        ended_at: '2026-10-22T08:02:01Z',
+        is_demo: true,
+        display_label: '合成演示数据',
+        input_summary: '查询固定演示资源',
+        result_summary: '演示数据：找到 2 条合成记录，仅供演示建议。',
+        result_ref: 'f0000000-0000-4000-8000-000000000001',
+        error: null,
+      },
+    ],
+  },
+);
+export type ToolExecutionSummary = Static<typeof ToolExecutionSummarySchema>;
+
 export const MessageHistoryDataSchema = /*#__PURE__*/ Type.Object(
   {
     messages: /*#__PURE__*/ Type.Array(MessageViewSchema),
@@ -1231,11 +1359,17 @@ export const MessageHistoryDataSchema = /*#__PURE__*/ Type.Object(
     operations: /*#__PURE__*/ Type.Array(OperationSummarySchema),
     page: MessagePageSchema,
     read_cursor: ReadCursorSchema,
+    tool_executions: /*#__PURE__*/ Type.Optional(
+      /*#__PURE__*/ Type.Array(ToolExecutionSummarySchema, {
+        description:
+          '本次读取覆盖任务的完整工具投影，按 ID 去重。旧冻结投影可省略，新运行始终返回数组；空数组为没有调用；读取不再次执行。',
+      }),
+    ),
   },
   {
     additionalProperties: false,
     description:
-      '消息成员固定在 upper 上界及 before 边界内；消息终态与输入消费是本次读取的当前事实，不是上界 H 时刻的历史版本。',
+      '消息成员固定在 upper 上界及 before 边界内；消息终态与输入消费是本次读取的当前事实，不是上界 H 时刻的历史版本。 W4 新增工具过程：覆盖本页消息及结果 task_id 的全部工具记录；历史读取不推进可靠游标。',
   },
 );
 export type MessageHistoryData = Static<typeof MessageHistoryDataSchema>;
@@ -1397,6 +1531,71 @@ export const TaskCompletedFrameSchema = /*#__PURE__*/ Type.Object(
 );
 export type TaskCompletedFrame = Static<typeof TaskCompletedFrameSchema>;
 
+export const ToolUpdatedPayloadSchema = /*#__PURE__*/ Type.Object(
+  { tool_execution: ToolExecutionSummarySchema },
+  {
+    description: '工具调用完整安全投影；按 id/row_version 收敛，不能以事件数量推算预算。',
+    additionalProperties: false,
+  },
+);
+export type ToolUpdatedPayload = Static<typeof ToolUpdatedPayloadSchema>;
+
+export const ToolUpdatedFrameSchema = /*#__PURE__*/ Type.Object(
+  {
+    schema_version: /*#__PURE__*/ Type.Literal(1),
+    frame_kind: /*#__PURE__*/ Type.Literal('product'),
+    event_id: UUIDSchema,
+    conversation_id: UUIDSchema,
+    stream_id: UUIDSchema,
+    event_seq: PositiveBigIntSchema,
+    event_type: /*#__PURE__*/ Type.Literal('tool.updated', {
+      description: '可靠工具过程更新事件。',
+    }),
+    occurred_at: /*#__PURE__*/ Type.String({ format: 'date-time' }),
+    activity: ActivitySchema,
+    payload: ToolUpdatedPayloadSchema,
+  },
+  {
+    additionalProperties: false,
+    description: 'W4 新增可靠工具过程事件，载荷为冻结完整投影，与任务和文字使用同一可靠事件序号。',
+    examples: [
+      {
+        schema_version: 1,
+        frame_kind: 'product',
+        event_id: 'c0000000-0000-4000-8000-000000000006',
+        conversation_id: '10000000-0000-4000-8000-000000000001',
+        stream_id: 'a0000000-0000-4000-8000-000000000001',
+        event_seq: '13',
+        event_type: 'tool.updated',
+        occurred_at: '2026-10-22T08:02:01Z',
+        activity: { last_activity_at: '2026-10-22T08:02:00Z', last_message_seq: '2' },
+        payload: {
+          tool_execution: {
+            id: 'd0000000-0000-4000-8000-000000000001',
+            conversation_id: '10000000-0000-4000-8000-000000000001',
+            task_id: '30000000-0000-4000-8000-000000000001',
+            attempt_id: '40000000-0000-4000-8000-000000000002',
+            model_request_id: 'e0000000-0000-4000-8000-000000000001',
+            tool_call_id: 'call_example_1',
+            tool_name: 'readonly_example',
+            status: 'succeeded',
+            row_version: '2',
+            started_at: '2026-10-22T08:02:00Z',
+            ended_at: '2026-10-22T08:02:01Z',
+            is_demo: true,
+            display_label: '合成演示数据',
+            input_summary: '查询固定演示资源',
+            result_summary: '演示数据：找到 2 条合成记录，仅供演示建议。',
+            result_ref: 'f0000000-0000-4000-8000-000000000001',
+            error: null,
+          },
+        },
+      },
+    ],
+  },
+);
+export type ToolUpdatedFrame = Static<typeof ToolUpdatedFrameSchema>;
+
 export const ProductFrameSchema = /*#__PURE__*/ oneOf(
   [
     ConversationUpdatedFrameSchema,
@@ -1406,6 +1605,7 @@ export const ProductFrameSchema = /*#__PURE__*/ oneOf(
     MessageUpdatedFrameSchema,
     InputUpdatedFrameSchema,
     OperationUpdatedFrameSchema,
+    ToolUpdatedFrameSchema,
   ],
   {
     discriminator: {
@@ -1418,10 +1618,11 @@ export const ProductFrameSchema = /*#__PURE__*/ oneOf(
         'message.updated': '#/components/schemas/MessageUpdatedFrame',
         'input.updated': '#/components/schemas/InputUpdatedFrame',
         'operation.updated': '#/components/schemas/OperationUpdatedFrame',
+        'tool.updated': '#/components/schemas/ToolUpdatedFrame',
       },
     },
     description:
-      'event_seq 语义上大于零。完整冻结的历史产品投影，不能用发送时当前库记录冒充。SSE event: product；id: <stream_id>:<event_seq>。',
+      'event_seq 语义上大于零。完整冻结的历史产品投影，不能用发送时当前库记录冒充。SSE event: product；id: <stream_id>:<event_seq>。 W4 新增 tool.updated；未知事件不得忽略或跳号，严格旧客户端须配套升级。',
     'x-sse-event-name': 'product',
     'x-sse-id-format': '{stream_id}:{event_seq}',
     examples: [
@@ -1453,6 +1654,38 @@ export const ProductFrameSchema = /*#__PURE__*/ oneOf(
             updated_at: '2026-10-22T08:02:00Z',
           },
           input_receipt: null,
+        },
+      },
+      {
+        schema_version: 1,
+        frame_kind: 'product',
+        event_id: 'c0000000-0000-4000-8000-000000000006',
+        conversation_id: '10000000-0000-4000-8000-000000000001',
+        stream_id: 'a0000000-0000-4000-8000-000000000001',
+        event_seq: '13',
+        event_type: 'tool.updated',
+        occurred_at: '2026-10-22T08:02:01Z',
+        activity: { last_activity_at: '2026-10-22T08:02:00Z', last_message_seq: '2' },
+        payload: {
+          tool_execution: {
+            id: 'd0000000-0000-4000-8000-000000000001',
+            conversation_id: '10000000-0000-4000-8000-000000000001',
+            task_id: '30000000-0000-4000-8000-000000000001',
+            attempt_id: '40000000-0000-4000-8000-000000000002',
+            model_request_id: 'e0000000-0000-4000-8000-000000000001',
+            tool_call_id: 'call_example_1',
+            tool_name: 'readonly_example',
+            status: 'succeeded',
+            row_version: '2',
+            started_at: '2026-10-22T08:02:00Z',
+            ended_at: '2026-10-22T08:02:01Z',
+            is_demo: true,
+            display_label: '合成演示数据',
+            input_summary: '查询固定演示资源',
+            result_summary: '演示数据：找到 2 条合成记录，仅供演示建议。',
+            result_ref: 'f0000000-0000-4000-8000-000000000001',
+            error: null,
+          },
         },
       },
     ],
@@ -1589,8 +1822,14 @@ export const ResultDetailDataSchema = /*#__PURE__*/ Type.Object(
     result: ResultViewSchema,
     operations: /*#__PURE__*/ Type.Array(OperationSummarySchema),
     read_cursor: ReadCursorSchema,
+    tool_executions: /*#__PURE__*/ Type.Optional(
+      /*#__PURE__*/ Type.Array(ToolExecutionSummarySchema, {
+        description:
+          '本次读取覆盖任务的完整工具投影，按 ID 去重。旧冻结投影可省略，新运行始终返回数组；空数组为没有调用；读取不再次执行。',
+      }),
+    ),
   },
-  { additionalProperties: false },
+  { additionalProperties: false, description: ' W4 新增工具过程：覆盖结果所属任务全部工具记录。' },
 );
 export type ResultDetailData = Static<typeof ResultDetailDataSchema>;
 
@@ -1617,11 +1856,17 @@ export const SnapshotDataSchema = /*#__PURE__*/ Type.Object(
     page: MessagePageSchema,
     read_cursor: ReadCursorSchema,
     event_pruned_through_seq: NonNegativeBigIntSchema,
+    tool_executions: /*#__PURE__*/ Type.Optional(
+      /*#__PURE__*/ Type.Array(ToolExecutionSummarySchema, {
+        description:
+          '本次读取覆盖任务的完整工具投影，按 ID 去重。旧冻结投影可省略，新运行始终返回数组；空数组为没有调用；读取不再次执行。',
+      }),
+    ),
   },
   {
     additionalProperties: false,
     description:
-      '单次 REPEATABLE READ 一致快照：尾页外所有 in_progress 消息固定补回；input_receipts 覆盖选中用户消息及 focus 全部 pending；results 覆盖相关消息和 focus；operations 包含 focus 及本次 results 所属所有 task 的整条动作版本链，按 operation ID 去重。',
+      '单次 REPEATABLE READ 一致快照：尾页外所有 in_progress 消息固定补回；input_receipts 覆盖选中用户消息及 focus 全部 pending；results 覆盖相关消息和 focus；operations 包含 focus 及本次 results 所属所有 task 的整条动作版本链，按 operation ID 去重。 W4 新增工具过程：覆盖 focus、尾页、pinned_messages 和 results 关联任务的全部工具记录，与水位 H 原子安装后订阅。',
   },
 );
 export type SnapshotData = Static<typeof SnapshotDataSchema>;
@@ -1643,8 +1888,17 @@ export const TaskDetailDataSchema = /*#__PURE__*/ Type.Object(
     operations: /*#__PURE__*/ Type.Array(OperationSummarySchema),
     result: /*#__PURE__*/ oneOf([ResultViewSchema, /*#__PURE__*/ Type.Null({})]),
     read_cursor: ReadCursorSchema,
+    tool_executions: /*#__PURE__*/ Type.Optional(
+      /*#__PURE__*/ Type.Array(ToolExecutionSummarySchema, {
+        description:
+          '本次读取覆盖任务的完整工具投影，按 ID 去重。旧冻结投影可省略，新运行始终返回数组；空数组为没有调用；读取不再次执行。',
+      }),
+    ),
   },
-  { additionalProperties: false },
+  {
+    additionalProperties: false,
+    description: ' W4 新增工具过程：覆盖指定任务全部尝试的工具记录。',
+  },
 );
 export type TaskDetailData = Static<typeof TaskDetailDataSchema>;
 
@@ -1753,6 +2007,10 @@ export const agentContractSchemas = {
   TaskUpdatedPayload: TaskUpdatedPayloadSchema,
   TaskView: TaskViewSchema,
   TextBlock: TextBlockSchema,
+  ToolExecutionError: ToolExecutionErrorSchema,
+  ToolExecutionSummary: ToolExecutionSummarySchema,
+  ToolUpdatedFrame: ToolUpdatedFrameSchema,
+  ToolUpdatedPayload: ToolUpdatedPayloadSchema,
   UnconfirmedError: UnconfirmedErrorSchema,
   UnconfirmedResponse: UnconfirmedResponseSchema,
   UserInput: UserInputSchema,
@@ -1773,8 +2031,8 @@ export const agentContractSources = [
   },
   {
     file: '22-reads-events.openapi.json',
-    designVersion: '1.1.0-design',
+    designVersion: '1.2.0-w4-design',
     openapi: '3.1.1',
-    sha256: '33bccd277ca3999a7420a0e9eb4ab56309b9e8241ac7bd55e13809009bd31702',
+    sha256: '48c13a0f325c4141d7e2dbb077463ccbba66d38fcde62b1ded5ebd2af41d54cc',
   },
 ] as const;

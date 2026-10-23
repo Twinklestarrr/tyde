@@ -3,6 +3,10 @@ import type { FastifyInstance, FastifySchema } from 'fastify';
 
 type Json = Record<string, unknown>;
 const labels: Record<string, string> = {
+  tool_execution: '工具调用的完整安全投影；不属于业务操作或正式核验',
+  result_summary: '工具成功结果的安全摘要；未成功时为 null',
+  result_ref: '工具原生结果的不透明 UUID 引用；未成功时为 null，不是 URL 或文件路径',
+  tool_executions: '本次读取覆盖任务的全部工具安全投影；新运行始终返回数组，旧冻结数据可省略',
   schema_version: '公开载荷版本，固定为 1',
   request_id: '本次 HTTP 请求的 UUID 关联号',
   request_key: '原请求幂等 UUID，同一意图重发必须保持原值',
@@ -247,7 +251,7 @@ const values: Record<string, string> = {
   answer: '最终文字回答',
   prepared: '业务操作已准备',
   processing: '业务操作处理中',
-  succeeded: '业务操作成功',
+  succeeded: '执行已成功',
   failed_no_effect: '业务确认失败且无效果',
   unknown: '业务效果未知',
   conflicted: '业务事实冲突',
@@ -275,6 +279,12 @@ const values: Record<string, string> = {
   'message.updated': '完整消息变化',
   'input.updated': '输入消费变化',
   'operation.updated': '业务操作变化',
+  'tool.updated': '工具过程变化',
+  cancelled: '工具已取消',
+  invalid_arguments: '工具参数校验失败',
+  tool_failed: '工具执行失败',
+  budget_exceeded: '预算关闭导致工具取消',
+  timeout: '工具执行超时',
   stream_changed: '事件流变更',
   cursor_expired: '游标已裁剪',
   cursor_ahead: '游标超过服务端水位',
@@ -427,7 +437,7 @@ export function contractRouteSchema(path: string, method: string): FastifySchema
   const operation = operations[path]![method]!;
   const schema: FastifySchema = {
     summary: operation.summary,
-    description: `${operation.summary}。本轮为开发内存模式：仅同进程存活期间保留会话、冻结裁决和事件；重启失效。只开放 business_query 的 start_task 和 stop_attempt，其余命令与草案未实现。所有资源通过 Bearer 身份验证及私有归属检查。创建空会话 POST 非幂等，禁止自动重试；命令 POST 必须以原 key、正文、context、目标和版本重试，支持按 key 只读核实。查询不修改任务。SSE 必须先应用 snapshot 和水位，再订阅其后的事件；Last-Event-ID 不受理，超期或缺口须重新取快照。停止受理与实际停止分别确认。关闭订阅、刷新或重连均不启动或停止执行。`,
+    description: `${operation.summary}。本轮为开发内存模式：仅同进程存活期间保留会话、冻结裁决和事件；重启失效。只开放 business_query 的 start_task 和 stop_attempt，其余命令与草案未实现。所有资源通过 Bearer 身份验证及私有归属检查。创建空会话 POST 非幂等，禁止自动重试；命令 POST 必须以原 key、正文、context、目标和版本重试，支持按 key 只读核实。查询不修改任务。W4 工具过程使用独立 tool_executions/tool.updated 安全投影，不生成业务 Operation；默认入口没有演示工具，演示须由本机宿主显式注入。未知可靠事件失败关闭，旧严格客户端须配套升级。SSE 必须先应用 snapshot 和水位，再订阅其后的事件；Last-Event-ID 不受理，超期或缺口须重新取快照。停止受理与实际停止分别确认。关闭订阅、刷新或重连均不启动或停止执行。`,
     operationId: operation.operationId,
     tags: ['Agent'],
     security: [{ AgentBearer: [] }],

@@ -228,6 +228,15 @@ test('Swagger 复用源契约，所有嵌套字段有具体中文含义且示例
     docs.components.schemas.Decision.properties.task_status_at_decision.description,
     /原命令.*裁决/,
   );
+  assert.match(docs.components.schemas.ToolExecutionSummary.description, /W4.*独立/);
+  assert.match(docs.components.schemas.SnapshotData.properties.tool_executions.description, /工具/);
+  assert.match(
+    docs.components.schemas.ToolExecutionError.properties.code.description,
+    /timeout=工具/,
+  );
+  const toolExample = docs.components.schemas.ToolUpdatedFrame.examples[0];
+  assert.ok(validateAgentContract('ProductFrame', toolExample));
+  assert.equal(toolExample.event_type, 'tool.updated');
   const supported = new Set(['start_task', 'stop_attempt']);
   const checkCurrentExample = (value: unknown): void => {
     if (!value || typeof value !== 'object') return;

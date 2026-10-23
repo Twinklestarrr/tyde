@@ -103,7 +103,7 @@ const product = (event_type: string, payload: unknown) => ({
 });
 
 test('公开契约包含全部去重定义，并记录两份原始设计快照的真实摘要', async () => {
-  assert.equal(Object.keys(agentContractSchemas).length, 99);
+  assert.equal(Object.keys(agentContractSchemas).length, 103);
   for (const source of agentContractSources) {
     const bytes = await readFile(
       new URL(
@@ -114,7 +114,10 @@ test('公开契约包含全部去重定义，并记录两份原始设计快照�
     assert.equal(createHash('sha256').update(bytes).digest('hex'), source.sha256);
     const document = JSON.parse(bytes.toString('utf8'));
     assert.equal(source.designVersion, document.info.version);
-    assert.equal(source.designVersion, '1.1.0-design');
+    assert.equal(
+      source.designVersion,
+      source.file === '21-commands.openapi.json' ? '1.1.0-design' : '1.2.0-w4-design',
+    );
     for (const path of Object.keys(document.paths)) assert.ok(path in agentContractOperations);
     for (const name of Object.keys(document.components.schemas)) {
       assert.ok(
@@ -251,7 +254,7 @@ test('业务上下文同时检查日期依赖、真实日历、起止顺序、�
   assert.equal(validateAgentContract('PositiveBigInt', '9223372036854775807'), true);
 });
 
-test('七种可靠产品事件有独立载荷，完成整组与消息更新收紧字段约束', () => {
+test('W3 七种可靠事件保留原载荷，完成整组与消息更新收紧字段约束', () => {
   const completed = {
     task: {
       ...task,
@@ -369,5 +372,134 @@ test('所有原设计公开示例均可校验；控制和临时帧不能携带�
         );
       }
     }
+  }
+});
+
+test('W4 工具过程安全契约独立于业务 Operation，严格校验生命周期及私有字段', () => {
+  const tool = {
+    id: id('b'),
+    conversation_id: id('4'),
+    task_id: id('2'),
+    attempt_id: id('3'),
+    model_request_id: id('c'),
+    tool_call_id: 'call_test_1',
+    tool_name: 'readonly_test',
+    status: 'running',
+    row_version: '1',
+    started_at: now,
+    ended_at: null,
+    is_demo: true,
+    display_label: '合成测试数据',
+    input_summary: '受限查询摘要',
+    result_summary: null,
+    result_ref: null,
+    error: null,
+  };
+  assert.ok(validateAgentContract('ToolExecutionSummary', tool));
+  assert.ok(
+    validateAgentContract('ProductFrame', product('tool.updated', { tool_execution: tool })),
+  );
+  assert.equal(validateAgentContract('OperationSummary', tool), false);
+  assert.equal(
+    validateAgentContract('ProductFrame', product('tool.updated', { operation: tool })),
+    false,
+  );
+  const success = {
+    ...tool,
+    status: 'succeeded',
+    ended_at: now,
+    row_version: '2',
+    result_summary: '演示数据：空查询结果。',
+    result_ref: id('d'),
+  };
+  assert.ok(validateAgentContract('ToolExecutionSummary', success));
+  for (const code of [
+    'invalid_arguments',
+    'tool_failed',
+    'timeout',
+    'cancelled',
+    'budget_exceeded',
+  ]) {
+    assert.ok(
+      validateAgentContract('ToolExecutionSummary', {
+        ...tool,
+        status: code === 'cancelled' || code === 'budget_exceeded' ? 'cancelled' : 'failed',
+        ended_at: now,
+        error: { code, message: '安全失败摘要' },
+      }),
+      code,
+    );
+  }
+  for (const extension of [
+    { status: 'succeeded' },
+    { ended_at: now },
+    { result_ref: id('d') },
+    { error: { code: 'tool_failed', message: '错误' } },
+    { raw_arguments: { secret: 'private' } },
+    { native_entry: { content: 'private' } },
+    { tool_call_id: '' },
+    { model_request_id: 'x'.repeat(201) },
+    { result_summary: 'x'.repeat(1001) },
+  ])
+    assert.equal(validateAgentContract('ToolExecutionSummary', { ...tool, ...extension }), false);
+  for (const extension of [
+    { result_ref: 'https://example.invalid/result' },
+    { ended_at: '2026-10-21T08:00:00Z' },
+    { error: { code: 'tool_failed', message: '错误' } },
+    { result_summary: null },
+    {
+      status: 'cancelled',
+      result_summary: null,
+      result_ref: null,
+      error: { code: 'tool_failed', message: '错误' },
+    },
+    {
+      status: 'failed',
+      result_summary: null,
+      result_ref: null,
+      error: { code: 'cancelled', message: '错误' },
+    },
+  ])
+    assert.equal(
+      validateAgentContract('ToolExecutionSummary', { ...success, ...extension }),
+      false,
+    );
+  assert.equal(
+    validateAgentContract('ProductFrame', product('tool.unknown', { tool_execution: tool })),
+    false,
+  );
+});
+
+test('W4 可选工具数组兼容旧冻结读取投影，新增字段与示例来自唯一源', async () => {
+  const source = JSON.parse(
+    await readFile(
+      new URL(
+        '../../../packages/shared/src/agent/contracts/sources/22-reads-events.openapi.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  );
+  for (const [suffix, name] of [
+    ['/snapshot', 'SnapshotResponse'],
+    ['/messages', 'MessageHistoryResponse'],
+    ['/tasks/{task_id}', 'TaskDetailResponse'],
+    ['/results/{result_id}', 'ResultDetailResponse'],
+  ] as const) {
+    const path = Object.keys(source.paths).find((key) => key.endsWith(suffix))!;
+    const example =
+      source.paths[path].get.responses['200'].content['application/json'].examples.success.value;
+    assert.ok(validateAgentContract(name, example), name);
+    assert.equal(example.data.tool_executions.length, 1);
+    const legacy = structuredClone(example);
+    delete legacy.data.tool_executions;
+    assert.ok(validateAgentContract(name, legacy), name);
+    assert.equal(
+      validateAgentContract(name, {
+        ...example,
+        data: { ...example.data, tool_executions: null },
+      }),
+      false,
+    );
   }
 });

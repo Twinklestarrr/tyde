@@ -153,6 +153,22 @@ function semanticCheck(schema: JsonSchema, value: unknown, name?: string): boole
       )
         return false;
     }
+    if (name === 'ToolExecutionSummary') {
+      const running = object.status === 'running';
+      const succeeded = object.status === 'succeeded';
+      const code = (object.error as { code?: string } | null)?.code;
+      const cancellation = code === 'cancelled' || code === 'budget_exceeded';
+      if (
+        running !== (object.ended_at === null) ||
+        succeeded !== (object.result_summary !== null) ||
+        succeeded !== (object.result_ref !== null) ||
+        (running || succeeded) !== (object.error === null) ||
+        (!running && !succeeded && (object.status === 'cancelled') !== cancellation) ||
+        (object.ended_at !== null &&
+          Date.parse(String(object.ended_at)) < Date.parse(String(object.started_at)))
+      )
+        return false;
+    }
     if (name === 'DateRange' && String(object.end) < String(object.start)) return false;
     if (
       name === 'BusinessContext' &&

@@ -3,8 +3,8 @@
   "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
   "info": {
     "title": "Agent 查询与 SSE 接口设计",
-    "version": "1.1.0-design",
-    "description": "文档级查询、空会话创建、只读命令核实与SSE帧规范；本文件不包含服务实现。"
+    "version": "1.2.0-w4-design",
+    "description": "文档级查询、空会话创建、只读命令核实与SSE帧规范；本文件不包含服务实现。 2026-10-22 W4 本轮新增独立工具投影及 tool.updated。公开 schema_version=1 不变，严格客户端需配套升级。"
   },
   "x-design-status": "design_only",
   "x-semantic-validation": [
@@ -1192,7 +1192,28 @@
                           "stream_id": "a0000000-0000-4000-8000-000000000001",
                           "event_seq": "11"
                         },
-                        "event_pruned_through_seq": "0"
+                        "event_pruned_through_seq": "0",
+                        "tool_executions": [
+                          {
+                            "id": "d0000000-0000-4000-8000-000000000001",
+                            "conversation_id": "10000000-0000-4000-8000-000000000001",
+                            "task_id": "30000000-0000-4000-8000-000000000001",
+                            "attempt_id": "40000000-0000-4000-8000-000000000002",
+                            "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                            "tool_call_id": "call_example_1",
+                            "tool_name": "readonly_example",
+                            "status": "succeeded",
+                            "row_version": "2",
+                            "started_at": "2026-10-22T08:02:00Z",
+                            "ended_at": "2026-10-22T08:02:01Z",
+                            "is_demo": true,
+                            "display_label": "合成演示数据",
+                            "input_summary": "查询固定演示资源",
+                            "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                            "result_ref": "f0000000-0000-4000-8000-000000000001",
+                            "error": null
+                          }
+                        ]
                       },
                       "error": null
                     }
@@ -1518,7 +1539,28 @@
                         "read_cursor": {
                           "stream_id": "a0000000-0000-4000-8000-000000000001",
                           "event_seq": "11"
-                        }
+                        },
+                        "tool_executions": [
+                          {
+                            "id": "d0000000-0000-4000-8000-000000000001",
+                            "conversation_id": "10000000-0000-4000-8000-000000000001",
+                            "task_id": "30000000-0000-4000-8000-000000000001",
+                            "attempt_id": "40000000-0000-4000-8000-000000000002",
+                            "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                            "tool_call_id": "call_example_1",
+                            "tool_name": "readonly_example",
+                            "status": "succeeded",
+                            "row_version": "2",
+                            "started_at": "2026-10-22T08:02:00Z",
+                            "ended_at": "2026-10-22T08:02:01Z",
+                            "is_demo": true,
+                            "display_label": "合成演示数据",
+                            "input_summary": "查询固定演示资源",
+                            "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                            "result_ref": "f0000000-0000-4000-8000-000000000001",
+                            "error": null
+                          }
+                        ]
                       },
                       "error": null
                     }
@@ -1582,7 +1624,28 @@
                         "read_cursor": {
                           "stream_id": "a0000000-0000-4000-8000-000000000001",
                           "event_seq": "11"
-                        }
+                        },
+                        "tool_executions": [
+                          {
+                            "id": "d0000000-0000-4000-8000-000000000001",
+                            "conversation_id": "10000000-0000-4000-8000-000000000001",
+                            "task_id": "30000000-0000-4000-8000-000000000001",
+                            "attempt_id": "40000000-0000-4000-8000-000000000002",
+                            "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                            "tool_call_id": "call_example_1",
+                            "tool_name": "readonly_example",
+                            "status": "succeeded",
+                            "row_version": "2",
+                            "started_at": "2026-10-22T08:02:00Z",
+                            "ended_at": "2026-10-22T08:02:01Z",
+                            "is_demo": true,
+                            "display_label": "合成演示数据",
+                            "input_summary": "查询固定演示资源",
+                            "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                            "result_ref": "f0000000-0000-4000-8000-000000000001",
+                            "error": null
+                          }
+                        ]
                       },
                       "error": null
                     }
@@ -1646,7 +1709,28 @@
                         "read_cursor": {
                           "stream_id": "a0000000-0000-4000-8000-000000000001",
                           "event_seq": "11"
-                        }
+                        },
+                        "tool_executions": [
+                          {
+                            "id": "d0000000-0000-4000-8000-000000000001",
+                            "conversation_id": "10000000-0000-4000-8000-000000000001",
+                            "task_id": "30000000-0000-4000-8000-000000000001",
+                            "attempt_id": "40000000-0000-4000-8000-000000000002",
+                            "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                            "tool_call_id": "call_example_1",
+                            "tool_name": "readonly_example",
+                            "status": "succeeded",
+                            "row_version": "2",
+                            "started_at": "2026-10-22T08:02:00Z",
+                            "ended_at": "2026-10-22T08:02:01Z",
+                            "is_demo": true,
+                            "display_label": "合成演示数据",
+                            "input_summary": "查询固定演示资源",
+                            "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                            "result_ref": "f0000000-0000-4000-8000-000000000001",
+                            "error": null
+                          }
+                        ]
                       },
                       "error": null
                     }
@@ -1710,7 +1794,28 @@
                         "read_cursor": {
                           "stream_id": "a0000000-0000-4000-8000-000000000001",
                           "event_seq": "11"
-                        }
+                        },
+                        "tool_executions": [
+                          {
+                            "id": "d0000000-0000-4000-8000-000000000001",
+                            "conversation_id": "10000000-0000-4000-8000-000000000001",
+                            "task_id": "30000000-0000-4000-8000-000000000001",
+                            "attempt_id": "40000000-0000-4000-8000-000000000002",
+                            "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                            "tool_call_id": "call_example_1",
+                            "tool_name": "readonly_example",
+                            "status": "succeeded",
+                            "row_version": "2",
+                            "started_at": "2026-10-22T08:02:00Z",
+                            "ended_at": "2026-10-22T08:02:01Z",
+                            "is_demo": true,
+                            "display_label": "合成演示数据",
+                            "input_summary": "查询固定演示资源",
+                            "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                            "result_ref": "f0000000-0000-4000-8000-000000000001",
+                            "error": null
+                          }
+                        ]
                       },
                       "error": null
                     }
@@ -2088,7 +2193,28 @@
                         "read_cursor": {
                           "stream_id": "a0000000-0000-4000-8000-000000000001",
                           "event_seq": "11"
-                        }
+                        },
+                        "tool_executions": [
+                          {
+                            "id": "d0000000-0000-4000-8000-000000000001",
+                            "conversation_id": "10000000-0000-4000-8000-000000000001",
+                            "task_id": "30000000-0000-4000-8000-000000000001",
+                            "attempt_id": "40000000-0000-4000-8000-000000000002",
+                            "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                            "tool_call_id": "call_example_1",
+                            "tool_name": "readonly_example",
+                            "status": "succeeded",
+                            "row_version": "2",
+                            "started_at": "2026-10-22T08:02:00Z",
+                            "ended_at": "2026-10-22T08:02:01Z",
+                            "is_demo": true,
+                            "display_label": "合成演示数据",
+                            "input_summary": "查询固定演示资源",
+                            "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                            "result_ref": "f0000000-0000-4000-8000-000000000001",
+                            "error": null
+                          }
+                        ]
                       },
                       "error": null
                     }
@@ -2452,7 +2578,28 @@
                         "read_cursor": {
                           "stream_id": "a0000000-0000-4000-8000-000000000001",
                           "event_seq": "40"
-                        }
+                        },
+                        "tool_executions": [
+                          {
+                            "id": "d0000000-0000-4000-8000-000000000001",
+                            "conversation_id": "10000000-0000-4000-8000-000000000001",
+                            "task_id": "30000000-0000-4000-8000-000000000001",
+                            "attempt_id": "40000000-0000-4000-8000-000000000002",
+                            "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                            "tool_call_id": "call_example_1",
+                            "tool_name": "readonly_example",
+                            "status": "succeeded",
+                            "row_version": "2",
+                            "started_at": "2026-10-22T08:02:00Z",
+                            "ended_at": "2026-10-22T08:02:01Z",
+                            "is_demo": true,
+                            "display_label": "合成演示数据",
+                            "input_summary": "查询固定演示资源",
+                            "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                            "result_ref": "f0000000-0000-4000-8000-000000000001",
+                            "error": null
+                          }
+                        ]
                       },
                       "error": null
                     }
@@ -4983,6 +5130,13 @@
           },
           "event_pruned_through_seq": {
             "$ref": "#/components/schemas/NonNegativeBigInt"
+          },
+          "tool_executions": {
+            "type": "array",
+            "description": "本次读取覆盖任务的完整工具投影，按 ID 去重。旧冻结投影可省略，新运行始终返回数组；空数组为没有调用；读取不再次执行。",
+            "items": {
+              "$ref": "#/components/schemas/ToolExecutionSummary"
+            }
           }
         },
         "required": [
@@ -4998,7 +5152,7 @@
           "event_pruned_through_seq"
         ],
         "additionalProperties": false,
-        "description": "单次 REPEATABLE READ 一致快照：尾页外所有 in_progress 消息固定补回；input_receipts 覆盖选中用户消息及 focus 全部 pending；results 覆盖相关消息和 focus；operations 包含 focus 及本次 results 所属所有 task 的整条动作版本链，按 operation ID 去重。"
+        "description": "单次 REPEATABLE READ 一致快照：尾页外所有 in_progress 消息固定补回；input_receipts 覆盖选中用户消息及 focus 全部 pending；results 覆盖相关消息和 focus；operations 包含 focus 及本次 results 所属所有 task 的整条动作版本链，按 operation ID 去重。 W4 新增工具过程：覆盖 focus、尾页、pinned_messages 和 results 关联任务的全部工具记录，与水位 H 原子安装后订阅。"
       },
       "TaskDetailData": {
         "type": "object",
@@ -5024,6 +5178,13 @@
           },
           "read_cursor": {
             "$ref": "#/components/schemas/ReadCursor"
+          },
+          "tool_executions": {
+            "type": "array",
+            "description": "本次读取覆盖任务的完整工具投影，按 ID 去重。旧冻结投影可省略，新运行始终返回数组；空数组为没有调用；读取不再次执行。",
+            "items": {
+              "$ref": "#/components/schemas/ToolExecutionSummary"
+            }
           }
         },
         "required": [
@@ -5032,7 +5193,8 @@
           "result",
           "read_cursor"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": " W4 新增工具过程：覆盖指定任务全部尝试的工具记录。"
       },
       "MessageHistoryData": {
         "type": "object",
@@ -5066,6 +5228,13 @@
           },
           "read_cursor": {
             "$ref": "#/components/schemas/ReadCursor"
+          },
+          "tool_executions": {
+            "type": "array",
+            "description": "本次读取覆盖任务的完整工具投影，按 ID 去重。旧冻结投影可省略，新运行始终返回数组；空数组为没有调用；读取不再次执行。",
+            "items": {
+              "$ref": "#/components/schemas/ToolExecutionSummary"
+            }
           }
         },
         "required": [
@@ -5077,7 +5246,7 @@
           "read_cursor"
         ],
         "additionalProperties": false,
-        "description": "消息成员固定在 upper 上界及 before 边界内；消息终态与输入消费是本次读取的当前事实，不是上界 H 时刻的历史版本。"
+        "description": "消息成员固定在 upper 上界及 before 边界内；消息终态与输入消费是本次读取的当前事实，不是上界 H 时刻的历史版本。 W4 新增工具过程：覆盖本页消息及结果 task_id 的全部工具记录；历史读取不推进可靠游标。"
       },
       "ResultDetailData": {
         "type": "object",
@@ -5093,6 +5262,13 @@
           },
           "read_cursor": {
             "$ref": "#/components/schemas/ReadCursor"
+          },
+          "tool_executions": {
+            "type": "array",
+            "description": "本次读取覆盖任务的完整工具投影，按 ID 去重。旧冻结投影可省略，新运行始终返回数组；空数组为没有调用；读取不再次执行。",
+            "items": {
+              "$ref": "#/components/schemas/ToolExecutionSummary"
+            }
           }
         },
         "required": [
@@ -5100,7 +5276,8 @@
           "operations",
           "read_cursor"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": " W4 新增工具过程：覆盖结果所属任务全部工具记录。"
       },
       "Applied202Receipt": {
         "type": "object",
@@ -6095,6 +6272,9 @@
           },
           {
             "$ref": "#/components/schemas/OperationUpdatedFrame"
+          },
+          {
+            "$ref": "#/components/schemas/ToolUpdatedFrame"
           }
         ],
         "discriminator": {
@@ -6106,10 +6286,11 @@
             "message.created": "#/components/schemas/MessageCreatedFrame",
             "message.updated": "#/components/schemas/MessageUpdatedFrame",
             "input.updated": "#/components/schemas/InputUpdatedFrame",
-            "operation.updated": "#/components/schemas/OperationUpdatedFrame"
+            "operation.updated": "#/components/schemas/OperationUpdatedFrame",
+            "tool.updated": "#/components/schemas/ToolUpdatedFrame"
           }
         },
-        "description": "event_seq 语义上大于零。完整冻结的历史产品投影，不能用发送时当前库记录冒充。SSE event: product；id: <stream_id>:<event_seq>。",
+        "description": "event_seq 语义上大于零。完整冻结的历史产品投影，不能用发送时当前库记录冒充。SSE event: product；id: <stream_id>:<event_seq>。 W4 新增 tool.updated；未知事件不得忽略或跳号，严格旧客户端须配套升级。",
         "x-sse-event-name": "product",
         "x-sse-id-format": "{stream_id}:{event_seq}",
         "examples": [
@@ -6147,6 +6328,41 @@
                 "updated_at": "2026-10-22T08:02:00Z"
               },
               "input_receipt": null
+            }
+          },
+          {
+            "schema_version": 1,
+            "frame_kind": "product",
+            "event_id": "c0000000-0000-4000-8000-000000000006",
+            "conversation_id": "10000000-0000-4000-8000-000000000001",
+            "stream_id": "a0000000-0000-4000-8000-000000000001",
+            "event_seq": "13",
+            "event_type": "tool.updated",
+            "occurred_at": "2026-10-22T08:02:01Z",
+            "activity": {
+              "last_activity_at": "2026-10-22T08:02:00Z",
+              "last_message_seq": "2"
+            },
+            "payload": {
+              "tool_execution": {
+                "id": "d0000000-0000-4000-8000-000000000001",
+                "conversation_id": "10000000-0000-4000-8000-000000000001",
+                "task_id": "30000000-0000-4000-8000-000000000001",
+                "attempt_id": "40000000-0000-4000-8000-000000000002",
+                "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                "tool_call_id": "call_example_1",
+                "tool_name": "readonly_example",
+                "status": "succeeded",
+                "row_version": "2",
+                "started_at": "2026-10-22T08:02:00Z",
+                "ended_at": "2026-10-22T08:02:01Z",
+                "is_demo": true,
+                "display_label": "合成演示数据",
+                "input_summary": "查询固定演示资源",
+                "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                "result_ref": "f0000000-0000-4000-8000-000000000001",
+                "error": null
+              }
             }
           }
         ]
@@ -6477,6 +6693,294 @@
         ],
         "additionalProperties": false,
         "description": "受控A的当前预算投影，值来自固定execution_policy.attempt_limits及本A；队列deadline为空，开始后固定；kind/at同空或同非空，由语义校验。"
+      },
+      "ToolExecutionError": {
+        "type": "object",
+        "description": "W4 新增工具受控错误，不包含参数、堆栈、路径或原始回执，不表示业务操作效果。",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_arguments",
+              "tool_failed",
+              "cancelled",
+              "budget_exceeded",
+              "timeout"
+            ],
+            "description": "工具失败原因：invalid_arguments=参数失败；tool_failed=执行失败；cancelled=停止或资格撤销；budget_exceeded=预算取消；timeout=工具超时。"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "可展示的安全错误说明，最多 500 个 Unicode 码点。"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "ToolExecutionSummary": {
+        "type": "object",
+        "description": "W4 本轮新增独立工具过程投影，不属于 OperationSummary，不证明业务写入或正式核验。内部保留原生记录关联，公开仅本白名单。running 的 ended_at/result_summary/result_ref/error 为空；succeeded 的前三者非空且 error 为空；failed/cancelled 的 ended_at/error 非空且结果为空。",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "conversation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "task_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "attempt_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "model_request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "受控模型派发标识，宿主派发前建立并关联原生请求，不是 HTTP request_id。"
+          },
+          "tool_call_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Pi 原生工具调用标识，同一尝试内用于关联与去重，不授予再次执行权限。"
+          },
+          "tool_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "显式白名单中注册的真实工具名称。"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "description": "工具状态：running=执行中；succeeded=结果已接受；failed=参数或执行失败；cancelled=停止或预算取消。终态不得回到 running，迟到结果不得改写终态。"
+          },
+          "row_version": {
+            "$ref": "#/components/schemas/NonNegativeBigInt"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "本次工具调用被宿主接纳的 UTC 时间，包含参数失败及取消记录。"
+          },
+          "ended_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "工具实际收敛的 UTC 时间，不早于 started_at；running 时为空，终态必有时间。"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_demo": {
+            "type": "boolean",
+            "description": "是否来自合成演示资源；为 true 时界面与回答保留演示标识。"
+          },
+          "display_label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "可信资源提供的公开数据来源或演示标识，不含文件路径。"
+          },
+          "input_summary": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "宿主审核后的安全输入摘要，最多 500 个 Unicode 码点；可为空，不透传敏感参数。"
+          },
+          "result_summary": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000,
+                "description": "成功结果的受限安全摘要；空结果也明确表述，非成功时为空。"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result_ref": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "不透明结果 UUID，关联内部保留的原生结果；不是 URL、文件路径、业务回执或最终交付 ID；仅成功时非空。"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolExecutionError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "conversation_id",
+          "task_id",
+          "attempt_id",
+          "model_request_id",
+          "tool_call_id",
+          "tool_name",
+          "status",
+          "row_version",
+          "started_at",
+          "ended_at",
+          "is_demo",
+          "display_label",
+          "input_summary",
+          "result_summary",
+          "result_ref",
+          "error"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "id": "d0000000-0000-4000-8000-000000000001",
+            "conversation_id": "10000000-0000-4000-8000-000000000001",
+            "task_id": "30000000-0000-4000-8000-000000000001",
+            "attempt_id": "40000000-0000-4000-8000-000000000002",
+            "model_request_id": "e0000000-0000-4000-8000-000000000001",
+            "tool_call_id": "call_example_1",
+            "tool_name": "readonly_example",
+            "status": "succeeded",
+            "row_version": "2",
+            "started_at": "2026-10-22T08:02:00Z",
+            "ended_at": "2026-10-22T08:02:01Z",
+            "is_demo": true,
+            "display_label": "合成演示数据",
+            "input_summary": "查询固定演示资源",
+            "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+            "result_ref": "f0000000-0000-4000-8000-000000000001",
+            "error": null
+          }
+        ]
+      },
+      "ToolUpdatedPayload": {
+        "type": "object",
+        "description": "工具调用完整安全投影；按 id/row_version 收敛，不能以事件数量推算预算。",
+        "properties": {
+          "tool_execution": {
+            "$ref": "#/components/schemas/ToolExecutionSummary"
+          }
+        },
+        "required": [
+          "tool_execution"
+        ],
+        "additionalProperties": false
+      },
+      "ToolUpdatedFrame": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "frame_kind": {
+            "type": "string",
+            "const": "product"
+          },
+          "event_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "conversation_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "stream_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "event_seq": {
+            "$ref": "#/components/schemas/PositiveBigInt"
+          },
+          "event_type": {
+            "type": "string",
+            "const": "tool.updated",
+            "description": "可靠工具过程更新事件。"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "activity": {
+            "$ref": "#/components/schemas/Activity"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ToolUpdatedPayload"
+          }
+        },
+        "required": [
+          "schema_version",
+          "frame_kind",
+          "event_id",
+          "conversation_id",
+          "stream_id",
+          "event_seq",
+          "event_type",
+          "occurred_at",
+          "activity",
+          "payload"
+        ],
+        "additionalProperties": false,
+        "description": "W4 新增可靠工具过程事件，载荷为冻结完整投影，与任务和文字使用同一可靠事件序号。",
+        "examples": [
+          {
+            "schema_version": 1,
+            "frame_kind": "product",
+            "event_id": "c0000000-0000-4000-8000-000000000006",
+            "conversation_id": "10000000-0000-4000-8000-000000000001",
+            "stream_id": "a0000000-0000-4000-8000-000000000001",
+            "event_seq": "13",
+            "event_type": "tool.updated",
+            "occurred_at": "2026-10-22T08:02:01Z",
+            "activity": {
+              "last_activity_at": "2026-10-22T08:02:00Z",
+              "last_message_seq": "2"
+            },
+            "payload": {
+              "tool_execution": {
+                "id": "d0000000-0000-4000-8000-000000000001",
+                "conversation_id": "10000000-0000-4000-8000-000000000001",
+                "task_id": "30000000-0000-4000-8000-000000000001",
+                "attempt_id": "40000000-0000-4000-8000-000000000002",
+                "model_request_id": "e0000000-0000-4000-8000-000000000001",
+                "tool_call_id": "call_example_1",
+                "tool_name": "readonly_example",
+                "status": "succeeded",
+                "row_version": "2",
+                "started_at": "2026-10-22T08:02:00Z",
+                "ended_at": "2026-10-22T08:02:01Z",
+                "is_demo": true,
+                "display_label": "合成演示数据",
+                "input_summary": "查询固定演示资源",
+                "result_summary": "演示数据：找到 2 条合成记录，仅供演示建议。",
+                "result_ref": "f0000000-0000-4000-8000-000000000001",
+                "error": null
+              }
+            }
+          }
+        ]
       }
     }
   }
