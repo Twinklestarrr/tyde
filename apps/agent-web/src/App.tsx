@@ -140,7 +140,7 @@ function Workspace({
   const canStart = !task || task.status === 'completed';
   const connectionLabel = {
     idle: '选择或新建会话',
-    loading: '正在读取历史',
+    loading: view ? '正在同步会话' : '正在加载会话',
     connecting: '正在连接事件',
     connected: '实时连接',
     offline: '连接已断开',
@@ -336,7 +336,7 @@ function Workspace({
               <div className="setup-symbol" aria-hidden="true">
                 π
               </div>
-              <h2>{state.connection === 'loading' ? '正在恢复会话' : '从一个问题开始'}</h2>
+              <h2>{state.connection === 'loading' ? '正在加载会话' : '从一个问题开始'}</h2>
               <p>新建会话后自由输入，回答完成后可以继续追问。</p>
               <p className="mode-note">
                 停止、失败和完成会分别显示。切换会话或断开订阅只改变展示，任务仍由服务端管理。
@@ -407,7 +407,13 @@ function Workspace({
               </span>
               <button
                 className="stop-button"
-                disabled={budgetClosing || task.status === 'stopping' || Boolean(pending)}
+                disabled={
+                  budgetClosing ||
+                  task.status === 'stopping' ||
+                  Boolean(pending) ||
+                  state.connection === 'loading' ||
+                  state.connection === 'blocked'
+                }
                 onClick={() => void controller.stop()}
               >
                 {budgetClosing ? '正在收尾…' : task.status === 'stopping' ? '停止中…' : '停止生成'}

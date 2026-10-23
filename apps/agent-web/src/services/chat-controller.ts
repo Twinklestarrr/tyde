@@ -134,14 +134,36 @@ export class ChatController {
       if (this.confirmedStorageMode !== null && this.confirmedStorageMode !== storageMode) {
         this.reading.abort();
         this.generation += 1;
+        this.listGeneration += 1;
         this.cursor = null;
-        this.update({ conversations: [], selectedId: null, view: null, connection: 'idle' });
+        this.update({
+          conversations: [],
+          listCursor: null,
+          listLoading: false,
+          selectedId: null,
+          view: null,
+          connection: 'idle',
+        });
       }
       this.confirmedStorageMode = storageMode;
       this.update({ storageMode });
       return true;
     } catch (error) {
       if (this.disposed || generation !== this.metadataGeneration) return false;
+      if (error instanceof AgentApiError && [401, 403, 404].includes(error.status)) {
+        this.reading.abort();
+        this.generation += 1;
+        this.listGeneration += 1;
+        this.cursor = null;
+        this.pending.clear();
+        this.update({
+          view: null,
+          pending: null,
+          conversations: [],
+          listCursor: null,
+          listLoading: false,
+        });
+      }
       this.update({ storageMode: null, error: `存储模式尚未确认。${errorMessage(error)}` });
       return false;
     }
@@ -151,6 +173,7 @@ export class ChatController {
     if (this.confirmedStorageMode === null) return true;
     const expected = this.confirmedStorageMode;
     if (!(await this.refreshStorageMode())) {
+      this.cursor = null;
       this.update({ connection: 'blocked' });
       return false;
     }
@@ -229,9 +252,15 @@ export class ChatController {
     const generation = ++this.generation;
     this.cursor = null;
     this.connectionError = null;
+    // Keep only this conversation's confirmed content while replacing its read baseline.
+    const view =
+      this.state.selectedId === conversationId &&
+      this.state.view?.conversation.id === conversationId
+        ? clearOverlays(this.state.view)
+        : null;
     this.update({
       selectedId: conversationId,
-      view: null,
+      view,
       connection: 'loading',
       error: null,
       historyLoading: false,
@@ -255,7 +284,31 @@ export class ChatController {
       void this.stream(generation, conversationId, this.reading.signal);
     } catch (error) {
       if (!this.current(generation)) return;
-      this.update({ view: null, connection: 'blocked', error: errorMessage(error) });
+      if (error instanceof AgentApiError && [401, 403, 404].includes(error.status)) {
+        this.listGeneration += 1;
+        if (error.status === 401) this.pending.clear();
+        else this.pending.delete(conversationId);
+        this.update({
+          pending: null,
+          listCursor: null,
+          listLoading: false,
+          conversations:
+            error.status === 401
+              ? []
+              : this.state.conversations.filter((item) => item.conversation.id !== conversationId),
+        });
+      }
+      const unavailable =
+        error instanceof TypeError ||
+        (error instanceof AgentApiError &&
+          error.status >= 500 &&
+          error.code !== 'INVALID_RESPONSE');
+      // An unavailable read may retain confirmed content for display, never for commands.
+      this.update({
+        view: unavailable ? this.state.view : null,
+        connection: 'blocked',
+        error: errorMessage(error),
+      });
       if (error instanceof AgentApiError && error.status === 404) {
         this.update({
           error:
@@ -350,11 +403,14 @@ export class ChatController {
         }
         if (error instanceof AgentApiError) {
           if ([401, 403, 404].includes(error.status)) {
+            this.listGeneration += 1;
             if (error.status === 401) this.pending.clear();
             else this.pending.delete(conversationId);
             this.update({
               view: null,
               pending: null,
+              listCursor: null,
+              listLoading: false,
               conversations:
                 error.status === 401
                   ? []
@@ -451,6 +507,8 @@ export class ChatController {
     if (
       !view ||
       !selectedId ||
+      !this.cursor ||
+      this.state.connection === 'blocked' ||
       this.pending.has(selectedId) ||
       (view.focusTask && view.focusTask.status !== 'completed')
     )
@@ -470,6 +528,8 @@ export class ChatController {
     const task = view?.focusTask;
     if (
       !task?.active_attempt_id ||
+      !this.cursor ||
+      this.state.connection === 'blocked' ||
       taskExecutionPhase(task) === 'budget_closing' ||
       !selectedId ||
       this.pending.has(selectedId)
@@ -508,13 +568,12 @@ export class ChatController {
     message?: string,
   ): Promise<boolean> {
     if (this.disposed) return false;
-    this.pending.delete(pending.conversationId);
     if (this.state.selectedId === pending.conversationId && !this.disposed) {
-      this.update({ pending: null });
       await this.select(pending.conversationId);
-      if (message && this.state.selectedId === pending.conversationId)
-        this.update({ error: message });
     }
+    this.pending.delete(pending.conversationId);
+    if (this.state.selectedId === pending.conversationId)
+      this.update({ pending: null, ...(message ? { error: message } : {}) });
     void this.refreshList();
     return applied;
   }
