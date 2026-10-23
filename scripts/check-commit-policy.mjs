@@ -24,8 +24,31 @@ function decode(buffer) {
 
 function policyText(path, text) {
   if (path !== 'pnpm-lock.yaml' || !/^lockfileVersion: '9\.0'\r?\n/.test(text)) return text;
+  const packageKey = /^ {2}(?:'[^']+'|"[^"]+"|[^'"\s][^:]*):\s*$/;
+  let inPackages = false;
+  let inPackage = false;
+  // pnpm emits plain deprecation messages containing literal quotes. Recognize only
+  // this single-line package field for the quoting guard; its full value is still scanned.
+  const quoteText = text
+    .split('\n')
+    .map((line) => {
+      if (/^\S/.test(line)) {
+        inPackages = /^packages:\s*$/.test(line);
+        inPackage = false;
+      }
+      if (inPackages && /^ {2}\S/.test(line)) inPackage = packageKey.test(line);
+      if (
+        inPackages &&
+        inPackage &&
+        /^ {4}deprecated: [A-Za-z0-9](?:(?!:[ \t])[^\r\n])*\r?$/.test(line)
+      ) {
+        return '    deprecated: plain scalar';
+      }
+      return line;
+    })
+    .join('\n');
   // Only pnpm's single-line scalar format is supported; unfamiliar quoting stays fully checked.
-  const scalars = text.replace(/'[^'\r\n]*'|"(?:[^"\\\r\n]|\\.)*"|#[^\r\n]*/g, '');
+  const scalars = quoteText.replace(/'[^'\r\n]*'|"(?:[^"\\\r\n]|\\.)*"|#[^\r\n]*/g, '');
   if (/['"]/.test(scalars)) return text;
   let packages = false;
   let packageEntry = false;
@@ -37,7 +60,7 @@ function policyText(path, text) {
         packageEntry = false;
       }
       if (!packages) return line;
-      if (/^ {2}(?:'[^']+'|"[^"]+"|[^'"\s][^:]*):\s*$/.test(line)) {
+      if (packageKey.test(line)) {
         packageEntry = true;
         return line;
       }

@@ -70,6 +70,26 @@ test('合法锁文件摘要的字面碰撞不误报，检查不修改索引或�
   }
 });
 
+test('弃用说明的普通文本引号不使合法摘要误报', (t) => {
+  const { git, write, run } = fixture(t);
+  for (const description of [
+    "Use the platform's native API instead",
+    'Use the "public-api" package instead',
+  ]) {
+    const content = lockfile().replace(
+      '\n\nsnapshots:',
+      `\n    deprecated: ${description}\n\nsnapshots:`,
+    );
+    const path = write('pnpm-lock.yaml', content);
+    git('add', 'pnpm-lock.yaml');
+    const index = git('ls-files', '--stage', '-z');
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(git('ls-files', '--stage', '-z'), index);
+    assert.equal(readFileSync(path, 'utf8'), content);
+  }
+});
+
 test('不合法或不支持的摘要仍完整检查', (t) => {
   const { git, write, run } = fixture(t);
   for (const value of [
@@ -102,6 +122,8 @@ test('仍检查锁文件的包名、地址、旁注及其他字段', (t) => {
       '}\n\nsnapshots',
       '}\n    tarball: https://moonstone.example.test/pkg.tgz\n\nsnapshots',
     ),
+    lockfile().replace('\n\nsnapshots:', "\n    deprecated: Use Moonstone's API\n\nsnapshots:"),
+    lockfile().replace('\n\nsnapshots:', '\n    deprecated: Use "Moonstone" instead\n\nsnapshots:'),
     `${lockfile()}note: Moonstone\n`,
   ]) {
     write('pnpm-lock.yaml', content);
@@ -123,6 +145,16 @@ test('只识别根锁文件的包解析字段，不豁免其它路径或伪造�
     lockfile().replace('packages:', 'snapshots:'),
     lockfile().replace('resolution:', 'note:'),
     lockfile().replace("lockfileVersion: '9.0'", "lockfileVersion: '8.0'"),
+    lockfile().replace('packages:', 'note: "\n    deprecated: public text\npackages:') + '"\n',
+    lockfile().replace(
+      'public-package@1.0.0:\n',
+      'public-package@1.0.0:\n    deprecated: public: "\n',
+    ) + '    deprecated: public end "\n',
+    lockfile().replace(
+      'packages:',
+      "importers:\n  example:\n    deprecated: publisher's note\npackages:",
+    ),
+    `${lockfile()}note: publisher's unsupported scalar\n`,
     lockfile().replace('packages:', 'note: "\npackages:') + '"\n',
   ]) {
     write('pnpm-lock.yaml', content);
