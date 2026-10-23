@@ -24,7 +24,9 @@ pnpm dev:agent-web  # http://127.0.0.1:3003
 
 页面通过自身客户端访问 Agent API 与产品 SSE，支持新建／切换会话、自由输入、连续追问、流式、停止、历史及同进程重连。开发身份凭据只放页面内存，刷新后重新输入；服务重启会清空会话。端口、环境变量与生产代理说明见 [Agent 服务](apps/agent/README.md) 和 [Agent 界面](apps/agent-web/README.md)，pi-web 固定版本及导入范围见 [上游记录](apps/agent-web/upstream/pi-web/SOURCE.md)。
 
-`@tyde/shared/agent` 导出命令、查询与 SSE 的 DTO、Schema 和 `validateAgentContract`。本地源快照与生成规则见 [契约说明](packages/shared/src/agent/contracts/README.md)；`pnpm check:agent-contracts` 校验生成代码一致性，`pnpm test:agent` 另覆盖 Pi／MaaS 隔离回归。测试夹具不参与页面请求或生产响应。W3 重新核对并同步当前 21／22 号 `1.1.0-design` 快照，公开 schema_version 仍为 1；新增真实 Attempt 预算视图，生成 99 个 Schema。
+`@tyde/shared/agent` 导出命令、查询与 SSE 的 DTO、Schema 和 `validateAgentContract`。本地源快照与生成规则见 [契约说明](packages/shared/src/agent/contracts/README.md)；`pnpm check:agent-contracts` 校验生成代码一致性，`pnpm test:agent` 另覆盖 Pi／MaaS 隔离回归。测试夹具不参与页面请求或生产响应。W4 新增独立工具过程与可靠事件，21 保持 `1.1.0-design`、22 为 `1.2.0-w4-design`，公开 schema_version 仍为 1，共 103 个 Schema；旧严格客户端需配套升级，未知事件仍失败关闭。
+
+W4 通用宿主接口支持显式工具和可信 Skill 正文预加载、固定资源摘要、原生捕获及页面追溯。具体只读演示工具、合成数据和 Skill 仅在本机忽略目录，不随 main 交付；默认启动仍为普通聊天。独立环境与真实模型证据、W5 对接边界见 [W4 验收](docs/AGENT_W4_VALIDATION.md) 和 [逐文件交付清单](docs/AGENT_W4_DELIVERY.md)。
 
 ```sh
 pnpm typecheck:agent
