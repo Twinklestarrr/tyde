@@ -21,3 +21,5 @@ node scripts/generate-agent-contracts.mjs --check
 ```
 
 生成过程完全使用仓库内快照，不依赖个人机器上的设计文档路径。源文件与生成文件须一并交付；`--check` 验证来源摘要、类型、Schema 和静态校验器没有漂移。
+
+W5 保持上述两份公开命令/读取源和生成产物不变，持久化由 Agent 自有运行时实现，不把设计中未开放的 continue/retry/provide_input 当成已交付。新增认证只读部署信息 `GET /api/agent/v1/runtime` 由 Agent 本地 Swagger 定义 `{storage_mode:"postgres"|"memory"}` 及401/503错误；它不参与 Pi 上下文、产品事件或执行授权。W4 接入仍使用同一共享源，合流时通过现有生成器维护，禁止手改 generated 文件。

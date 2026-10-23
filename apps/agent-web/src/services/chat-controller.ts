@@ -14,7 +14,7 @@ import {
   mergeHistory,
   type ChatProjection,
 } from '../agent-events/projection';
-import { AgentApiError, AgentClient } from './agent-client';
+import { AgentApiError, AgentClient, type AgentStorageMode } from './agent-client';
 import { taskExecutionPhase } from '../lib/task-state';
 import { mergeConversationItem } from '../lib/conversation-list';
 
@@ -25,6 +25,7 @@ export interface PendingCommand {
 }
 
 export interface ChatState {
+  storageMode: AgentStorageMode | null;
   conversations: ConversationListItem[];
   listCursor: string | null;
   selectedId: string | null;
@@ -70,6 +71,7 @@ function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
 /** Owns one current read generation. Only explicit command methods start/stop work. */
 export class ChatController {
   private state: ChatState = {
+    storageMode: null,
     conversations: [],
     listCursor: null,
     selectedId: null,
@@ -90,6 +92,8 @@ export class ChatController {
   private pending = new Map<string, PendingCommand>();
   private disposed = false;
   private connectionError: string | null = null;
+  private metadataGeneration = 0;
+  private confirmedStorageMode: AgentStorageMode | null = null;
 
   constructor(private readonly client: AgentClient) {}
 
@@ -111,12 +115,53 @@ export class ChatController {
 
   dispose() {
     this.disposed = true;
+    this.metadataGeneration += 1;
     this.generation += 1;
     this.reading.abort();
     this.lifetime.abort();
     this.listeners.clear();
     this.pending.clear();
     // Disconnecting never submits a stop command.
+  }
+
+  async refreshStorageMode(): Promise<boolean> {
+    if (this.disposed) return false;
+    const generation = ++this.metadataGeneration;
+    this.update({ storageMode: null, error: null });
+    try {
+      const storageMode = await this.client.storageMode(this.lifetime.signal);
+      if (this.disposed || generation !== this.metadataGeneration) return false;
+      if (this.confirmedStorageMode !== null && this.confirmedStorageMode !== storageMode) {
+        this.reading.abort();
+        this.generation += 1;
+        this.cursor = null;
+        this.update({ conversations: [], selectedId: null, view: null, connection: 'idle' });
+      }
+      this.confirmedStorageMode = storageMode;
+      this.update({ storageMode });
+      return true;
+    } catch (error) {
+      if (this.disposed || generation !== this.metadataGeneration) return false;
+      this.update({ storageMode: null, error: `存储模式尚未确认。${errorMessage(error)}` });
+      return false;
+    }
+  }
+
+  private async verifyStorageMode(): Promise<boolean> {
+    if (this.confirmedStorageMode === null) return true;
+    const expected = this.confirmedStorageMode;
+    if (!(await this.refreshStorageMode())) {
+      this.update({ connection: 'blocked' });
+      return false;
+    }
+    if (this.confirmedStorageMode !== expected) {
+      this.update({
+        connection: 'blocked',
+        error: '服务端存储模式已变更，请重新连接身份并读取会话列表。',
+      });
+      return false;
+    }
+    return true;
   }
 
   async refreshList(append = false): Promise<void> {
@@ -157,6 +202,7 @@ export class ChatController {
 
   async create(): Promise<void> {
     if (this.disposed || this.state.creating) return;
+    if (!(await this.verifyStorageMode())) return;
     const generation = this.generation;
     this.update({ creating: true, error: null });
     try {
@@ -177,6 +223,7 @@ export class ChatController {
 
   async select(conversationId: string): Promise<void> {
     if (this.disposed) return;
+    if (!(await this.verifyStorageMode())) return;
     this.reading.abort();
     this.reading = new AbortController();
     const generation = ++this.generation;
@@ -211,7 +258,10 @@ export class ChatController {
       this.update({ view: null, connection: 'blocked', error: errorMessage(error) });
       if (error instanceof AgentApiError && error.status === 404) {
         this.update({
-          error: '这个会话已不可访问。开发内存服务重启会清空旧会话，请刷新列表或新建会话。',
+          error:
+            this.state.storageMode === 'memory'
+              ? '这个会话已不可访问。开发内存服务重启会清空旧会话，请刷新列表或新建会话。'
+              : '这个会话已不可访问，请刷新列表并检查当前身份与会话权限。',
         });
         void this.refreshList();
       }
@@ -221,6 +271,7 @@ export class ChatController {
   private async stream(generation: number, conversationId: string, signal: AbortSignal) {
     let failures = 0;
     while (this.current(generation) && !signal.aborted) {
+      if (!(await this.verifyStorageMode()) || !this.current(generation) || signal.aborted) return;
       const cursor = this.cursor;
       if (!cursor) return;
       const baseline = cursor.lastApplied;
