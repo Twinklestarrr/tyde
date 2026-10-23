@@ -8,6 +8,7 @@ datasource db {
 }
 
 model User {
+  clockEvents AttendanceClockEvent[]
   id                     String                          @id @default(uuid()) @db.Uuid
   phoneE164              String                          @unique @db.VarChar(16)
   phoneRegion            String                          @db.VarChar(2)
@@ -49,6 +50,7 @@ model User {
   assignmentOwners       ProjectExpertAssignmentOwner[]
   attendanceSchedules    OrgMemberSchedule[]
   attendanceDays         OrgAttendanceDaily[]
+  organizationScheduleReceipts OrganizationScheduleReceipt[]
   scheduleReceipts       PersonalScheduleReceipt[]
   assignmentResponses    ProjectExpertAssignmentMember[]
   examAttempts           EntranceExamAttempt[]
@@ -109,6 +111,7 @@ model AuthRateLimit {
 }
 
 model Organization {
+  clockEvents AttendanceClockEvent[]
   id                  String                    @id @default(uuid()) @db.Uuid
   name                String                    @unique @db.VarChar(128)
   unifiedCreditCode   String?                   @unique @db.VarChar(32)
@@ -126,6 +129,8 @@ model Organization {
   updatedAt           DateTime                  @default(now()) @updatedAt @db.Timestamptz(3)
   projectMembers      ProjectMember[]
   expertAssignments   ProjectExpertAssignment[]
+  scheduleReceipts OrganizationScheduleReceipt[]
+  attendanceEvents AttendanceEventOutbox[]
   attendanceSchedules OrgMemberSchedule[]
   attendanceDays      OrgAttendanceDaily[]
   examAttempts        EntranceExamAttempt[]
@@ -161,6 +166,7 @@ model UploadedFile {
 
 // 多组织成员关系是组织权限来源；User.organizationId/orgPosition 暂留资料兼容。
 model UserOrgRel {
+  clockEvents AttendanceClockEvent[]
   id                  String                          @id @default(uuid()) @db.Uuid
   userId              String                          @db.Uuid
   uid                 String                          @db.VarChar(36)
@@ -1056,4 +1062,59 @@ model EntranceExamGradingItem {
 
   @@unique([gradingRecordId, questionId])
   @@index([answerId, attemptId, questionId])
+}
+
+// 组织、操作者、接口类型共同隔离幂等键；回执与排班在同一事务提交。
+model OrganizationScheduleReceipt {
+  id           Int          @id @default(autoincrement())
+  orgId        String       @db.Uuid
+  userId       String       @db.Uuid
+  kind         String       @db.VarChar(16)
+  key          String       @db.VarChar(128)
+  requestHash  String       @db.VarChar(64)
+  response     Json
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([orgId, userId, kind, key])
+}
+
+// 仅持久化待投递事实；实际消费/投递由14接入。
+model AttendanceEventOutbox {
+  id        Int      @id @default(autoincrement())
+  orgId     String?   @db.Uuid
+  eventType String   @db.VarChar(32)
+  payload   Json
+  status    String   @default("PENDING") @db.VarChar(16)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+}
+
+// 原始事件仅追加；clockAt为请求时区的墙上时间，occurredAt为服务端UTC瞬时。
+model AttendanceClockEvent {
+  id Int @id @default(autoincrement())
+  eventNo String @unique @db.VarChar(64)
+  scopeKey String @db.VarChar(36)
+  orgId String? @db.Uuid
+  userOrgRelId String? @db.Uuid
+  userId String @db.Uuid
+  attendanceDate DateTime @db.Date
+  clockType String @db.VarChar(16)
+  clockAt DateTime @db.Timestamp(3)
+  occurredAt DateTime @db.Timestamptz(3)
+  timezone String @db.VarChar(64)
+  sourceType String @default("WORKBENCH_CLICK") @db.VarChar(24)
+  sourceRef String? @db.VarChar(128)
+  clientIp String? @db.VarChar(64)
+  extJson Json?
+  createdBy String @db.VarChar(36)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  membership UserOrgRel? @relation(fields: [userOrgRelId, userId, orgId], references: [id, userId, orgId], onDelete: Restrict)
+  @@index([scopeKey, userId, attendanceDate])
 }

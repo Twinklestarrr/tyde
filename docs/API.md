@@ -262,3 +262,11 @@ POST `/organizations/member-imports/generate` 使用multipart/form-data及必填
 API-068 `GET /entrance-exams/current`、069 `POST /entrance-exams/enter`、070 `POST /entrance-exams/submit`及071 `POST /entrance-exams/cancel`全部已接入，保留已实现待验收。当前EXPERT及有效原接单/多组织范围；随机入场绑定，交卷请求体最多2MiB（UTF-8字节），单题最多100000字符；一次保存全卷/本人新文件及绑定版本全轮次，首轮PENDING、后续WAITING；MANUAL待办和mock AUTO派发与交卷同事务，取消不保存临时答案且不可重考。已取消记录从考试任务卡片排除。文件代理精确授权本人题干/答案及有效组织职责范围答案，EXPERT不读取参考答案；NAV历史人工池与管理读取对齐。本批六项数据库集成已由用户14:48:54和14:51:55分批全部验证，08累计九项通过，基础已交接09；真实HTTP/OSS、部署及完整兼容仍待回补，不重复已过项；业务Agent继续mock。字段、错误与复验命令见[执行专家考试](ENTRANCE_EXAM_CANDIDATE.md)和生成Swagger，进度唯一来源为根08任务。
 
 2026-10-23本机08验收：251项通过（245 HTTP + 6断言），交卷长度限制已修并真实复验；人工/取消/真实OSS及权限隔离通过。自动mock签名执行仍因专用HMAC未配置待验，部署/完整兼容保留。见[08验收报告](ENTRANCE_EXAM_CANDIDATE_ACCEPTANCE.md)，默认开发入口仍09。
+
+## 组织排班管理（API-073—075）
+
+`POST /organizations/schedules`、`PUT /organizations/schedules/batch`及`PUT /organizations/schedules/details/batch`已接入，统一前缀`/api/v1`。仅当前EXPERT会话的目标组织有效主管/管理员；成员/组织采用UUID，写接口要求Idempotency-Key，范围展开和明细最多5000条。同事务保存排班、已有日考勤回算、PENDING事件与幂等回执，保护人工最终状态；079原始事件重放及14实际投递待接。需第22迁移，尚待数据库/真实HTTP验收。字段、限制及复验命令见[组织排班后端](ORGANIZATION_SCHEDULES.md)，完整中文Swagger与可校验示例随服务提供。
+
+2026-10-23 API-078 `GET /organizations/attendance/clock-context`及079 `POST /organizations/attendance/clock`已接入（已实现待验收）：目标组织本人有效关系/无组织EXPERT、服务端时间判型、按作用域及本人幂等原事件、日考勤重放及PENDING通知同事务，组织/个人排班变更也重放并保护人工结果。新增第23迁移尚未应用；500单测通过，本批5项集成因Agent环境数据库不可达未执行业务断言。真实HTTP/部署/完整兼容待验收，实际投递归14，保持09。字段、边界及专用_test库定向命令见[工作台打卡](ATTENDANCE_CLOCK.md)。
+
+2026-10-23最新09→10交接：用户17:42:57定向运行attendance clock，本批5项集成全部通过（213跳过，共218项，总14.71秒，测试3.62秒）；并发幂等/不可变事件、原始事件重放/人工保护、多组织与个人/离组失权、午夜及跨日重试、日考勤/outbox故障整事务回滚已验证。第23迁移所需专用测试库结构已具备，迁移历史未另查，原初始化连接阻塞解除；不是全218项复跑，无需当前专用库再次迁移23或重复本批5项、073—075前批4项。09全部9种HTTP入口已有代码，保留已实现待真实HTTP/部署/完整兼容验收；500单测、35定向及类型/ESLint/build/Prisma前批证据保留。本轮仅同步用户结果与文档交接，未重跑测试、修改业务代码或操作数据库。默认入口切至10，本轮未执行10；下次从081花名册及082入项决定开始，随后083—085。业务Agent继续mock，实际投递归14。

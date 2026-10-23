@@ -9902,3 +9902,584 @@ test('exam candidate submission and cancellation outbox faults roll back answers
   });
   expect(result.statusCode, result.body).toBe(200);
 });
+
+// 09组织排班批次；延用专用_test库和串行清理，不操作开发库。
+async function organizationScheduleFixture() {
+  const tables = await db.$queryRaw<
+    { receipt: string | null; events: string | null }[]
+  >`SELECT to_regclass('public."OrganizationScheduleReceipt"')::text AS receipt, to_regclass('public."AttendanceEventOutbox"')::text AS events`;
+  if (!tables[0]?.receipt || !tables[0]?.events)
+    throw new Error(
+      '专用测试库需第22迁移20261023010000_organization_schedules；先pnpm db:deploy:test再定向复验organization schedules',
+    );
+  const f = await memberFixture();
+  const member = await f.add(),
+    admin = await f.add('ADMIN'),
+    pending = await f.add('MEMBER', 'PENDING_ACTIVATION');
+  const payload = {
+    orgId: f.orgId,
+    schedules: [
+      {
+        memberId: member.rel.id,
+        scheduleDate: '2026-10-01',
+        dayType: 'WORK',
+        startTime: '09:00',
+        endTime: '18:00',
+      },
+    ],
+    overwrite: false,
+  };
+  const write = (body: unknown = payload, key = 'schedule', headers = f.headers) =>
+    app.inject({
+      method: 'PUT',
+      url: '/api/v1/organizations/schedules/details/batch',
+      payload: body as never,
+      headers: { ...headers, 'idempotency-key': key },
+    });
+  const list = (body = {}, headers = f.headers) =>
+    post('/organizations/schedules', { orgId: f.orgId, month: '2026-10', ...body }, headers);
+  return { ...f, member, admin, pending, payload, write, list };
+}
+test('organization schedules: concurrent idempotency, overwrite conflicts and API isolation persist exact receipts and pending events', async () => {
+  const f = await organizationScheduleFixture();
+  const results = await Promise.all([f.write(), f.write()]);
+  expect(
+    results.map((r) => r.statusCode),
+    results.map((r) => r.body).join('\n'),
+  ).toEqual([200, 200]);
+  expect(results[0]!.json()).toEqual(results[1]!.json());
+  expect(results[0]!.json().data).toMatchObject({
+    createdCount: 1,
+    updatedCount: 0,
+    skippedCount: 0,
+  });
+  expect(await db.organizationScheduleReceipt.count()).toBe(1);
+  expect(await db.attendanceEventOutbox.count({ where: { status: 'PENDING' } })).toBe(1);
+  expect(await db.orgAttendanceDaily.count()).toBe(0);
+  const conflict = await f.write(f.payload, 'another');
+  expect(conflict.json().data).toMatchObject({
+    createdCount: 0,
+    skippedCount: 1,
+    conflicts: [{ memberId: f.member.rel.id, scheduleDate: '2026-10-01', versionNo: 0 }],
+  });
+  expect((await f.write({ ...f.payload, overwrite: true })).statusCode).toBe(409);
+  expect(
+    (await f.write({ ...f.payload, overwrite: true }, 'overwrite', f.admin.headers)).statusCode,
+  ).toBe(200);
+  expect(await db.orgMemberSchedule.findFirstOrThrow()).toMatchObject({ versionNo: 1 });
+  const { OrganizationScheduleService } =
+    await import('../src/modules/attendance/organization-schedule.service.js');
+  const holiday = {
+    month: async () => ({ days: [{ date: '2026-10-01', calendarDayType: 'PUBLIC_HOLIDAY' }] }),
+  } as unknown as import('../src/modules/attendance/holiday-calendar.service.js').HolidayCalendarService;
+  const service = new OrganizationScheduleService(db, holiday);
+  const p = {
+    userId: f.owner.id,
+    uid: f.owner.uid,
+    role: 'EXPERT' as const,
+    sessionId: 'test',
+    clientType: 'desktop' as const,
+  };
+  const range = await service.batch(
+    'schedule',
+    {
+      orgId: f.orgId,
+      memberIds: [f.member.rel.id, f.member.rel.id],
+      startDate: '2026-10-01',
+      endDate: '2026-10-05',
+      dayType: 'REST',
+      overwrite: false,
+    },
+    p,
+  );
+  expect(range).toMatchObject({ createdCount: 2, skippedCount: 0 }); // 周四放假；周五和周一。
+  expect(await db.organizationScheduleReceipt.count({ where: { kind: 'BATCH' } })).toBe(1);
+});
+test('organization schedules: database filters, whole-month readonly calendar, manager scope and organization loss are enforced', async () => {
+  const f = await organizationScheduleFixture();
+  await db.userOrgRel.update({
+    where: { id: f.member.rel.id },
+    data: { joinedAt: new Date('2026-09-30T16:00:00Z'), employmentType: 'FULL_TIME' },
+  });
+  expect((await f.write()).statusCode).toBe(200);
+  const list = await f.list({ keyword: '2026-10-01', employmentType: 'FULL_TIME', size: 1 });
+  expect(list.statusCode, list.body).toBe(200);
+  expect(list.json().data).toMatchObject({
+    total: 1,
+    pages: 1,
+    members: [{ memberId: f.member.rel.id, canSchedule: true }],
+  });
+  expect(list.json().data.members[0].days).toHaveLength(31);
+  expect(list.json().data.members[0].days[0]).toMatchObject({
+    scheduleDate: '2026-10-01',
+    dayType: 'WORK',
+  });
+  expect((await f.list({ keyword: f.member.user.displayName })).json().data.total).toBe(1);
+  expect((await f.list({ keyword: f.member.user.phoneE164.slice(3) })).json().data.total).toBe(1);
+  expect((await f.list({ keyword: f.member.rel.id.slice(0, 15) })).json().data.total).toBe(1);
+  expect((await f.list({ projectId: 2147483647 })).json().data.total).toBe(0);
+  expect((await f.list({ current: 2147483647 })).json().data.members).toEqual([]);
+  expect((await f.list({}, f.member.headers)).statusCode).toBe(403);
+  expect(await db.orgAttendanceDaily.count()).toBe(0);
+  const unauthorizedOrg = await db.organization.create({
+    data: { name: '异组织排班范围', expertiseTags: [], status: 'ACTIVE', verifyStatus: 'APPROVED' },
+  });
+  expect((await f.list({ orgId: unauthorizedOrg.id })).statusCode).toBe(403);
+  expect((await f.write({ ...f.payload, orgId: unauthorizedOrg.id })).statusCode).toBe(403);
+  expect(
+    (
+      await f.write(
+        { ...f.payload, schedules: [{ ...f.payload.schedules[0], memberId: f.pending.rel.id }] },
+        'pending',
+      )
+    ).statusCode,
+  ).toBe(400);
+  await db.userOrgRel.update({ where: { id: f.ownerRel.id }, data: { joinStatus: 'LEFT' } });
+  expect((await f.write()).statusCode).toBe(403); // 已有回执也不能绕过失权。
+  expect((await f.list()).statusCode).toBe(403);
+});
+test('organization schedules: existing daily is recalculated after schedule insert/overwrite while manual leave and audit remain intact', async () => {
+  const f = await organizationScheduleFixture();
+  const daily = await db.orgAttendanceDaily.create({
+    data: {
+      scopeKey: f.orgId,
+      orgId: f.orgId,
+      userOrgRelId: f.member.rel.id,
+      userId: f.member.user.id,
+      attendanceDate: new Date('2026-10-01'),
+      firstClockInAt: new Date('2026-10-01T09:30:00Z'),
+      lastClockOutAt: new Date('2026-10-01T17:30:00Z'),
+      autoStatus: 'UNSCHEDULED',
+      finalStatus: 'LEAVE',
+      manualOverride: true,
+      manualRemark: '已审批请假',
+      createdBy: f.owner.uid,
+      updatedBy: f.owner.uid,
+    },
+  });
+  expect((await f.write()).statusCode).toBe(200);
+  expect(await db.orgAttendanceDaily.findUniqueOrThrow({ where: { id: daily.id } })).toMatchObject({
+    autoStatus: 'LATE_EARLY',
+    finalStatus: 'LEAVE',
+    manualRemark: '已审批请假',
+    versionNo: 1,
+    lateMinutes: 30,
+    earlyLeaveMinutes: 30,
+    workedMinutes: 480,
+  });
+  const rest = {
+    ...f.payload,
+    schedules: [{ memberId: f.member.rel.id, scheduleDate: '2026-10-01', dayType: 'REST' }],
+    overwrite: true,
+  };
+  expect((await f.write(rest, 'rest')).statusCode).toBe(200);
+  expect(await db.orgAttendanceDaily.findUniqueOrThrow({ where: { id: daily.id } })).toMatchObject({
+    autoStatus: 'REST',
+    finalStatus: 'LEAVE',
+    versionNo: 2,
+    lateMinutes: 0,
+    earlyLeaveMinutes: 0,
+  });
+  expect(await db.orgAttendanceAdjustment.count()).toBe(0); // 重算不伪造人工审计。
+});
+test('organization schedules: receipt/outbox failures roll back schedule and daily, leaving key reusable', async () => {
+  const f = await organizationScheduleFixture();
+  const { OrganizationScheduleService } =
+    await import('../src/modules/attendance/organization-schedule.service.js');
+  const p = {
+    userId: f.owner.id,
+    uid: f.owner.uid,
+    role: 'EXPERT' as const,
+    sessionId: 'test',
+    clientType: 'desktop' as const,
+  };
+  expect((await f.write()).statusCode).toBe(200);
+  const original = await db.orgMemberSchedule.findFirstOrThrow();
+  await db.orgAttendanceDaily.create({
+    data: {
+      scopeKey: f.orgId,
+      orgId: f.orgId,
+      userOrgRelId: f.member.rel.id,
+      userId: f.member.user.id,
+      scheduleId: original.id,
+      attendanceDate: new Date('2026-10-01'),
+      autoStatus: 'ABSENT',
+      finalStatus: 'ABSENT',
+      createdBy: f.owner.uid,
+      updatedBy: f.owner.uid,
+    },
+  });
+  const before = await db.orgAttendanceDaily.findFirstOrThrow();
+  const update = {
+    ...f.payload,
+    overwrite: true,
+    schedules: [{ memberId: f.member.rel.id, scheduleDate: '2026-10-01', dayType: 'REST' }],
+  };
+  for (const model of ['attendanceEventOutbox', 'organizationScheduleReceipt'] as const) {
+    const faulty = new Proxy(db, {
+      get(target, property) {
+        if (property === '$transaction')
+          return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>, options: unknown) =>
+            target.$transaction(
+              (tx) =>
+                fn(
+                  new Proxy(tx, {
+                    get(inner, name) {
+                      if (name === model)
+                        return new Proxy(inner[model], {
+                          get(delegate, operation) {
+                            if (operation === 'create')
+                              return () => {
+                                throw new Error(`injected ${model}`);
+                              };
+                            return Reflect.get(delegate, operation);
+                          },
+                        });
+                      return Reflect.get(inner, name);
+                    },
+                  }),
+                ),
+              options as never,
+            );
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      new OrganizationScheduleService(faulty).details('rollback', update as never, p),
+    ).rejects.toThrow('injected');
+    expect(await db.orgMemberSchedule.findFirstOrThrow()).toEqual(original);
+    expect(await db.orgAttendanceDaily.findFirstOrThrow()).toEqual(before);
+    expect(await db.organizationScheduleReceipt.count()).toBe(1);
+    expect(await db.attendanceEventOutbox.count()).toBe(1);
+  }
+  expect((await f.write(update, 'rollback')).statusCode).toBe(200);
+});
+
+// 09工作台打卡；只在既有专用_test库守卫下执行，需第23迁移。
+async function attendanceClockFixture() {
+  const tables = await db.$queryRaw<
+    { events: string | null }[]
+  >`SELECT to_regclass('public."AttendanceClockEvent"')::text AS events`;
+  if (!tables[0]?.events)
+    throw new Error(
+      '专用_test库需第23迁移20261023020000_attendance_clock_events；先pnpm db:deploy:test，再定向复验attendance clock',
+    );
+  const f = await memberFixture(),
+    member = await f.add();
+  const { AttendanceClockService } =
+    await import('../src/modules/attendance/attendance-clock.service.js');
+  let now = new Date('2026-10-23T01:30:00.123Z');
+  const service = new AttendanceClockService(db, () => now);
+  const principal = {
+    userId: member.user.id,
+    uid: member.user.uid,
+    role: 'EXPERT' as const,
+    clientType: 'desktop' as const,
+    sessionId: 'test',
+  };
+  const input = { orgId: f.orgId, timezone: 'Asia/Shanghai' };
+  const clock = (key: string, extra = {}) =>
+    service.clock(key, { ...input, ...extra }, principal, '127.0.0.1');
+  return {
+    ...f,
+    member,
+    service,
+    principal,
+    input,
+    clock,
+    setNow: (value: string) => {
+      now = new Date(value);
+    },
+  };
+}
+test('attendance clock: HTTP context is readonly, concurrent same-key clicks persist one immutable event and next clicks serialize', async () => {
+  const f = await attendanceClockFixture();
+  const url = `/api/v1/organizations/attendance/clock-context?orgId=${f.orgId}`;
+  const context = await app.inject({ method: 'GET', url, headers: f.member.headers });
+  expect(context.statusCode, context.body).toBe(200);
+  expect(context.json().data).toMatchObject({
+    orgId: f.orgId,
+    canClock: true,
+    nextClockType: 'CLOCK_IN',
+    scheduleId: null,
+  });
+  expect(await db.orgAttendanceDaily.count()).toBe(0);
+  const click = (key: string, extra = {}) =>
+    post(
+      '/organizations/attendance/clock',
+      { orgId: f.orgId, ...extra },
+      { ...f.member.headers, 'idempotency-key': key },
+    );
+  const responses = await Promise.all([click('same'), click('same')]);
+  expect(
+    responses.map((r) => r.statusCode),
+    responses.map((r) => r.body).join('\n'),
+  ).toEqual([200, 200]);
+  expect(responses[0]!.json()).toEqual(responses[1]!.json());
+  expect(responses[0]!.json().data).toMatchObject({
+    clockType: 'CLOCK_IN',
+    dailyAttendance: { autoStatus: 'UNSCHEDULED', versionNo: 1 },
+  });
+  const next = await Promise.all([click('out1'), click('out2')]);
+  expect(
+    next.map((r) => r.statusCode),
+    next.map((r) => r.body).join('\n'),
+  ).toEqual([200, 200]);
+  expect(next.map((r) => r.json().data.clockType)).toEqual(['CLOCK_OUT', 'CLOCK_OUT']);
+  expect(await db.attendanceClockEvent.count()).toBe(3);
+  expect(await db.orgAttendanceDaily.findFirstOrThrow()).toMatchObject({ versionNo: 3 });
+  expect(
+    await db.attendanceEventOutbox.count({
+      where: { status: 'PENDING', eventType: 'ATTENDANCE_CLOCK' },
+    }),
+  ).toBe(3);
+  const before = await db.attendanceClockEvent.findMany({ orderBy: { id: 'asc' } });
+  expect((await click('same', { clockType: 'CLOCK_OUT' })).statusCode).toBe(409);
+  await expect(
+    db.attendanceClockEvent.update({
+      where: { id: before[0]!.id },
+      data: { sourceRef: 'changed' },
+    }),
+  ).rejects.toThrow('append-only');
+  await expect(db.attendanceClockEvent.delete({ where: { id: before[0]!.id } })).rejects.toThrow(
+    'append-only',
+  );
+  expect(await db.attendanceClockEvent.findMany({ orderBy: { id: 'asc' } })).toEqual(before);
+});
+test('attendance clock: server phase, repeated outs, original-event schedule replay and manual status/audit protection are transactional', async () => {
+  const f = await attendanceClockFixture();
+  const first = await f.clock('in', {
+    clockType: 'CLOCK_IN',
+    sourceRef: 'request-1',
+    extJson: { device: 'desktop' },
+  });
+  f.setNow('2026-10-23T09:30:00Z');
+  await f.clock('out');
+  const row = await db.orgAttendanceDaily.findUniqueOrThrow({
+    where: { id: first.dailyAttendance.id },
+  });
+  const update = await post(
+    '/organizations/attendance/update',
+    {
+      orgId: f.orgId,
+      dailyId: row.id,
+      versionNo: row.versionNo,
+      finalStatus: 'LEAVE',
+      manualRemark: '主管已批准',
+    },
+    f.headers,
+  );
+  expect(update.statusCode, update.body).toBe(200);
+  const audit = await db.orgAttendanceAdjustment.findMany();
+  // 故意污染派生首末快照，排班变更必须从原始事件恢复。
+  await db.orgAttendanceDaily.update({
+    where: { id: row.id },
+    data: { firstClockInAt: new Date('2026-10-23T01:00Z'), lastClockOutAt: null },
+  });
+  const write = (startTime: string, endTime: string, key: string) =>
+    app.inject({
+      method: 'PUT',
+      url: '/api/v1/organizations/schedules/details/batch',
+      headers: { ...f.headers, 'idempotency-key': key },
+      payload: {
+        orgId: f.orgId,
+        overwrite: true,
+        schedules: [
+          {
+            memberId: f.member.rel.id,
+            scheduleDate: '2026-10-23',
+            dayType: 'WORK',
+            startTime,
+            endTime,
+          },
+        ],
+      },
+    });
+  const changed = await write('09:00', '18:00', 'replay');
+  expect(changed.statusCode, changed.body).toBe(200);
+  expect(await db.orgAttendanceDaily.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+    firstClockInAt: new Date('2026-10-23T09:30:00.123Z'),
+    lastClockOutAt: new Date('2026-10-23T17:30:00Z'),
+    autoStatus: 'LATE_EARLY',
+    finalStatus: 'LEAVE',
+    manualRemark: '主管已批准',
+    lateMinutes: 30,
+    earlyLeaveMinutes: 30,
+    workedMinutes: 479,
+  });
+  f.setNow('2026-10-23T10:30:00Z');
+  const later = await f.clock('later');
+  expect(later.dailyAttendance).toMatchObject({
+    autoStatus: 'LATE',
+    finalStatus: 'LEAVE',
+    earlyLeaveMinutes: 0,
+    workedMinutes: 539,
+  });
+  expect(await db.orgAttendanceAdjustment.findMany()).toEqual(audit);
+  const events = await db.attendanceClockEvent.findMany({ orderBy: { id: 'asc' } });
+  const replay = await f.clock('in', { timezone: 'UTC', sourceRef: 'ignored' });
+  expect(replay.eventId).toBe(first.eventId); // 旧接口只比较预期类型，其余元数据不改写。
+  expect(replay.dailyAttendance).toEqual(later.dailyAttendance);
+  expect(await db.attendanceClockEvent.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+  // 新一天只查当天排班/事件，不继承昨日上班卡；午后首次为下班卡。
+  f.setNow('2026-10-24T06:00:00Z');
+  const tomorrow = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/organizations/schedules/details/batch',
+    headers: { ...f.headers, 'idempotency-key': 'tomorrow' },
+    payload: {
+      orgId: f.orgId,
+      overwrite: false,
+      schedules: [
+        {
+          memberId: f.member.rel.id,
+          scheduleDate: '2026-10-24',
+          dayType: 'WORK',
+          startTime: '09:00',
+          endTime: '18:00',
+        },
+      ],
+    },
+  });
+  expect(tomorrow.statusCode, tomorrow.body).toBe(200);
+  expect((await f.service.context(f.input, f.principal)).nextClockType).toBe('CLOCK_OUT');
+  await expect(f.clock('stale', { clockType: 'CLOCK_IN' })).rejects.toMatchObject({ status: 409 });
+  expect((await f.clock('tomorrow')).dailyAttendance).toMatchObject({
+    attendanceDate: '2026-10-24',
+    firstClockInAt: null,
+    autoStatus: 'EARLY_LEAVE',
+  });
+});
+test('attendance clock: multi-org target, pending-leave, actual loss, no-org role and personal schedule replay isolate scopes', async () => {
+  const f = await attendanceClockFixture();
+  const org = await db.organization.create({
+    data: { name: '打卡第二组织', expertiseTags: [] },
+  });
+  await db.userOrgRel.create({
+    data: {
+      orgId: org.id,
+      userId: f.member.user.id,
+      uid: f.member.user.uid,
+      joinStatus: 'PENDING_LEAVE',
+      position: 'MEMBER',
+    },
+  });
+  await f.clock('shared');
+  const second = await f.service.clock('shared', { orgId: org.id }, f.principal, '127.0.0.1');
+  expect(second.clockType).toBe('CLOCK_IN');
+  expect(second.orgId).toBe(org.id);
+  await expect(f.service.clock('personal', {}, f.principal, '127.0.0.1')).rejects.toMatchObject({
+    status: 403,
+  });
+  const outsider = await f.add('MEMBER', 'PENDING_ACTIVATION');
+  await expect(
+    f.service.context(f.input, { ...f.principal, userId: outsider.user.id }),
+  ).rejects.toMatchObject({ status: 403 });
+  await db.userOrgRel.update({ where: { id: f.member.rel.id }, data: { joinStatus: 'LEFT' } });
+  await expect(f.clock('shared')).rejects.toMatchObject({ status: 403 }); // 幂等不能绕过当前失权。
+  await db.userOrgRel.updateMany({
+    where: { userId: f.member.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  await expect(
+    f.service.clock('personal', {}, { ...f.principal, role: 'PM' }, '127.0.0.1'),
+  ).rejects.toMatchObject({ status: 403 });
+  const personal = await f.service.clock('shared', {}, f.principal, '127.0.0.1');
+  expect(personal).toMatchObject({
+    orgId: null,
+    memberId: null,
+    clockType: 'CLOCK_IN',
+    dailyAttendance: { autoStatus: 'UNSCHEDULED' },
+  });
+  const { AttendanceService } = await import('../src/modules/attendance/attendance.service.js');
+  const schedule = await new AttendanceService(db).batch(
+    'self-replay',
+    { overwrite: true, schedules: [{ scheduleDate: '2026-10-23', dayType: 'REST' }] },
+    f.principal,
+  );
+  expect(schedule).toMatchObject({ createdCount: 1 });
+  expect(
+    await db.orgAttendanceDaily.findUniqueOrThrow({ where: { id: personal.dailyAttendance.id } }),
+  ).toMatchObject({
+    autoStatus: 'REST',
+    finalStatus: 'REST',
+    firstClockInAt: new Date('2026-10-23T09:30:00.123Z'),
+  });
+  expect(await db.attendanceClockEvent.count()).toBe(3);
+});
+test('attendance clock: midnight resets event window, timezone date and milliseconds persist, retry replays old day', async () => {
+  const f = await attendanceClockFixture();
+  f.setNow('2026-10-23T15:59:59.999Z');
+  const first = await f.clock('yesterday');
+  expect(first.clockAt).toBe('2026-10-23 23:59:59.999');
+  f.setNow('2026-10-23T16:00:00.001Z');
+  const context = await f.service.context(f.input, f.principal);
+  expect(context).toMatchObject({
+    attendanceDate: '2026-10-24',
+    nextClockType: 'CLOCK_IN',
+    firstClockInAt: null,
+    lastClockOutAt: null,
+  });
+  const second = await f.clock('today');
+  expect(second.dailyAttendance.attendanceDate).toBe('2026-10-24');
+  expect((await f.clock('yesterday')).eventId).toBe(first.eventId);
+  expect(await db.orgAttendanceDaily.count()).toBe(2);
+  expect(
+    await db.attendanceClockEvent.findUniqueOrThrow({ where: { id: second.eventId } }),
+  ).toMatchObject({
+    occurredAt: new Date('2026-10-23T16:00:00.001Z'),
+    clockAt: new Date('2026-10-24T00:00:00.001Z'),
+    timezone: 'Asia/Shanghai',
+  });
+  await expect(
+    f.service.context({ ...f.input, timezone: 'bad' }, f.principal),
+  ).rejects.toMatchObject({ status: 400 });
+});
+test('attendance clock: daily/outbox failures roll back original event, daily and key so retry is reusable', async () => {
+  const f = await attendanceClockFixture();
+  const { AttendanceClockService } =
+    await import('../src/modules/attendance/attendance-clock.service.js');
+  for (const model of ['orgAttendanceDaily', 'attendanceEventOutbox'] as const) {
+    const faulty = new Proxy(db, {
+      get(target, property) {
+        if (property === '$transaction')
+          return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>, options: unknown) =>
+            target.$transaction(
+              (tx) =>
+                fn(
+                  new Proxy(tx, {
+                    get(inner, name) {
+                      if (name === model)
+                        return new Proxy(inner[model], {
+                          get(delegate, operation) {
+                            if (
+                              operation ===
+                              (model === 'orgAttendanceDaily' ? 'updateMany' : 'create')
+                            )
+                              return () => {
+                                throw new Error(`injected ${model}`);
+                              };
+                            return Reflect.get(delegate, operation);
+                          },
+                        });
+                      return Reflect.get(inner, name);
+                    },
+                  }),
+                ),
+              options as never,
+            );
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      new AttendanceClockService(faulty).clock('rollback', f.input, f.principal, '127.0.0.1'),
+    ).rejects.toThrow(`injected ${model}`);
+    expect(await db.attendanceClockEvent.count()).toBe(0);
+    expect(await db.orgAttendanceDaily.count()).toBe(0);
+    expect(await db.attendanceEventOutbox.count()).toBe(0);
+  }
+  expect((await f.clock('rollback')).clockType).toBe('CLOCK_IN');
+  expect(await db.attendanceClockEvent.count()).toBe(1);
+});

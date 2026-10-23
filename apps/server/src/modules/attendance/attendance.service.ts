@@ -1,3 +1,4 @@
+import { replayClockDaily } from './attendance-replay.js';
 import { attendanceBusinessId, attendanceBusinessTypes } from './attendance-application.domain.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
@@ -119,6 +120,39 @@ export class AttendanceService {
           }
         }
         if (inserts.length) await tx.orgMemberSchedule.createMany({ data: inserts });
+        // 个人排班覆盖/补排也重放已有事件，不制造无打卡日考勤。
+        const changedSchedules = await tx.orgMemberSchedule.findMany({
+          where: { scopeKey: 'PERSONAL', userId: principal.userId, batchNo },
+        });
+        for (const schedule of changedSchedules) {
+          const daily = await tx.orgAttendanceDaily.findUnique({
+            where: {
+              scopeKey_userId_attendanceDate: {
+                scopeKey: 'PERSONAL',
+                userId: principal.userId,
+                attendanceDate: schedule.scheduleDate,
+              },
+            },
+          });
+          if (!daily) continue;
+          const today = new Intl.DateTimeFormat('en-CA', {
+            timeZone: schedule.timezone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(new Date());
+          const data = await replayClockDaily(tx, schedule, daily, today);
+          const result = await tx.orgAttendanceDaily.updateMany({
+            where: { id: daily.id, versionNo: daily.versionNo },
+            data: {
+              ...data,
+              versionNo: { increment: 1 },
+              calculatedAt: new Date(),
+              updatedBy: 'SYSTEM',
+            },
+          });
+          if (result.count !== 1) throw conflict();
+        }
         const response = {
           batchNo,
           createdCount,
