@@ -2,7 +2,7 @@
 
 2026-10-23 · 协作说明 v0.8 · W4／W5 合流与待验接口
 
-W4 工具／Skill 与 W5 PostgreSQL 分别完成的历史验证见 [W4 验收](AGENT_W4_VALIDATION.md)、[W5 验收](AGENT_W5_VALIDATION.md) 和 [D1 核对](AGENT_W5_D1.md)。本轮在 `integration/agent-w4-w5` 合并双方能力，并对接资源装配、工具派发许可、工具过程持久化和执行配置快照。按用户要求，冲突处理期间不运行类型、测试、构建、数据库或真实模型／浏览器联调；用户确认后再验证。当前状态和待验清单见 [合流记录](AGENT_W4_W5_INTEGRATION.md)。公开 continue/retry/provide_input 和 Electron 仍未开放，不等于完整 M3/W6。
+W4 工具／Skill 与 W5 PostgreSQL 分别完成的历史验证见 [W4 验收](AGENT_W4_VALIDATION.md)、[W5 验收](AGENT_W5_VALIDATION.md) 和 [D1 核对](AGENT_W5_D1.md)。本轮在 `integration/agent-w4-w5` 合并双方能力，并对接资源装配、工具派发许可、工具过程持久化和执行配置快照。冲突处理期间按用户要求只做静态核对；用户随后完成合并并确认联调，新的工程、PG 与真实页面证据单独累计，不覆盖原阶段记录。当前结果和未完成项见 [合流记录](AGENT_W4_W5_INTEGRATION.md)。公开 continue/retry/provide_input 和 Electron 仍未开放，不等于完整 M3/W6。
 
 本文供业务前端、Agent 前后端、桌面和业务后端开发共同使用，直接说明工程落点、协作边界与验收要求。内容按当前 tyde 仓库、Agent 架构 v0.10、最小版本计划 v0.3、13—20 号数据设计、21—24 号接口设计及 26 号执行预算设计整理，阅读本文无需访问仓库外的设计目录。
 
@@ -134,7 +134,7 @@ Attempt 累计预算与单次模型请求超时、实际 token 用量和费用�
 
 ## 5 身份、业务上下文与结果回流
 
-W4 的 `pi/resources.ts` 从宿主显式提供的固定内容校验版本和摘要，将 Skill 正文预加载到真实 system prompt；原生自动发现与文件／终端工具仍关闭。默认服务没有演示依赖。`PiNativeState.configuration` 保存不含凭据的执行配置、声明和资源身份；W5 提供可等待原生提交和一次性派发许可；本轮统一工具循环的保存／检查／实际派发边界，静态接入后仍需用户确认测试。只读工具产生独立 `ToolExecutionSummary`／`tool.updated`，进入快照、历史及详情，不产生业务 Operation；新事件和严格校验需两端配套升级。详细语义、验证及 W5 接口见 [W4 验收](AGENT_W4_VALIDATION.md)。
+W4 的 `pi/resources.ts` 从宿主显式提供的固定内容校验版本和摘要，将 Skill 正文预加载到真实 system prompt；原生自动发现与文件／终端工具仍关闭。默认服务没有演示依赖。`PiNativeState.configuration` 保存不含凭据的执行配置、声明和资源身份；W5 提供可等待原生提交和一次性派发许可；本轮统一工具循环的保存／检查／实际派发边界，用户确认后已有受控 SDK／PG 与部分真实页面证据，详见联合记录。只读工具产生独立 `ToolExecutionSummary`／`tool.updated`，进入快照、历史及详情，不产生业务 Operation；新事件和严格校验需两端配套升级。详细语义、验证及 W5 接口见 [W4 验收](AGENT_W4_VALIDATION.md)。
 
 tyde 已有登录、用户与组织能力。当前 Web／Electron 页面经平台 HTTP 适配使用 Cookie，Electron preload／IPC 只提供公开运行配置；这不代表独立 Agent 服务已具备平台授权。服务间委托、长任务续期、撤销及退出登录后的处理需共同确定。
 
@@ -257,4 +257,6 @@ W2 真实模型补充记录：用户已提供 DeepSeek Flash 的真实两轮口�
 
 W3 的真实浏览器证据、最新自动检查结果和明确限制统一维护在 [W3 验收记录](AGENT_W3_VALIDATION.md)，不在本文复制可能继续变化的明细。W3 不执行数据库迁移或桌面安装包验收。Pi 依赖继续来自公开 npm registry；交付前按根 `AGENTS.md` 和本机忽略的 `commit-policy.json` 检查当前文件、路径、依赖与产物。改动保留在工作区，未提交或发布。
 
-W4／W5 合流记录（2026-10-23）：本轮只处理合并冲突、接口接入与静态核对，历史验收文档原样保留。不运行任何测试、构建或数据库／模型调用；用户确认后再按 [联合待验清单](AGENT_W4_W5_INTEGRATION.md) 执行并记录新的证据。
+W4／W5 合流记录（2026-10-23）：静态冲突阶段结束后，用户完成合并 `51a863e` 并确认联调。本轮修复工具回调重入授权、原生错误结果的公开过程边界及配套回归；Agent 类型／全仓类型、103 Schema、服务 189 通过＋1 PG 单列跳过、前端 76、业务 438、核心 91、lint、两构建通过，专用 PostgreSQL 49 项分批通过。无 `.local`／实际 env／旧构建的独立目录安装、契约、类型、同一 Agent 测试、构建与 lint 通过；全仓格式仍只有既有业务测试失败。
+
+真实页面已跑通工具回答、同会话追问、普通问题、工具运行中停止、刷新／切换及服务重启重连；只读恢复的 head／事件／计数完全相同，重启后显式追问沿同一 Pi Session 使用原工具上下文。无演示默认 PG 通过真实产品 HTTP 普通聊天，未声称 clean 页面浏览器验通。总计 9 次真实模型／3 次工具授权，工具 2 成功／1 取消。冻结的最终运行身份、快照及独立分项证据统一见 [联合记录](AGENT_W4_W5_INTEGRATION.md)，逐文件变更／建议提交见 [交付清单](AGENT_W4_W5_DELIVERY.md)。已有本机演示包使用忽略目录的 `run.mjs` 统一发布、启动、页面和复制原开发身份；默认入口没有演示依赖。业务 Agent 继续 mock，公开继续／重试／补充及 Electron 仍未开放。

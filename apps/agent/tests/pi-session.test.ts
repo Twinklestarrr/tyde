@@ -145,7 +145,15 @@ test('固定 Pi 1.3.0 原生上下文连续多轮，增量与未知用量分别�
     const captured = session.captureNativeState();
     assert.ok(captured.header);
     assert.equal(captured.leafId, captured.entries.at(-1)?.id);
-    const usage = captured.entries.filter((entry) => entry.type === 'custom');
+    const usage = captured.entries.filter(
+      (entry) => entry.type === 'custom' && entry.customType === 'tyde.maas.usage-observation',
+    );
+    assert.equal(
+      captured.entries.filter(
+        (entry) => entry.type === 'custom' && entry.customType === 'tyde.execution.configuration',
+      ).length,
+      1,
+    );
     assert.equal(usage.length, 2);
     const linked = usage[0].data as { sourceNativeEntryId: string };
     assert.ok(
@@ -689,7 +697,9 @@ test('在文字回调中停止，即使剩余工具输出已缓冲也不能启�
     assert.equal(result.status, 'stopped');
     assert.equal(calls, 1);
     assert.equal(executions, 0);
-    assert.ok(!session.captureNativeState().entries.some((entry) => entry.type === 'custom'));
+    const custom = session.captureNativeState().entries.filter((entry) => entry.type === 'custom');
+    assert.equal(custom.length, 1);
+    assert.equal(custom[0]!.customType, 'tyde.execution.configuration');
     assert.ok(
       session
         .captureNativeState()

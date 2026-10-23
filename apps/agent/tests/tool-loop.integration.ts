@@ -202,7 +202,7 @@ const controlledFetch: typeof fetch = async (_url, init) => {
     assert.ok(JSON.stringify(payload.messages).includes(fixtureValue));
     return response('Synthetic lookup completed: AMBER-42');
   }
-  if (modelCalls === 4) return response(undefined, true);
+  if ([4, 5, 6].includes(modelCalls)) return response(undefined, true);
   assert.equal(modelCalls, 3, 'a stopped tool cannot dispatch a subsequent model');
   assert.ok(
     payload.messages.some(
@@ -418,6 +418,26 @@ test(
       assert.deepEqual((await runtime.getSnapshot(principal, oldConversationId)).tool_executions, [
         tool,
       ]);
+
+      heldTool = undefined;
+      const duplicate = await runtime.createConversation(principal, { schema_version: 1 });
+      conversationId = duplicate.conversation.id;
+      await runtime.submitCommand(
+        principal,
+        conversationId,
+        prompt('The controlled second model round repeats the same native tool call ID.'),
+      );
+      const rejectedDuplicate = await ended(runtime);
+      assert.equal(rejectedDuplicate.status, 'failed');
+      assert.equal(rejectedDuplicate.latest_attempt.budget!.model_requests_used, 2);
+      assert.equal(rejectedDuplicate.latest_attempt.budget!.tool_calls_used, 1);
+      assert.equal(rejectedDuplicate.latest_attempt.error!.code, 'PI_TOOL_DUPLICATE_CALL');
+      assert.equal(modelCalls, 6, 'a duplicate native call cannot dispatch a third model round');
+      assert.equal(toolCalls, 3, 'only the first tool call in this Attempt was executed');
+      const duplicateSnapshot = await runtime.getSnapshot(principal, conversationId);
+      assert.equal(duplicateSnapshot.tool_executions.length, 1);
+      assert.equal(duplicateSnapshot.tool_executions[0]!.status, 'succeeded');
+      assert.equal(duplicateSnapshot.tool_executions[0]!.row_version, '2');
     } finally {
       await runtime.close();
       await database.close();

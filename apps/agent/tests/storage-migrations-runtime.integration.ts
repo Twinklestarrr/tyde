@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import type { TaskView } from '@tyde/shared/agent';
@@ -16,6 +16,18 @@ import {
 } from '../src/storage/migrations.js';
 
 const url = process.env.AGENT_TEST_DATABASE_URL;
+if (url) {
+  let isolated = false;
+  try {
+    const target = new URL(url);
+    isolated =
+      ['postgres:', 'postgresql:'].includes(target.protocol) &&
+      /^\/[^/]+_test$/.test(decodeURIComponent(target.pathname));
+  } catch {
+    // Invalid configuration is reported without echoing a connection URL or credentials.
+  }
+  if (!isolated) throw new Error('Isolated AGENT_TEST_DATABASE_URL *_test database required');
+}
 test(
   'non-owner runtime completes and stops through real HTTP with controlled model transport',
   { skip: !url },
@@ -23,6 +35,9 @@ test(
     assert.ok(url);
     const admin = createAgentDatabase({ connectionString: url });
     const role = `agent_runtime_probe_${randomUUID().replaceAll('-', '')}`;
+    // A closed hexadecimal alphabet can be used as a SQL literal without interpolation escapes.
+    // Kept in memory only; the test must also work with SCRAM instead of requiring local trust.
+    const databasePassword = randomBytes(32).toString('hex');
     let app: Awaited<ReturnType<typeof createApp>> | undefined;
     let closeRuntime: (() => Promise<void>) | undefined;
     let database: ReturnType<typeof createAgentDatabase> | undefined;
@@ -51,13 +66,13 @@ test(
           .sql,
       );
       await admin.pool.query(
-        `CREATE ROLE ${role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
+        `CREATE ROLE ${role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${databasePassword}'`,
       );
       await admin.pool.query(`GRANT tyde_agent_runtime TO ${role}`);
       await publishExecutionSnapshot(admin.pool, executionConfig);
       const runtimeUrl = new URL(url);
       runtimeUrl.username = role;
-      runtimeUrl.password = '';
+      runtimeUrl.password = databasePassword;
       database = createAgentDatabase({ connectionString: runtimeUrl.toString() });
       await checkAgentDatabase(database.pool);
       const actual = (

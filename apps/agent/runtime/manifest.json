@@ -24,19 +24,19 @@
     "package_manager": "pnpm@11.23.0",
     "platform": "darwin",
     "architecture": "arm64",
-    "code_sha256": "5427ab1387abcec486182545bea01d45b5835b6fc74fbabf405a55606c9c7a8a",
+    "code_sha256": "4393071abd610063dacbd70ba017657ad85e60c4c3f2db99fd3386392dfa1769",
     "dependency_lock_sha256": "dd69f14145c5bdfe852ddb80450647840613e2892ae09431ba4ae7d4d6afb840",
     "contract_sources": {
       "21-commands.openapi.json": "4dab294a8f543623c4efb265ae90b26169b0501c37173d8a574b19d3a747d39b",
-      "22-reads-events.openapi.json": "33bccd277ca3999a7420a0e9eb4ab56309b9e8241ac7bd55e13809009bd31702"
+      "22-reads-events.openapi.json": "48c13a0f325c4141d7e2dbb077463ccbba66d38fcde62b1ded5ebd2af41d54cc"
     },
-    "release_digest": "sha256:bfe8ce83da865167e9553339606efac4ee1f4632674e44c8817f9a8ee339562e"
+    "release_digest": "sha256:a4cd78f5bf877cae84f997a866ea758fd90180bb826d6bd85294e75f43830e8c"
   },
   "verification": {
     "source": [
       {
         "path": "src/api/documentation.ts",
-        "sha256": "ae5b13a1894643775818b0af5a3bd2870732af5cddb9b0ac729596109d3f40cb"
+        "sha256": "0c17b9b87bd78343b47fe0d169dd2e16e8241d58ec9cd8188b0821201966ab91"
       },
       {
         "path": "src/api/routes.ts",
@@ -52,7 +52,7 @@
       },
       {
         "path": "src/application.ts",
-        "sha256": "2b8acf5da0d531ca08773c95972f4d77fcf7d4673bb57c171406266346ad27b5"
+        "sha256": "7c105959289e9efcb8252c0f8a111ac49e118790024671863758a8c681ce1cae"
       },
       {
         "path": "src/auth/access.ts",
@@ -92,7 +92,7 @@
       },
       {
         "path": "src/execution/recovery.ts",
-        "sha256": "ba93f4ed0c065e40e7297b8fc3da6f50c2550cec399b0c06701d68e20e92fc70"
+        "sha256": "24e41dfd094560464db1abe410da63391cd85c4f7c1687705fe47721d7905165"
       },
       {
         "path": "src/maas/config.ts",
@@ -112,7 +112,7 @@
       },
       {
         "path": "src/maas/transport.ts",
-        "sha256": "8768a9d584c18ce9e6a3b814ce1213d7122e8abdaa2c3d2b2a34003eeac0d76a"
+        "sha256": "47029231d75cdfbecc87caf8a365e5358339ba7cb23ecab14850936fcd7602c5"
       },
       {
         "path": "src/main.ts",
@@ -120,43 +120,51 @@
       },
       {
         "path": "src/pi/index.ts",
-        "sha256": "c89f6765bca3671b48e166752c4159902891d706774f6afc1789eaf0f85fdc78"
+        "sha256": "4a693e330d3924701c543aa9b2d430adca2545903af7391c50a1b226b1878e37"
       },
       {
         "path": "src/pi/native-state.ts",
-        "sha256": "1d62f5a40910beee1feadbc52a337bf16103ef29565038bdd3d50d5a914319a4"
+        "sha256": "afa27a979a6548c8e41b69c39de5be7137c4d6564db8c8fc5561d32df3344393"
+      },
+      {
+        "path": "src/pi/resources.ts",
+        "sha256": "f455aa398c65a23638669b11f586fb01d884be540bf1703356874ad1a7d7edc6"
       },
       {
         "path": "src/pi/session.ts",
-        "sha256": "5dc4104c7fdfa51b9fe1cf7f91d6615734db25e7e558d765c422e38269c761f3"
+        "sha256": "b58bc7f2ebb0f288f530a0fbcea6afb78646809d750d997117d4252eb5b8b585"
       },
       {
         "path": "src/runtime/memory-runtime.ts",
-        "sha256": "6160ce171aa412e3b83e325bb8991323e1273d7a657be287c9bb06066e34e7ee"
+        "sha256": "7f740d6df7e0d09ab724e2538c4d07f43b7d09767fa33dc3268466ea98113728"
       },
       {
         "path": "src/runtime/postgres-runtime.ts",
-        "sha256": "652add066767a46769e9edb084fd4b43c43e7ec035684c49029b388fdbcf9f3d"
+        "sha256": "d6b6f2dd95f2dc682ef007295c09ca0df7589e9b78f0b543af795b1628c615e4"
       },
       {
         "path": "src/storage/database.ts",
-        "sha256": "0cf392426641e89324852f0b09113e5020f33ca084b7c71d8d4807008b6d4ecd"
+        "sha256": "4b8c0bd255aa75d1ebfcace54c806023634798fbd12e05bd17437f5c6d4b9068"
       },
       {
         "path": "src/storage/execution-config.ts",
-        "sha256": "3f045b0909fa0dd1a85e72384d435048f22d51a6ce0e2e2d7f4b1ec310de574b"
+        "sha256": "2e8ad849cdc2ac239f7ccb47ebb6712f6a31091d6e1bb85e378e0b80968a3d86"
       },
       {
         "path": "src/storage/migrations.ts",
-        "sha256": "b7405441f86a93179542e090adc3c19bf59a8aa88fb416e8d698ee93d48558dc"
+        "sha256": "78a4d93bc5f9e6dfcbe3854047a38673c2a10f7b2e2ccc0bea86eb0929a23b34"
       },
       {
         "path": "src/storage/native-store.ts",
         "sha256": "a8f5fef7dd3ad0ee70038ee1ae1fdfbf8c1887f4a6aac5fda7c654af94c6d11d"
       },
       {
+        "path": "src/storage/pi-deployment.ts",
+        "sha256": "4fbdde63d367728371cb30d6cc8b93ee660fb92de8fad9865e6db1fab6e4812e"
+      },
+      {
         "path": "src/storage/projections.ts",
-        "sha256": "360ce7b598d3dd8307cd514bb7cf93170037d125c7ee98de355db822ff6325de"
+        "sha256": "40dfe5d6b7f679d42adffc7980d8223bad9d354f5ad1fec38d93f1f51ede9463"
       },
       {
         "path": "src/storage/resource-publication.ts",
@@ -165,6 +173,10 @@
       {
         "path": "src/storage/runtime-manifest.ts",
         "sha256": "bd1aff24165863cfe9bc1cda4014ac9ebfeeb58d1a792c4c822efce5e6484632"
+      },
+      {
+        "path": "src/storage/tool-executions.ts",
+        "sha256": "50af81c3a4c76111e64ddc7a82837e1b295a6e8361b2ebe18071b22d5c630b62"
       }
     ],
     "migrations": [
@@ -187,24 +199,32 @@
       {
         "path": "migrations/sql/0001/05_privileges.sql",
         "sha256": "d97a7b75955ee48df813ca21fe6d0e6000194053ad71cb55fc78fe6cb2210794"
+      },
+      {
+        "path": "migrations/sql/0002/01_tool_executions.sql",
+        "sha256": "47815649ea34494aadff4cf29f062430d21b5fd047cce9921cc4a9ac48e99a73"
+      },
+      {
+        "path": "migrations/sql/0002/02_privileges.sql",
+        "sha256": "cf626211930b7e93d174371a9c28b397e9cffb1e3c53cbb09e20ecb9088ef417"
       }
     ],
     "shared_source": [
       {
         "path": "src/agent/contracts/document.generated.ts",
-        "sha256": "26d96408e48b8e3d8e4e777ede4a32bf0ef779e12a18b9dda70756e7b0679e78"
+        "sha256": "51142e382f514f244eb724d7459406b15773f2564768b033c318f46fbf2d2279"
       },
       {
         "path": "src/agent/contracts/generated.ts",
-        "sha256": "a3b504af52c47d93e556326504099e801434abc09afcf3f9ac1fc7d6a0828f99"
+        "sha256": "744e09caf052f71e3a5daafb3844b95f71a1b9d320efbef9dc22cccc2b8af568"
       },
       {
         "path": "src/agent/contracts/index.ts",
-        "sha256": "b0f3c16a0044db9ff0b66b0974f8b9cbf8684215925a3e25cbbbb9316d53adab"
+        "sha256": "64aa1c0bfafa87e490ce0a4c40af6c30856720fd16784a254410cc639f328796"
       },
       {
         "path": "src/agent/contracts/operations.generated.ts",
-        "sha256": "54c6ef29ed87072cbb67962f2001f7ae178fd0c2731effa9b1f1f3a7068a86fa"
+        "sha256": "2b682f2e8f9e2900546eb573b2b23f3321be2671dbf2c4654d305f639fef9c3e"
       },
       {
         "path": "src/agent/contracts/sources/21-commands.openapi.json",
@@ -212,11 +232,11 @@
       },
       {
         "path": "src/agent/contracts/sources/22-reads-events.openapi.json",
-        "sha256": "33bccd277ca3999a7420a0e9eb4ab56309b9e8241ac7bd55e13809009bd31702"
+        "sha256": "48c13a0f325c4141d7e2dbb077463ccbba66d38fcde62b1ded5ebd2af41d54cc"
       },
       {
         "path": "src/agent/contracts/validator.generated.ts",
-        "sha256": "f24d1e5aa7d96d6cbcb47a63dd5d151769c857ccae32f49bf22f332bcbfbd399"
+        "sha256": "6da714d29115dc47b2a0d8500f35f75887031acce11a6900b8dad76ed8b3e203"
       },
       {
         "path": "src/agent/index.ts",
@@ -2570,7 +2590,7 @@
     "compiled": [
       {
         "path": "dist/api/documentation.js",
-        "sha256": "0974c0a9965e5b59ad4207941d163ecae3837b576f3c05dcb6977dc47083efe3"
+        "sha256": "906a997437757b4a446aa7e89b014a8716e6270993ca634348274b2349593975"
       },
       {
         "path": "dist/api/routes.js",
@@ -2586,7 +2606,7 @@
       },
       {
         "path": "dist/application.js",
-        "sha256": "6cdbcdbeb020de42b5c99e97846dac3a4b83a8888c8cfdf037355865fff8862c"
+        "sha256": "7cf01e0c569712c5bd1b09f23e18f5cc5a0593debe66432a5d0c4f56512217e1"
       },
       {
         "path": "dist/auth/access.js",
@@ -2626,7 +2646,7 @@
       },
       {
         "path": "dist/execution/recovery.js",
-        "sha256": "9dc003e2fff8bf8a4efe8215126fda6f89c88caec2b13066ed736fdebe38a8e2"
+        "sha256": "6a65b328dd8049e76b96d680802bd25acb76547767eaa18df28d6dbfd3d23a47"
       },
       {
         "path": "dist/maas/config.js",
@@ -2646,7 +2666,7 @@
       },
       {
         "path": "dist/maas/transport.js",
-        "sha256": "28b4a76e1298c911c73fc2ffaf93b0403351489985e91bbf4eb962b2645d6804"
+        "sha256": "f598afea70e225018121e5b2c276564bfa6f7956db7f6a26482d6927c57c5cbe"
       },
       {
         "path": "dist/main.js",
@@ -2654,23 +2674,27 @@
       },
       {
         "path": "dist/pi/index.js",
-        "sha256": "05fd619b7c3870fbdc4e751da391876ebcccdab6e5f1070705d780830537495a"
+        "sha256": "02e7a39d3a8b3a3587e641d47491ab7118bbe94132d41c4606e7a137d66700ba"
       },
       {
         "path": "dist/pi/native-state.js",
-        "sha256": "7ec1e4147357c741ab61d7f68878294c0726dee55779c7759ce9b0fc0d6a917c"
+        "sha256": "f0727fd169183b18d020015ac27feaf6b7f7335cc1d98fe25b3f56386dd249f4"
+      },
+      {
+        "path": "dist/pi/resources.js",
+        "sha256": "0c98b36bec376b414b8d8b43390e74673173a2171b8e875da99a5b8ae9ae3826"
       },
       {
         "path": "dist/pi/session.js",
-        "sha256": "7bb2b2e46eff6323d0d8733d1c67316e9a452fcb555bbb3989f835ec687928d1"
+        "sha256": "5074eacd7ad6a7336f610c967e262c979557efd994bf0a0047d7d6b4a0685bbb"
       },
       {
         "path": "dist/runtime/memory-runtime.js",
-        "sha256": "43de54e438dc93e4efd79d7121b77681a9c2ff17a9b253a4506eeb463428cd3d"
+        "sha256": "9bbb0e1eca5dd6ab431cd45acc5704860fc9c3b1997854a115de9eb31255ffac"
       },
       {
         "path": "dist/runtime/postgres-runtime.js",
-        "sha256": "7d362b1d8c3313ea986eee5ca999f307bda06ce6ff9f6e65de5b323931733800"
+        "sha256": "f55c4419663135f64325539e96f21a5ba187efb24c0d32021eb95c43a9afeb21"
       },
       {
         "path": "dist/storage/database.js",
@@ -2678,19 +2702,23 @@
       },
       {
         "path": "dist/storage/execution-config.js",
-        "sha256": "0df45bd8f73b4f1a66ab1d7282868eb90e2b23a4e7c6f04bae8a90e94814535b"
+        "sha256": "5e970ec3376cbddc8904a0f907f6f1e5949086fdf52aa5c57f8357adf26941af"
       },
       {
         "path": "dist/storage/migrations.js",
-        "sha256": "7793ef3c9dbb94fd116dbf98b22b641b69d44cc837c0eafbd6ed94f61df57ae8"
+        "sha256": "581294c7fcc5dfa375dd23c1f42c03a8e5c1a98f318abe9aa332558a45d89152"
       },
       {
         "path": "dist/storage/native-store.js",
         "sha256": "d32b7193ddcd424123f68c161124c01b1bd1fd42f62676943a70ed1b441f6cda"
       },
       {
+        "path": "dist/storage/pi-deployment.js",
+        "sha256": "5de44fde35774dd61362036162f0a0e94fb07f72fa464d40032e223ba2fd970e"
+      },
+      {
         "path": "dist/storage/projections.js",
-        "sha256": "5b9d0b4e2276277f4dcdf7d0702220a3b57075af6a0306c17898413d779fd4db"
+        "sha256": "122b2e455b27cd9ab50964ca240bbef2735bdfa6d36b3546ceffde023cf47abb"
       },
       {
         "path": "dist/storage/resource-publication.js",
@@ -2699,28 +2727,32 @@
       {
         "path": "dist/storage/runtime-manifest.js",
         "sha256": "7cc0743df1db8992b1d4c3242d24337f95899b06e43993c3fb96d892e832a6b2"
+      },
+      {
+        "path": "dist/storage/tool-executions.js",
+        "sha256": "3033b76312544934d3aa2abca7f857fbb3907892010eec74509fd4dd5e616c96"
       }
     ],
     "shared_compiled": [
       {
         "path": "dist/agent/contracts/document.generated.js",
-        "sha256": "d8048d894f43dbde3069bd87903317128bad3ef59d5e207670acdc7ef3a4f61a"
+        "sha256": "0348db3e4ac88a18ea7f2cfd6cca6c7d2246df3fcb82a537b4a644b3a741ce04"
       },
       {
         "path": "dist/agent/contracts/generated.js",
-        "sha256": "e43c692b38a473c5ecc55cf23d62657163e5129aecfbb7f951453746e727a1bd"
+        "sha256": "5e27ed3cd608df23d50fcd0e039694932e4e14742a85b742ab4c285ebd78e9b1"
       },
       {
         "path": "dist/agent/contracts/index.js",
-        "sha256": "7f37a97f07aa37f3eff40368a760881d4ea715063bd31c70fbb281b059cffab2"
+        "sha256": "79564df88461b915314d39bde3e2ba61f7a0361513a9c86cf00ff46843a3e00c"
       },
       {
         "path": "dist/agent/contracts/operations.generated.js",
-        "sha256": "127a67ef872ec583c852dc0561311e3f10fe169b7f6ece4339632c97880b3b0e"
+        "sha256": "4dd855dd2123cec0390f69a29a87a9ffbce802e467475568f7c2094be52ec723"
       },
       {
         "path": "dist/agent/contracts/validator.generated.js",
-        "sha256": "eaa7fcbb68a4618e6d97ff3141b5aba2a89a033451cd0e48eb8d65078711f78d"
+        "sha256": "c89519493ec3f13d088bd4da4247c626eac16c4c488f9dac79fa452153c1bc82"
       },
       {
         "path": "dist/agent/index.js",

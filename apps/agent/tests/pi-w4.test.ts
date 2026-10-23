@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import nodeTest from 'node:test';
 import { Type } from '@earendil-works/pi-ai';
+import type { BeforeToolCallContext, BeforeToolCallResult } from '@earendil-works/pi-agent-core';
+import { AgentSession } from '@earendil-works/pi-coding-agent';
 import type { MaasConfig } from '../src/maas/index.js';
 import { AttemptBudget } from '../src/execution/attempt-budget.js';
 import {
@@ -413,9 +415,12 @@ test('工具非协作执行受固定超时约束，失败不进入下一模型',
   }
 });
 
-test('同一真实 tool_call_id 的重复模型回调不重复执行', async () => {
+test('同一真实 tool_call_id 的重复模型回调不重复授权或执行', async () => {
   let executions = 0;
+  let authorizations = 0;
   let calls = 0;
+  const events: PiToolLifecycle[] = [];
+  const capturedCalls: (string | null)[] = [];
   const session = await create({
     tools: [
       lookup(async () => {
@@ -423,6 +428,17 @@ test('同一真实 tool_call_id 的重复模型回调不重复执行', async () 
         return 'actual';
       }),
     ],
+    barriers: {
+      beforeTool: async () => {
+        authorizations += 1;
+      },
+      onToolLifecycle: async (event) => {
+        events.push(event);
+      },
+      afterTool: async (_state, call) => {
+        capturedCalls.push(call?.sourceNativeEntryId ?? null);
+      },
+    },
     fetch: async (_input, init) => {
       calls += 1;
       return response(init, toolCall('same-real-call-id'));
@@ -432,10 +448,70 @@ test('同一真实 tool_call_id 的重复模型回调不重复执行', async () 
     const result = await session.prompt('Read.');
     assert.equal(result.status, 'failed');
     assert.equal(executions, 1);
+    assert.equal(authorizations, 1);
     assert.equal(calls, 2);
     assert.equal(result.error?.code, 'PI_TOOL_DUPLICATE_CALL');
+    assert.deepEqual(
+      events.map((event) => event.status),
+      ['running', 'succeeded'],
+    );
+    assert.equal(capturedCalls.length, 2);
+    assert.equal(capturedCalls[0], events[0]!.sourceNativeEntryId);
+    assert.equal(capturedCalls[1], null, 'rejected source cannot overwrite the first result link');
   } finally {
     session.dispose();
+  }
+});
+
+test('同来源原生 beforeTool 回调重入复用一次授权，工具仍只执行一次', async () => {
+  // Fixed-SDK compatibility probe: replay its public beforeTool callback from
+  // the native session hook. Production exposes neither Session nor this seam.
+  const prototype = AgentSession.prototype as unknown as {
+    _beforeToolCall(
+      this: AgentSession,
+      context: BeforeToolCallContext,
+      parentToolCallId?: string,
+    ): Promise<BeforeToolCallResult | undefined>;
+  };
+  const original = prototype._beforeToolCall;
+  let replayed = false;
+  let authorizations = 0;
+  let executions = 0;
+  let modelCalls = 0;
+  prototype._beforeToolCall = async function (context, parentToolCallId) {
+    if (!replayed) {
+      replayed = true;
+      await this.agent.beforeToolCall?.(context);
+    }
+    return original.call(this, context, parentToolCallId);
+  };
+  let session: Awaited<ReturnType<typeof create>> | undefined;
+  try {
+    session = await create({
+      tools: [
+        lookup(async () => {
+          executions += 1;
+          return 'actual';
+        }),
+      ],
+      barriers: {
+        beforeTool: async () => {
+          authorizations += 1;
+        },
+      },
+      fetch: async (_input, init) => {
+        modelCalls += 1;
+        return response(init, modelCalls === 1 ? toolCall() : answer());
+      },
+    });
+    assert.equal((await session.prompt('Read the fixture.')).status, 'completed');
+    assert.equal(replayed, true);
+    assert.equal(authorizations, 1);
+    assert.equal(executions, 1);
+    assert.equal(modelCalls, 2);
+  } finally {
+    prototype._beforeToolCall = original;
+    session?.dispose();
   }
 });
 

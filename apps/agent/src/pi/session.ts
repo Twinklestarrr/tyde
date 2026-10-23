@@ -203,6 +203,10 @@ interface ActiveRun {
   onText?: (text: string) => void;
   toolCalls: Map<string, PiToolLifecycle>;
   executedToolIds: Set<string>;
+  toolAdmissions: Map<
+    string,
+    { call: PiToolCallContext; ready: Promise<boolean>; granted: boolean }
+  >;
 }
 
 function resources(systemPrompt: string): ResourceLoader {
@@ -864,17 +868,33 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
       if (run) block(run, 'PI_TOOL_NATIVE_LINK_MISSING');
       return { block: true, terminate: true, reason: 'PI_TOOL_NATIVE_LINK_MISSING' };
     }
-    if (
-      !run ||
-      !(await barrier(
-        run,
-        () =>
-          options.barriers?.beforeTool?.(saveState(), toolContext.toolCall.name, call) ??
-          Promise.resolve(),
-      ))
-    ) {
+    if (!run || !permitted(run))
       return { block: true, terminate: true, reason: 'PI_TOOL_EXECUTION_REVOKED' };
+    let admission = run.toolAdmissions.get(call.toolCallId);
+    if (admission && !isDeepStrictEqual(admission.call, call)) {
+      // The same real call ID cannot authorize a new native source or model
+      // request. Reject before any save or durable budget reservation.
+      block(run, 'PI_TOOL_DUPLICATE_CALL');
+      return { block: true, terminate: true, reason: 'PI_TOOL_DUPLICATE_CALL' };
     }
+    if (!admission) {
+      admission = {
+        call,
+        granted: false,
+        ready: barrier(
+          run,
+          () =>
+            options.barriers?.beforeTool?.(saveState(), toolContext.toolCall.name, call) ??
+            Promise.resolve(),
+        ),
+      };
+      // Install before awaiting: identical callback replays share one in-flight
+      // native save/authorization and cannot mint another dispatch permit.
+      run.toolAdmissions.set(call.toolCallId, admission);
+    }
+    if (!(await admission.ready) || !permitted(run))
+      return { block: true, terminate: true, reason: 'PI_TOOL_EXECUTION_REVOKED' };
+    admission.granted = true;
     return nativeBeforeTool?.(toolContext, signal);
   };
   agent.subscribe(async (event) => {
@@ -929,15 +949,25 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
     if (event.message.role === 'toolResult') {
       const toolCallId = event.message.toolCallId;
       const nativeToolName = event.message.toolName;
-      let lifecycle = run.toolCalls.get(toolCallId);
-      if (!lifecycle) {
-        // Pi can append an error result without reaching host execute (for
-        // example, input validation or a revoked beforeTool gate). Project the
-        // actual rejected call, never invent a running or successful execution.
+      const admission = run.toolAdmissions.get(toolCallId);
+      let admittedCall: PiToolCallContext | undefined;
+      if (admission?.granted) {
+        try {
+          const call = toolContextForHook(toolCallId, nativeToolName);
+          if (isDeepStrictEqual(call, admission.call)) admittedCall = call;
+        } catch {
+          // Capture the raw SDK error below; it is not an admitted public process.
+        }
+      }
+      let lifecycle = admittedCall ? run.toolCalls.get(toolCallId) : undefined;
+      if (!lifecycle && admittedCall) {
+        // An admitted call may receive an SDK error result before host execute.
+        // Failed native-save/budget gates are not admitted tool processes: still
+        // capture their raw result below, without inventing a public process.
         const tool = tools.find((candidate) => candidate.name === nativeToolName);
         if (tool) {
           try {
-            const call = toolContextForHook(toolCallId, tool.name);
+            const call = admittedCall;
             const source = manager
               .getEntries()
               .find((entry) => entry.id === call.sourceNativeEntryId);
@@ -1024,6 +1054,7 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
         observations: [],
         toolCalls: new Map(),
         executedToolIds: new Set(),
+        toolAdmissions: new Map(),
         onText,
       };
       active = run;

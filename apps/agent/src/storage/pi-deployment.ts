@@ -30,9 +30,9 @@ function freeze<T>(value: T): T {
   return value;
 }
 const json = (value: unknown): JsonValue => JSON.parse(JSON.stringify(value)) as JsonValue;
-const fail = (): never => {
+function fail(): never {
   throw new Error('PI_RESOURCE_DEPLOYMENT_INVALID');
-};
+}
 
 function publication(
   deployment: TrustedPiDeployment,

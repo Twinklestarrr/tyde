@@ -4,9 +4,9 @@
 
 ## W5 启动与运行边界
 
-W4／W5 当前在 `integration/agent-w4-w5` 合流。以下 W5 验收与末尾 W4 工具说明分别保留原分支历史；合并后尚未运行测试、构建或发布配置。按用户要求等待确认后再执行，接入与待验清单见 [合流记录](../../docs/AGENT_W4_W5_INTEGRATION.md)。
+W4／W5 已在 `integration/agent-w4-w5` 合并，用户确认后工程检查、专用 PG 测试和真实工具页面正在分项验收。以下 W2／W3／W4／W5 独立证据保留，不代替本轮结果；当前通过、跳过与未完成项见 [联合记录](../../docs/AGENT_W4_W5_INTEGRATION.md)，逐文件交付见 [清单](../../docs/AGENT_W4_W5_DELIVERY.md)。
 
-实际切换并核实 Node.js **24.19.0**、pnpm **11.23.0**；worktree 的 shell 可能覆盖 PATH，`.nvmrc` 不能替代实测。保留原服务端 `.env`，不打印模型/身份凭据。并行窗口使用独立 worktree、端口和 Agent 数据库；本次验收专用 PG18.6 实例端口 55435，页面/服务最终使用 35153/35152。
+实际切换并核实 Node.js **24.19.0**、pnpm **11.23.0**；worktree 的 shell 可能覆盖 PATH，`.nvmrc` 不能替代实测。保留原服务端 `.env`，不打印模型/身份凭据。并行窗口使用独立 worktree、端口和 Agent 数据库；W5 独立验收的 PG 55435／页面 35153／服务 35152 保留为历史；本轮新 Agent 专用 PG 为 55436，具体本机工具演示使用页面 3103／服务 3102。
 
 先由管理员确认独立 Agent 数据库，配置权限组及互相独立的迁移、发布、运行账号，步骤见 [迁移说明](migrations/README.md)。三个 URL 只在服务端注入；不要使用业务 `DATABASE_URL` 或业务 `db:*` 命令。
 
@@ -163,7 +163,7 @@ pnpm --filter @tyde/agent smoke:maas --stop-after-ms 2000
 
 `--check-config` 加载配置并调用身份模块，随后退出；不会发送模型请求，也不表示平台路由已通过。模块加载、首次授权和会话装配共用一个准备预算，取配置的总预算；超时或 SIGINT／SIGTERM 以非零状态退出，迟到解析不会启动模型请求。独立 CLI 在结局输出和本地 Session 清理后最多再保留 1 秒退出窗口，防止身份模块遗留活动句柄；作为库使用的适配器不会退出服务进程。默认冒烟发起两轮真实模型请求，用随机口令验证原生上下文连续性，输出临时流式文字和结构化结果。停止计时从 prompt 开始；仅已收到真实文字、HTTP 200 的模型流取消且本地结果为 stopped 时通过。停止发生在准备阶段、尚无文字进展或远端已完成时均失败，提示调整停止时机，不能据此宣称执行中流式停止已验通。执行中的 SIGINT／SIGTERM 请求本地停止。命令失败不回退为模拟回答。
 
-隔离测试使用受控本机接口替身核对 SDK 真实路径、请求／响应、停止和故障。用户已提供 DeepSeek Flash 的 W2 真实两轮召回、流式与本地停止通过日志；DeepSeek V4 Pro 仅配置检查，可选平台路径尚未真实联调。W3 页面已接通同一模型入口，真实浏览器结果见 [W3 验证记录](../../docs/AGENT_W3_VALIDATION.md)。正式平台身份仍待后续工作包；PostgreSQL 已由 W5 单独接入，W4／W5 联合路径当前待用户确认后验证。
+隔离测试使用受控本机接口替身核对 SDK 真实路径、请求／响应、停止和故障。用户已提供 DeepSeek Flash 的 W2 真实两轮召回、流式与本地停止通过日志；DeepSeek V4 Pro 仅配置检查，可选平台路径尚未真实联调。W3 页面已接通同一模型入口，真实浏览器结果见 [W3 验证记录](../../docs/AGENT_W3_VALIDATION.md)。正式平台身份仍待后续工作包；PostgreSQL 已由 W5 单独接入，W4／W5 联合路径已有本轮独立工程／PG 与部分真实页面证据，剩余场景见联合记录。
 
 协作边界及后续工作见 [Agent 开发说明](../../docs/AGENT_DEVELOPMENT.md)。
 
@@ -181,4 +181,23 @@ Skill 采用 `host-preloaded-system-prompt`：将已校验的固定正文放入�
 
 PG 可信装配由 `storage/pi-deployment.ts` 的 `createTrustedPiDeployment`、`prepareTrustedPiDeployment` 和 `publishTrustedPiDeploymentSnapshot` 连接 W4 冻结资源与 W5 资源发布：核对固定成员、实际代码导出／字节，使用数据库规范化得到的 `resourceManifestHash`；执行快照的 `tool_manifest.host_resources` 保留同一 W4 manifest。运行清单改变后需生成并发布新配置，旧快照不可改写。启用资源的发布须使用该适配器，默认 `publish:agent-config` 仍只发布默认无工具配置；HTTP 不自动发布。
 
-本机演示包在 `.local/agent-w4-demo/`，不提交。仅拉取通用代码不能直接复现该演示，普通聊天、测试和构建完全不依赖它。原 W4 包启动入口只证明过独立 memory 路径，不能直接用作本轮 PG 演示：PG 入口须显式提供同一可信资源和部署声明，完成新运行清单／Agent 迁移／资源及执行快照发布后再启动。本轮暂不执行这些命令，等待用户确认；原 `.env` 仅由进程读取，不复制到 worktree。既有真实证据见 [W4 验收记录](../../docs/AGENT_W4_VALIDATION.md)，本轮接入待验说明见 [合流记录](../../docs/AGENT_W4_W5_INTEGRATION.md)。
+本机演示包在 `.local/agent-w4-demo/`，不提交。仅拉取通用代码不能直接复现该演示，普通聊天、测试和构建完全不依赖它。原 W4 包启动入口只证明过独立 memory 路径，不能直接用作本轮 PG 演示：PG 入口须显式提供同一可信资源和部署声明，完成新运行清单／Agent 迁移／资源及执行快照发布后再启动。本轮已按新清单／迁移／快照完成实际启动，工具回答、追问、普通问题、运行中停止、刷新／切换及重启重连通过；默认无演示 PG 普通聊天为真实产品 HTTP 验证，未声称 clean 页面浏览器验通。原 `.env` 仅由进程读取，不覆盖、不复制到 worktree。既有真实证据见 [W4 验收记录](../../docs/AGENT_W4_VALIDATION.md)，本轮接入待验说明见 [合流记录](../../docs/AGENT_W4_W5_INTEGRATION.md)。
+
+## 本轮本机工具演示入口
+
+本段仅适用于已经拥有忽略的 `.local/agent-w4-demo/` 的本机；其他开发者拉取通用代码不能直接复现具体演示。默认 `main.ts` 不读取该目录，普通 PG 服务也不依赖它。
+
+实际使用 Node 24.19.0，在 tyde 根目录按顺序运行：
+
+```sh
+node .local/agent-w4-demo/run.mjs publish
+node .local/agent-w4-demo/run.mjs start
+```
+
+发布只使用独立发布账号，启动只使用独立运行账号。runner 固定读取原模型／身份 `.env` 与新 Agent 对应角色配置，过滤旧连接环境；`database-target.mjs` 还在直接 start／publish 入口校验专用库、端口和角色。它不会修改配置或输出凭据。源码／固定资源改变后先重新构建并发布新快照，再启动；不要复用旧 manifest 冒充兼容。
+
+另一终端用 `node .local/agent-w4-demo/run.mjs web` 打开 3103 对 3102 的本机代理，`node .local/agent-w4-demo/run.mjs copy-token` 将现有开发 Bearer 复制到本机剪贴板供页面粘贴，终端不打印 token。详细步骤和只读追溯 SQL 在本机 `MANUAL_TEST.md`。
+
+同一 Agent 库只运行一个服务进程；第二个进程会以 `AGENT_PROCESS_ALREADY_RUNNING` 拒绝。验证无工具默认入口时先停止该库的演示服务，不能把并行占用同库作为多实例验收。正式平台授权、公开继续／重试／补充、真实业务写工具与 Electron 仍不在本轮范围。
+
+本轮真实授权合计模型 9 次／工具 3 次，工具 2 成功／1 取消。完成／停止会话重启后的只读证据与之前完全相同，显式追问另计新授权且复用原 Pi Session。当前保留 3102／3103 供本机手测，默认独立验证的临时 3104／3105 已停；真实证据均为审核字段，不保存凭据或完整回执。
