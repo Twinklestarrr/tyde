@@ -109,7 +109,12 @@ export class FileService {
           !record.claimedBizId ||
           !/^[1-9]\d*$/.test(record.claimedBizId) ||
           Number(record.claimedBizId) > 2147483647 ||
-          !(await canReadManagedExamFile(this.registry.db, Number(record.claimedBizId), principal))
+          !(await canReadManagedExamFile(
+            this.registry.db,
+            Number(record.claimedBizId),
+            principal,
+            record.objectKey,
+          ))
         )
           throw new AuthError(403, 'FORBIDDEN', '无权访问该准入考试附件');
         return this.registry.storage.open(record.objectKey);

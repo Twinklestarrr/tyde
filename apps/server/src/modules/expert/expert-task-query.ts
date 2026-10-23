@@ -91,7 +91,7 @@ export async function queryExpertTasks(
     tx.entranceExamAttempt.findMany({
       where: {
         candidateUserId: principal.userId,
-        submittedAt: { not: null },
+        OR: [{ submittedAt: { not: null } }, { cancelledAt: { not: null } }],
         exam: { projectId: { in: ids }, deleted: false },
       },
       include: { exam: { select: { projectId: true } } },
@@ -164,7 +164,7 @@ export async function queryExpertTasks(
       continue;
     const needWrittenExam = project.productionPlan?.needWrittenExam ?? false;
     const enterable = exams.some((e) => e.projectId === row.projectId);
-    const submitted = attempts.some((a) => a.exam.projectId === row.projectId);
+    const finishedExam = attempts.some((a) => a.exam.projectId === row.projectId);
     const member = members.find((m) => m.projectId === row.projectId);
     const activeAccess =
       !!member &&
@@ -175,7 +175,7 @@ export async function queryExpertTasks(
     if (acceptanceStatus === 'ACCEPTED') {
       // 仅本域已接实来源可展示；其他快照须由10—12回补真值，不能凭旧快照开放动作。
       if (projectOwner)
-        branch = needWrittenExam && enterable && !submitted ? 'ENTRANCE_EXAM' : null;
+        branch = needWrittenExam && enterable && !finishedExam ? 'ENTRANCE_EXAM' : null;
       else if (!acceptedOrganizationOwner)
         branch = member
           ? activeAccess
@@ -183,7 +183,7 @@ export async function queryExpertTasks(
               ? 'PRODUCTION_TASK'
               : 'STANDARD_TRAINING'
             : null
-          : needWrittenExam && !submitted
+          : needWrittenExam && !finishedExam
             ? 'ENTRANCE_EXAM'
             : null;
     }

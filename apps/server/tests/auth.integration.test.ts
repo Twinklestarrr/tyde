@@ -1,3 +1,4 @@
+import { ExamCandidateCommandService } from '../src/modules/entrance-exams/exam-candidate-command.service.js';
 import { ProjectMaterialsService } from '../src/modules/projects/project-materials.service.js';
 import { ExamAutoService } from '../src/modules/entrance-exams/exam-auto.service.js';
 import {
@@ -9232,4 +9233,672 @@ test('expert response written exam opens expert rounds without creating attempts
     [f.owner.user.id, f.individual.user.id].sort(),
   );
   expect(rounds.every((r) => r.participated === false)).toBe(true);
+});
+
+async function examCandidateFixture() {
+  const f = await expertResponseFixture(true);
+  const exam = await db.projectEntranceExam.create({
+    data: {
+      projectId: f.projectId,
+      examNo: 'candidate-entry',
+      examName: '入场考试',
+      createdBy: f.user.uid,
+    },
+  });
+  const version = await db.entranceExamVersion.create({
+    data: {
+      examId: exam.id,
+      versionNo: 1,
+      examNameSnapshot: exam.examName,
+      durationMinutes: 60,
+      registrationDeadline: new Date('2099-01-01T00:00:00Z'),
+      fullScore: 20,
+      passScore: 12,
+      publishedBy: f.user.uid,
+      publishedAt: new Date(),
+      createdBy: f.user.uid,
+      papers: {
+        create: {
+          sequenceNo: 1,
+          paperName: '固定卷',
+          totalScore: 20,
+          createdBy: f.user.uid,
+          questions: {
+            create: {
+              sequenceNo: 1,
+              questionContent: '请作答',
+              referenceAnswer: '不得泄露',
+              score: 20,
+              createdBy: f.user.uid,
+            },
+          },
+        },
+      },
+    },
+  });
+  await db.projectEntranceExam.update({
+    where: { id: exam.id },
+    data: { currentVersionId: version.id },
+  });
+  expect((await f.respond(f.personal.id)).statusCode).toBe(200);
+  const enter = (headers = f.individual.headers) =>
+    post('/entrance-exams/enter', { projectId: f.projectId }, headers);
+  const current = (headers = f.individual.headers) =>
+    app.inject({
+      method: 'GET',
+      url: `/api/v1/entrance-exams/current?projectId=${f.projectId}`,
+      headers,
+    });
+  return { ...f, exam, version, enter, current };
+}
+
+test('exam candidate entry serializes concurrent binding and preserves original paper after edit and close without admitting member', async () => {
+  const f = await examCandidateFixture();
+  expect((await f.current()).json().data.status).toBe('NOT_EXAMINED');
+  const before = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const responses = await Promise.all([f.enter(), f.enter(), f.enter()]);
+  for (const r of responses) expect(r.statusCode, r.body).toBe(200);
+  const data = responses[0]!.json().data;
+  expect(responses.map((r) => r.json().data)).toEqual([data, data, data]);
+  expect(JSON.stringify(data)).not.toContain('不得泄露');
+  expect(await db.entranceExamAttempt.count()).toBe(1);
+  expect(await db.entranceExamAnswer.count()).toBe(0);
+  expect(await db.entranceExamGradingRecord.count()).toBe(0);
+  expect(await db.projectMember.count({ where: { projectId: f.projectId } })).toBe(0);
+  expect(await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).toEqual(before);
+  const v2 = await db.entranceExamVersion.create({
+    data: {
+      examId: f.exam.id,
+      versionNo: 2,
+      examNameSnapshot: '新版本',
+      durationMinutes: null,
+      registrationDeadline: new Date('2099-01-01Z'),
+      fullScore: 40,
+      passScore: 30,
+      publishedBy: f.user.uid,
+      publishedAt: new Date(),
+      createdBy: f.user.uid,
+    },
+  });
+  await db.projectEntranceExam.update({
+    where: { id: f.exam.id },
+    data: { currentVersionId: v2.id, status: 'CLOSED' },
+  });
+  expect((await f.enter()).json().data).toEqual(data);
+  expect((await f.current()).json().data.status).toBe('NOT_PASSED');
+  await db.entranceExamAttempt.update({
+    where: { id: data.attemptId },
+    data: { submittedAt: new Date(), gradingStatus: 'PENDING' },
+  });
+  expect((await f.enter()).statusCode).toBe(409);
+  expect((await f.current()).json().data.status).toBe('PENDING');
+  await db.entranceExamAttempt.update({
+    where: { id: data.attemptId },
+    data: { finalResult: 'ADMITTED', finalDecidedAt: new Date() },
+  });
+  expect((await f.current()).json().data.status).toBe('PASSED');
+});
+
+test('exam candidate entry validates organization precedence, supervisor, departure and unchanged source binding', async () => {
+  const f = await examCandidateFixture();
+  expect(
+    (
+      await f.respond(
+        f.orgAssignment.id,
+        { decision: 'ACCEPT', projectOwnerUserIds: [f.individual.user.id] },
+        f.owner.headers,
+      )
+    ).statusCode,
+  ).toBe(200);
+  expect((await f.enter(f.owner.headers)).statusCode).toBe(403);
+  const result = await f.enter();
+  expect(result.statusCode, result.body).toBe(200);
+  const a = await db.entranceExamAttempt.findUniqueOrThrow({
+    where: { id: result.json().data.attemptId },
+  });
+  expect(a).toMatchObject({
+    sourceBizId: f.orgAssignment.id,
+    organizationId: f.organization.id,
+    userOrgRelId: f.rel.id,
+    gradingStatus: 'NOT_STARTED',
+  });
+  await db.userOrgRel.update({ where: { id: f.rel.id }, data: { joinStatus: 'LEFT' } });
+  // 个人接单仍有效，但不能把原组织答卷绑定静默改成个人。
+  expect((await f.enter()).statusCode).toBe(403);
+  await db.userOrgRel.update({ where: { id: f.rel.id }, data: { joinStatus: 'ACTIVE' } });
+  expect((await f.enter()).statusCode).toBe(200);
+  await db.entranceExamAttempt.update({ where: { id: a.id }, data: { cancelledAt: new Date() } });
+  expect((await f.enter()).statusCode).toBe(400);
+  await post('/auth/switch-role', { role: 'PM' }, f.individual.headers);
+  expect((await f.current()).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'EXPERT' }, f.individual.headers);
+  await db.project.update({ where: { id: f.projectId }, data: { deleted: true } });
+  expect((await f.current()).statusCode).toBe(404);
+});
+
+test('exam candidate entry rolls binding back on invalid paper and rejects missing, expired and exempt exams', async () => {
+  const f = await examCandidateFixture();
+  await db.entranceExamQuestion.deleteMany({ where: { paper: { examVersionId: f.version.id } } });
+  const failed = await f.enter();
+  expect(failed.statusCode, failed.body).toBe(500);
+  expect(await db.entranceExamAttempt.count()).toBe(0);
+  await db.entranceExamVersion.update({
+    where: { id: f.version.id },
+    data: { registrationDeadline: new Date(0) },
+  });
+  expect((await f.enter()).statusCode).toBe(400);
+  await db.projectEntranceExam.update({ where: { id: f.exam.id }, data: { deleted: true } });
+  expect((await f.enter()).statusCode).toBe(404);
+  await db.projectProductionPlan.update({
+    where: { projectId: f.projectId },
+    data: { needWrittenExam: false },
+  });
+  expect((await f.enter()).statusCode).toBe(400);
+  expect((await f.current()).json().data.status).toBe('NOT_EXAMINED');
+});
+
+async function candidateSubmissionFixture(firstMode: 'MANUAL' | 'AUTO' = 'MANUAL') {
+  const f = await examCandidateFixture();
+  // 选答只影响是否必须作答；每题仍须正分，完整试卷分值合计保持20。
+  const required = await db.entranceExamQuestion.findFirstOrThrow({
+    where: { paper: { examVersionId: f.version.id } },
+  });
+  await db.entranceExamQuestion.update({ where: { id: required.id }, data: { score: 10 } });
+  const optional = await db.entranceExamQuestion.create({
+    data: {
+      paperId: required.paperId,
+      sequenceNo: 2,
+      questionContent: '选答',
+      score: 10,
+      requiredFlag: false,
+      createdBy: f.user.uid,
+    },
+  });
+  const rounds = [];
+  for (const [index, mode] of [firstMode, firstMode === 'AUTO' ? 'MANUAL' : 'AUTO'].entries()) {
+    rounds.push(
+      await db.entranceExamGradingRound.create({
+        data: {
+          examVersionId: f.version.id,
+          roundNo: index + 1,
+          gradingMode: mode,
+          reviewersJson: [{ userId: f.manager.user.id }],
+          toolCode: mode === 'AUTO' ? 'mock' : null,
+          createdBy: f.user.uid,
+        },
+      }),
+    );
+  }
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const paper = entered.json().data;
+  const questionId = paper.questions[0].questionId as number;
+  expect(paper.questions.map((q: { score: number }) => q.score)).toEqual([10, 10]);
+  expect(paper.questions.reduce((total: number, q: { score: number }) => total + q.score, 0)).toBe(
+    paper.fullScore,
+  );
+  const input = {
+    projectId: f.projectId,
+    attemptId: paper.attemptId,
+    integritySigned: true,
+    answers: [{ questionId, answerContent: '完整答案' }],
+  };
+  const submitExam = (patch = {}, headers = f.individual.headers) =>
+    post('/entrance-exams/submit', { ...input, ...patch }, headers);
+  const cancelExam = (headers = f.individual.headers) =>
+    post('/entrance-exams/cancel', { projectId: f.projectId, attemptId: paper.attemptId }, headers);
+  return { ...f, paper, questionId, optional, rounds, input, submitExam, cancelExam };
+}
+
+test('exam candidate submission concurrent complete paper preserves closed historical rounds through manual and signed mock admission', async () => {
+  const f = await candidateSubmissionFixture();
+  const project = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const v2 = await db.entranceExamVersion.create({
+    data: {
+      examId: f.exam.id,
+      versionNo: 2,
+      examNameSnapshot: '新配置',
+      registrationDeadline: new Date('2099-01-01Z'),
+      fullScore: 100,
+      passScore: 99,
+      publishedBy: f.user.uid,
+      publishedAt: new Date(),
+      createdBy: f.user.uid,
+    },
+  });
+  await db.projectEntranceExam.update({
+    where: { id: f.exam.id },
+    data: { currentVersionId: v2.id, status: 'CLOSED' },
+  });
+  const responses = await Promise.all([f.submitExam(), f.submitExam()]);
+  expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  expect(responses.find((r) => r.statusCode === 200)!.json().data).toMatchObject({
+    attemptId: f.paper.attemptId,
+    answerCount: 2,
+    gradingRoundCount: 2,
+    gradingStatus: 'PENDING',
+  });
+  const answers = await db.entranceExamAnswer.findMany({
+    where: { attemptId: f.paper.attemptId },
+    orderBy: { questionId: 'asc' },
+  });
+  expect(answers).toHaveLength(2);
+  expect(answers.find((a) => a.questionId === f.optional.id)).toMatchObject({
+    answeredFlag: false,
+    answerContent: null,
+  });
+  const records = await db.entranceExamGradingRecord.findMany({
+    where: { attemptId: f.paper.attemptId },
+    include: { items: true },
+    orderBy: { id: 'asc' },
+  });
+  expect(records.map((r) => [r.examVersionId, r.status, r.items.length])).toEqual([
+    [f.version.id, 'PENDING', 2],
+    [f.version.id, 'WAITING', 2],
+  ]);
+  for (const record of records)
+    for (const item of record.items)
+      expect(answers.find((a) => a.id === item.answerId)).toMatchObject({
+        attemptId: item.attemptId,
+        questionId: item.questionId,
+        paperId: f.paper.paperId,
+      });
+  expect((await f.current()).json().data.status).toBe('PENDING');
+  expect(await db.projectMember.count({ where: { projectId: f.projectId } })).toBe(0);
+  expect(
+    await db.projectTaskRound.count({
+      where: {
+        projectId: f.projectId,
+        userId: f.individual.user.id,
+        taskType: 'ENTRANCE_EXAM',
+        status: 'COMPLETED',
+        participated: true,
+      },
+    }),
+  ).toBe(1);
+  expect(
+    await db.projectTaskRound.count({
+      where: {
+        projectId: f.projectId,
+        userId: f.manager.user.id,
+        taskType: 'ENTRANCE_EXAM_GRADING',
+        status: 'OPEN',
+      },
+    }),
+  ).toBe(2); // NAVIGATOR/PM两种会话待办
+  const items = answers.map((a) => ({ questionId: a.questionId, correctness: 'CORRECT' }));
+  const manual = await post(
+    '/entrance-exams/grading/manual',
+    {
+      projectId: f.projectId,
+      examId: f.exam.id,
+      attemptId: f.paper.attemptId,
+      gradingRecordId: records[0]!.id,
+      items,
+    },
+    f.manager.headers,
+  );
+  expect(manual.statusCode, manual.body).toBe(200);
+  expect(manual.json().data.finalResult).toBe('PENDING');
+  const auto = new ExamAutoService(db),
+    claim = await auto.claim(records[1]!.id);
+  expect(claim).not.toBeNull();
+  const callback = await autoHttpCallback({ ...claim!, status: 'SUCCEEDED', items });
+  expect(callback.statusCode, callback.body).toBe(200);
+  expect(callback.json().data.finalResult).toBe('ADMITTED');
+  expect((await f.current()).json().data.status).toBe('PASSED');
+  expect(
+    await db.projectMember.findUnique({ where: { admissionAttemptId: f.paper.attemptId } }),
+  ).toMatchObject({
+    projectId: f.projectId,
+    expertAssignmentId: f.personal.id,
+    status: 'PENDING_CONFIRM',
+    joinedAt: null,
+  });
+  expect(await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).toEqual(project);
+  expect((await f.enter()).statusCode).toBe(409);
+  expect((await f.cancelExam()).statusCode).toBe(409);
+});
+
+test('exam candidate submission AUTO first uses explicit mock failure retry and manual elimination without granting entry', async () => {
+  const f = await candidateSubmissionFixture('AUTO');
+  const submitted = await f.submitExam();
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  const records = await db.entranceExamGradingRecord.findMany({
+    where: { attemptId: f.paper.attemptId },
+    orderBy: { id: 'asc' },
+  });
+  const first = records[0]!,
+    second = records[1]!;
+  const outbox = await db.projectEventOutbox.findFirstOrThrow({
+    where: { projectId: f.projectId, eventType: 'EXAM_AUTO_DISPATCH_REQUESTED' },
+  });
+  expect(outbox.payload).toMatchObject({
+    gradingRecordId: first.id,
+    provider: 'mock',
+    executionStatus: 'NOT_EXECUTED',
+  });
+  const auto = new ExamAutoService(db),
+    claim = await auto.claim(first.id);
+  const failed = await autoHttpCallback({ ...claim!, status: 'FAILED', errorMessage: '模拟失败' });
+  expect(failed.statusCode, failed.body).toBe(200);
+  expect(
+    (await db.entranceExamGradingRecord.findUniqueOrThrow({ where: { id: second.id } })).status,
+  ).toBe('WAITING');
+  const retried = await post(
+    '/entrance-exams/grading/retry',
+    { projectId: f.projectId, examId: f.exam.id, gradingRecordId: first.id },
+    f.manager.headers,
+  );
+  expect(retried.statusCode, retried.body).toBe(200);
+  const nextClaim = await auto.claim(first.id);
+  const items = [f.questionId, f.optional.id].map((questionId) => ({
+    questionId,
+    correctness: 'INCORRECT' as const,
+  }));
+  const completed = await autoHttpCallback({ ...nextClaim!, status: 'SUCCEEDED', items });
+  expect(completed.statusCode, completed.body).toBe(200);
+  const manual = await post(
+    '/entrance-exams/grading/manual',
+    {
+      projectId: f.projectId,
+      examId: f.exam.id,
+      attemptId: f.paper.attemptId,
+      gradingRecordId: second.id,
+      items,
+    },
+    f.manager.headers,
+  );
+  expect(manual.statusCode, manual.body).toBe(200);
+  expect(manual.json().data.finalResult).toBe('ELIMINATED');
+  expect((await f.current()).json().data.status).toBe('NOT_PASSED');
+  expect(await db.projectMember.count({ where: { projectId: f.projectId } })).toBe(0);
+});
+
+test('exam candidate submission and cancellation serialize to one winner and timeout still permits final cancellation without answers', async () => {
+  const f = await candidateSubmissionFixture();
+  const results = await Promise.all([f.submitExam(), f.cancelExam()]);
+  expect(results.filter((r) => r.statusCode === 200)).toHaveLength(1);
+  const attempt = await db.entranceExamAttempt.findUniqueOrThrow({
+    where: { id: f.paper.attemptId },
+  });
+  expect(Boolean(attempt.submittedAt)).not.toBe(Boolean(attempt.cancelledAt));
+  expect(await db.entranceExamAnswer.count()).toBe(attempt.submittedAt ? 2 : 0);
+  expect(await db.entranceExamGradingRecord.count()).toBe(attempt.submittedAt ? 2 : 0);
+  expect((await f.cancelExam()).statusCode).toBe(attempt.submittedAt ? 409 : 400);
+  expect((await f.enter()).statusCode).toBe(attempt.submittedAt ? 409 : 400);
+  // 第二位有效个人接单考生单独验证超时取消，不篡改前一应试终态。
+  const other = await projectManagerAccount(8);
+  await post('/auth/switch-role', { role: 'EXPERT' }, other.headers);
+  await db.projectExpertAssignment.create({
+    data: {
+      assignmentNo: 'candidate-timeout',
+      projectId: f.projectId,
+      subjectType: 'INDIVIDUAL',
+      expertUserId: other.user.id,
+      status: 'ACCEPTED',
+      createdBy: f.user.uid,
+    },
+  });
+  const entered = await f.enter(other.headers);
+  expect(entered.statusCode, entered.body).toBe(200);
+  const attemptId = entered.json().data.attemptId;
+  await db.entranceExamAttempt.update({
+    where: { id: attemptId },
+    data: { answerDeadlineAt: new Date(0) },
+  });
+  expect((await f.submitExam({ attemptId }, other.headers)).statusCode).toBe(400);
+  const cancelled = await post(
+    '/entrance-exams/cancel',
+    { projectId: f.projectId, attemptId },
+    other.headers,
+  );
+  expect(cancelled.statusCode, cancelled.body).toBe(200);
+  expect((await f.enter(other.headers)).statusCode).toBe(400);
+  expect(await db.entranceExamAnswer.count({ where: { attemptId } })).toBe(0);
+  const tasks = await post('/expert-assignments/my-tasks', {}, other.headers);
+  expect(tasks.statusCode, tasks.body).toBe(200);
+  expect(JSON.stringify(tasks.json().data)).not.toContain('ENTRANCE_EXAM');
+});
+
+test('exam candidate submission rejects foreign owners incomplete answers role and replaced organization without any saved work', async () => {
+  const f = await candidateSubmissionFixture();
+  for (const patch of [
+    { integritySigned: false },
+    { answers: [] },
+    { answers: [{ questionId: f.optional.id, answerContent: '选答' }] },
+    {
+      answers: [
+        { questionId: f.questionId, answerContent: 'x' },
+        { questionId: f.questionId, answerContent: 'y' },
+      ],
+    },
+    { answers: [{ questionId: f.questionId + 99999, answerContent: 'foreign' }] },
+  ]) {
+    const result = await f.submitExam(patch);
+    expect(result.statusCode, result.body).toBe(400);
+  }
+  expect((await f.submitExam({}, f.owner.headers)).statusCode).toBe(403);
+  expect((await f.submitExam({}, f.manager.headers)).statusCode).toBe(403);
+  const accepted = await f.respond(
+    f.orgAssignment.id,
+    { decision: 'ACCEPT', projectOwnerUserIds: [f.individual.user.id] },
+    f.owner.headers,
+  );
+  expect(accepted.statusCode, accepted.body).toBe(200);
+  // 仍有个人接单，但原个人卷不能换绑到新组织身份。
+  expect((await f.submitExam()).statusCode).toBe(403);
+  expect((await f.cancelExam()).statusCode).toBe(403);
+  expect(await db.entranceExamAnswer.count()).toBe(0);
+  expect(await db.entranceExamGradingRecord.count()).toBe(0);
+  expect(
+    (await db.entranceExamAttempt.findUniqueOrThrow({ where: { id: f.paper.attemptId } }))
+      .submittedAt,
+  ).toBeNull();
+});
+
+async function candidateAnswerUpload(ownerUid: string, suffix: string) {
+  const key = `entrance-exam-attachment/2026/10/23/candidate-${suffix}.txt`,
+    body = Buffer.from('answer');
+  await storage.put(key, body, 'text/plain');
+  return registry.register(
+    {
+      objectKey: key,
+      fileName: '答卷.txt',
+      extension: 'txt',
+      contentType: 'text/plain',
+      fileSize: body.length,
+      fileHash: 'b'.repeat(64),
+    },
+    'ENTRANCE_EXAM_ATTACHMENT',
+    'PROJECT_ATTACHMENT',
+    ownerUid,
+  );
+}
+test('exam candidate submission claims own answer files and isolates candidate reference files and managed organization scopes', async () => {
+  const f = await candidateSubmissionFixture();
+  // 以独立组织考生进入，主管及项目负责人均可按组织职责查看答卷附件。
+  expect(
+    (
+      await f.respond(
+        f.orgAssignment.id,
+        { decision: 'ACCEPT', projectOwnerUserIds: [f.individual.user.id] },
+        f.owner.headers,
+      )
+    ).statusCode,
+  ).toBe(200);
+  const candidate = await projectManagerAccount(8);
+  await post('/auth/switch-role', { role: 'EXPERT' }, candidate.headers);
+  await db.userOrgRel.create({
+    data: {
+      userId: candidate.user.id,
+      uid: candidate.user.uid,
+      orgId: f.organization.id,
+      joinStatus: 'ACTIVE',
+    },
+  });
+  expect(
+    (await f.respond(f.orgAssignment.id, { decision: 'ACCEPT' }, candidate.headers)).statusCode,
+  ).toBe(200);
+  const entered = await f.enter(candidate.headers);
+  expect(entered.statusCode, entered.body).toBe(200);
+  const attemptId = entered.json().data.attemptId;
+  const own = await candidateAnswerUpload(candidate.user.uid, 'own');
+  const reference = await candidateAnswerUpload(f.manager.user.uid, 'reference');
+  await db.$transaction(async (tx) => {
+    await registry.claimForEntranceExam(
+      tx,
+      reference.record.objectKey,
+      reference.uploadToken,
+      f.manager.user.uid,
+      String(f.exam.id),
+    );
+    await tx.entranceExamQuestion.update({
+      where: { id: f.questionId },
+      data: { referenceFilesJson: [{ objectKey: reference.record.objectKey }] },
+    });
+  });
+  const view = (key: string, headers: Record<string, string>) =>
+    app.inject({ url: `/api/v1/files/view?objectKey=${encodeURIComponent(key)}`, headers });
+  const answerFiles = [
+    { objectKey: own.record.objectKey, uploadToken: own.uploadToken, fileName: '伪造元数据' },
+  ];
+  expect(
+    (
+      await f.submitExam(
+        {
+          attemptId,
+          answers: [
+            { questionId: f.questionId, answerFiles: [{ ...answerFiles[0], uploadToken: 'bad' }] },
+          ],
+        },
+        candidate.headers,
+      )
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await f.submitExam(
+        {
+          attemptId,
+          answers: [
+            {
+              questionId: f.questionId,
+              answerFiles: [
+                { objectKey: reference.record.objectKey, uploadToken: reference.uploadToken },
+              ],
+            },
+          ],
+        },
+        candidate.headers,
+      )
+    ).statusCode,
+  ).toBe(409);
+  const response = await f.submitExam(
+    { attemptId, answers: [{ questionId: f.questionId, answerFiles }] },
+    candidate.headers,
+  );
+  expect(response.statusCode, response.body).toBe(200);
+  const answer = await db.entranceExamAnswer.findFirstOrThrow({
+    where: { attemptId, questionId: f.questionId },
+  });
+  expect(answer).toMatchObject({
+    answerContent: null,
+    answeredFlag: true,
+    answerFilesJson: [{ objectKey: own.record.objectKey, fileName: '答卷.txt' }],
+  });
+  for (const account of [candidate, f.owner, f.individual, f.manager]) {
+    const result = await view(own.record.objectKey, account.headers);
+    expect(result.statusCode, result.body).toBe(200);
+  }
+  expect((await view(reference.record.objectKey, candidate.headers)).statusCode).toBe(403);
+  expect((await view(reference.record.objectKey, f.owner.headers)).statusCode).toBe(403);
+  const outsider = await projectManagerAccount(9);
+  await post('/auth/switch-role', { role: 'EXPERT' }, outsider.headers);
+  expect((await view(own.record.objectKey, outsider.headers)).statusCode).toBe(403);
+  await db.userOrgRel.updateMany({
+    where: { userId: candidate.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await view(own.record.objectKey, candidate.headers)).statusCode).toBe(403);
+  await db.userOrgRel.update({ where: { id: f.rel.id }, data: { joinStatus: 'LEFT' } });
+  expect((await view(own.record.objectKey, f.individual.headers)).statusCode).toBe(403);
+});
+
+test('exam candidate submission and cancellation outbox faults roll back answers claims rounds tasks and attempt atomically', async () => {
+  const f = await candidateSubmissionFixture();
+  const upload = await candidateAnswerUpload(f.individual.user.uid, 'rollback');
+  const snapshot = async () => ({
+    attempt: await db.entranceExamAttempt.findUniqueOrThrow({ where: { id: f.paper.attemptId } }),
+    file: await db.uploadedFile.findUniqueOrThrow({ where: { id: upload.record.id } }),
+    rounds: await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId },
+      orderBy: { id: 'asc' },
+    }),
+    snapshots: await db.projectRoleNodeSnapshot.findMany({
+      where: { projectId: f.projectId },
+      orderBy: { id: 'asc' },
+    }),
+    events: await db.projectEventOutbox.count(),
+  });
+  const before = await snapshot();
+  const failing = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction((tx) =>
+            fn(
+              new Proxy(tx, {
+                get(t, k) {
+                  if (k === 'projectEventOutbox')
+                    return {
+                      ...t.projectEventOutbox,
+                      create: async () => {
+                        throw new Error('candidate outbox failure');
+                      },
+                    };
+                  return Reflect.get(t, k);
+                },
+              }),
+            ),
+          );
+      return Reflect.get(target, key);
+    },
+  });
+  const service = new ExamCandidateCommandService(failing, registry);
+  const principal = {
+    userId: f.individual.user.id,
+    uid: f.individual.user.uid,
+    role: 'EXPERT' as const,
+    sessionId: 'unused',
+    clientType: 'desktop' as const,
+  };
+  await expect(
+    service.submit(
+      {
+        ...f.input,
+        answers: [
+          {
+            questionId: f.questionId,
+            answerFiles: [{ objectKey: upload.record.objectKey, uploadToken: upload.uploadToken }],
+          },
+        ],
+      },
+      principal,
+    ),
+  ).rejects.toThrow('candidate outbox failure');
+  expect(await snapshot()).toEqual(before);
+  expect(await db.entranceExamAnswer.count()).toBe(0);
+  expect(await db.entranceExamGradingRecord.count()).toBe(0);
+  await expect(service.cancel(f.input, principal)).rejects.toThrow('candidate outbox failure');
+  expect(await snapshot()).toEqual(before);
+  const result = await f.submitExam({
+    answers: [
+      {
+        questionId: f.questionId,
+        answerFiles: [{ objectKey: upload.record.objectKey, uploadToken: upload.uploadToken }],
+      },
+    ],
+  });
+  expect(result.statusCode, result.body).toBe(200);
 });

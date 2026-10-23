@@ -108,6 +108,17 @@ test('expert tasks use latest member fact and never revive prior training for ex
   expect(await f.service.myTasks({}, principal)).toEqual([]);
   f.project.productionPlan.needWrittenExam = true;
   expect((await f.service.myTasks({}, principal))[0].branchNodeCode).toBe('ENTRANCE_EXAM');
+  expect(f.tx.entranceExamAttempt.findMany).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        OR: [{ submittedAt: { not: null } }, { cancelledAt: { not: null } }],
+      }),
+    }),
+  );
+  f.tx.entranceExamAttempt.findMany.mockResolvedValue([
+    { cancelledAt: new Date(), exam: { projectId: 10 } },
+  ]);
+  expect(await f.service.myTasks({}, principal)).toEqual([]);
   f.tx.entranceExamAttempt.findMany.mockResolvedValue([{ exam: { projectId: 10 } }]);
   expect(await f.service.myTasks({}, principal)).toEqual([]);
   const current = {

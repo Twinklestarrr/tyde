@@ -1,3 +1,10 @@
+import type {
+  ExamCandidateCommandService,
+  CandidateAttemptInput,
+  CandidateSubmitInput,
+} from './exam-candidate-command.service.js';
+import type { ExamCandidateService } from './exam-candidate.service.js';
+import { candidateCommandSchema, candidateSchema } from './exam-candidate.schema.js';
 import type { ExamAutoService } from './exam-auto.service.js';
 import type { AutoRetryInput, AutoCompensateInput } from './exam-auto.types.js';
 import { autoRetrySchema, autoCompensateSchema } from './exam-auto.schema.js';
@@ -37,6 +44,8 @@ export async function examManagementRoutes(
   queries: ExamQueryService,
   gradings: ExamGradingCommandService,
   auto: ExamAutoService,
+  candidates: ExamCandidateService,
+  candidateCommands: ExamCandidateCommandService,
 ) {
   await parent.register(async (app) => {
     const identities = new WeakMap<FastifyRequest, AuthPrincipal>();
@@ -61,6 +70,42 @@ export async function examManagementRoutes(
           : req.cookies[config.cookieSecure ? '__Host-tyde_session' : 'tyde_session'];
       identities.set(req, await auth.authenticate(token, client));
     });
+    app.get<{ Querystring: { projectId: string } }>(
+      `${API_PREFIX}/entrance-exams/current`,
+      { schema: candidateSchema(false) },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await candidates.current(Number(req.query.projectId), identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: { projectId: number } }>(
+      `${API_PREFIX}/entrance-exams/enter`,
+      { schema: candidateSchema(true) },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await candidates.enter(req.body.projectId, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: CandidateSubmitInput }>(
+      `${API_PREFIX}/entrance-exams/submit`,
+      { schema: candidateCommandSchema(true), bodyLimit: 2 * 1024 * 1024 },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await candidateCommands.submit(req.body, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: CandidateAttemptInput }>(
+      `${API_PREFIX}/entrance-exams/cancel`,
+      { schema: candidateCommandSchema(false) },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await candidateCommands.cancel(req.body, identities.get(req)!),
+      }),
+    );
     app.get<{
       Querystring: Omit<ExamAdmissionInput, 'projectId' | 'current' | 'size'> & {
         projectId: string;
