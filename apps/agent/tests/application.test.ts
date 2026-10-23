@@ -5,7 +5,7 @@ import { createApp } from '../src/application.js';
 import { readConfig } from '../src/config.js';
 
 test('健康检查返回真实进程状态，OpenAPI 包含同一接口和中文字段说明', async (t) => {
-  const app = await createApp(readConfig({ NODE_ENV: 'test' }));
+  const app = await createApp(readConfig({ NODE_ENV: 'test', AGENT_STORAGE_MODE: 'memory' }));
   t.after(() => app.close());
 
   const response = await app.inject({ method: 'GET', url: AGENT_HEALTH_PATH });

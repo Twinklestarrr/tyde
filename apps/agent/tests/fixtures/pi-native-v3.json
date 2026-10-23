@@ -1,0 +1,280 @@
+{
+  "header": {
+    "type": "session",
+    "version": 3,
+    "id": "01a16400-a986-7656-9b72-413701e2fc87",
+    "timestamp": "2026-10-22T14:25:27.431Z",
+    "cwd": "/isolated/native-fixture"
+  },
+  "entries": [
+    {
+      "type": "model_change",
+      "id": "11123510",
+      "parentId": null,
+      "timestamp": "2026-10-22T14:25:27.432Z",
+      "provider": "openai-compatible",
+      "modelId": "isolated-model"
+    },
+    {
+      "type": "thinking_level_change",
+      "id": "4a7a9f6d",
+      "parentId": "11123510",
+      "timestamp": "2026-10-22T14:25:27.432Z",
+      "thinkingLevel": "off"
+    },
+    {
+      "type": "message",
+      "id": "cca130f5",
+      "parentId": "4a7a9f6d",
+      "timestamp": "2026-10-22T14:25:27.432Z",
+      "message": {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "Only use the explicitly supplied read-only fixture."
+          }
+        ],
+        "sections": {
+          "host": "isolated",
+          "removed": null
+        },
+        "toolsAdded": [],
+        "timestamp": 1
+      }
+    },
+    {
+      "type": "message",
+      "id": "dea8eeb9",
+      "parentId": "cca130f5",
+      "timestamp": "2026-10-22T14:25:27.432Z",
+      "message": {
+        "role": "user",
+        "content": "remember amber",
+        "timestamp": 2
+      }
+    },
+    {
+      "type": "message",
+      "id": "afdc3199",
+      "parentId": "dea8eeb9",
+      "timestamp": "2026-10-22T14:25:27.432Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Use the isolated fixture",
+            "thinkingSignature": "opaque"
+          },
+          {
+            "type": "toolCall",
+            "id": "call-fixture",
+            "name": "readonly_fixture",
+            "arguments": {
+              "value": 0
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "openai-compatible",
+        "model": "isolated-model",
+        "usage": {
+          "input": 3,
+          "output": 4,
+          "cacheRead": 1,
+          "cacheWrite": 0,
+          "totalTokens": 8,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "responseId": "response-fixture",
+        "timestamp": 3
+      }
+    },
+    {
+      "type": "message",
+      "id": "52610b9a",
+      "parentId": "afdc3199",
+      "timestamp": "2026-10-22T14:25:27.432Z",
+      "message": {
+        "role": "toolResult",
+        "toolCallId": "call-fixture",
+        "toolName": "readonly_fixture",
+        "content": [
+          {
+            "type": "text",
+            "text": "amber"
+          }
+        ],
+        "details": {
+          "array": [
+            false,
+            null,
+            0,
+            {
+              "preserved": true
+            }
+          ]
+        },
+        "isError": false,
+        "timestamp": 4
+      }
+    },
+    {
+      "type": "custom",
+      "customType": "isolated.state",
+      "data": {
+        "nested": {
+          "zero": 0
+        },
+        "custom": ["a", null]
+      },
+      "id": "2efd2db0",
+      "parentId": "52610b9a",
+      "timestamp": "2026-10-22T14:25:27.432Z"
+    },
+    {
+      "type": "custom_message",
+      "customType": "isolated.context",
+      "content": "fixture context",
+      "display": false,
+      "details": {
+        "private": false
+      },
+      "id": "876215c5",
+      "parentId": "2efd2db0",
+      "timestamp": "2026-10-22T14:25:27.432Z"
+    },
+    {
+      "type": "context_edit",
+      "id": "96622c16",
+      "parentId": "876215c5",
+      "timestamp": "2026-10-22T14:25:27.433Z",
+      "targetId": "dea8eeb9",
+      "replacement": {
+        "content": "remember amber, edited"
+      }
+    },
+    {
+      "type": "usage",
+      "id": "bf3d5c8b",
+      "parentId": "96622c16",
+      "timestamp": "2026-10-22T14:25:27.433Z",
+      "kind": "fixture",
+      "provider": "openai-compatible",
+      "model": "isolated-model",
+      "usage": {
+        "input": 3,
+        "output": 4,
+        "cacheRead": 1,
+        "cacheWrite": 0,
+        "totalTokens": 8,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "note": "native usage"
+    },
+    {
+      "type": "label",
+      "id": "aee945fb",
+      "parentId": "bf3d5c8b",
+      "timestamp": "2026-10-22T14:25:27.433Z",
+      "targetId": "dea8eeb9",
+      "label": "before-branch"
+    },
+    {
+      "type": "session_info",
+      "id": "5737b89c",
+      "parentId": "aee945fb",
+      "timestamp": "2026-10-22T14:25:27.433Z",
+      "name": "Native fixture"
+    },
+    {
+      "type": "compaction",
+      "id": "19b9b106",
+      "parentId": "5737b89c",
+      "timestamp": "2026-10-22T14:25:27.433Z",
+      "summary": "native summary",
+      "firstKeptEntryId": "19b9b106",
+      "tokensBefore": 20,
+      "details": {
+        "marker": "compacted"
+      },
+      "usage": {
+        "input": 3,
+        "output": 4,
+        "cacheRead": 1,
+        "cacheWrite": 0,
+        "totalTokens": 8,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "fromHook": true,
+      "systemMessage": {
+        "role": "system",
+        "content": "Only use the explicitly supplied read-only fixture.",
+        "sections": {
+          "host": "isolated"
+        },
+        "timestamp": 1792679127433
+      }
+    },
+    {
+      "type": "branch_summary",
+      "id": "c0fb8b13",
+      "parentId": "dea8eeb9",
+      "timestamp": "2026-10-22T14:25:27.433Z",
+      "fromId": "dea8eeb9",
+      "summary": "abandoned fixture branch",
+      "details": {
+        "preserved": true
+      },
+      "usage": {
+        "input": 3,
+        "output": 4,
+        "cacheRead": 1,
+        "cacheWrite": 0,
+        "totalTokens": 8,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "fromHook": true
+    },
+    {
+      "type": "custom",
+      "customType": "isolated.second-root",
+      "data": {
+        "root": 2
+      },
+      "id": "b530d7e1",
+      "parentId": null,
+      "timestamp": "2026-10-22T14:25:27.433Z"
+    }
+  ],
+  "leafId": "dea8eeb9",
+  "sdkVersion": "1.3.0",
+  "nativeFormatVersion": 3,
+  "runtimeVersion": "tyde-pi-native-v1"
+}

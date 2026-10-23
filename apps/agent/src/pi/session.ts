@@ -1,4 +1,5 @@
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core';
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import {
   createAssistantMessageEventStream,
@@ -18,9 +19,13 @@ import {
   SettingsManager,
   createExtensionRuntime,
   type ResourceLoader,
-  type SessionEntry,
-  type SessionHeader,
 } from '@earendil-works/pi-coding-agent';
+import {
+  capturePiNativeState,
+  freezePiNativeState,
+  restorePiNativeState,
+  type PiNativeState,
+} from './native-state.js';
 import {
   createMaasTransport,
   createDirectModelTransport,
@@ -31,14 +36,15 @@ import {
   type MaasTool,
 } from '../maas/index.js';
 
-export const PI_SDK_VERSION = '1.3.0';
-export const PI_SOURCE_COMMIT = '71023aec1546d6d677a65669c5665c0927ce0dd0';
+export { PI_SDK_VERSION, PI_SOURCE_COMMIT, type PiNativeState } from './native-state.js';
 
-/** 原生内存树的只读副本；不是持久提交回执或另一种恢复格式。 */
-export interface PiNativeState {
-  header: SessionHeader | null;
-  entries: SessionEntry[];
-  leafId: string | null;
+export interface PiModelCallIdentity {
+  modelRequestId: string;
+}
+export interface PiToolCallIdentity {
+  sourceNativeEntryId: string;
+  toolCallId: string;
+  toolName: string;
 }
 
 export interface TrustedMaasIdentity {
@@ -60,12 +66,16 @@ export interface PiMemoryTool {
 
 /** 后续保存屏障的等待点。拒绝后锁住会话，禁止工具或下一轮模型。 */
 export interface PiMemoryBarriers {
-  beforeModel?(state: PiNativeState): Promise<void>;
+  /** Called before returning the assembled session, including any native setup changes. */
+  afterAssembly?(state: PiNativeState): Promise<void>;
+  /** Exact entries produced by this prompt, captured after the SDK's native append. */
+  afterInput?(state: PiNativeState, input: { nativeEntryIds: readonly string[] }): Promise<void>;
+  beforeModel?(state: PiNativeState, identity: PiModelCallIdentity): Promise<void>;
   /** 授权后、实际模型发送前再次校验资格，不重复计数。 */
-  beforeModelDispatch?(): Promise<void>;
+  beforeModelDispatch?(identity: PiModelCallIdentity): Promise<void>;
   afterAssistant?(state: PiNativeState, message: AssistantMessage): Promise<void>;
-  beforeTool?(state: PiNativeState, toolName: string): Promise<void>;
-  beforeToolDispatch?(): Promise<void>;
+  beforeTool?(state: PiNativeState, toolName: string, identity: PiToolCallIdentity): Promise<void>;
+  beforeToolDispatch?(identity: PiToolCallIdentity): Promise<void>;
   afterTool?(state: PiNativeState): Promise<void>;
   /** 当前 Attempt 的信号和剩余时间；不能缓存为整个 Pi 会话的固定值。 */
   executionSignal?(): AbortSignal;
@@ -79,6 +89,8 @@ interface PiMemoryCommonOptions {
   systemPrompt?: string;
   /** 仅宿主提供的逻辑工作目录；此适配不发现或读取其中的资源。 */
   cwd?: string;
+  /** One fixed committed revision, already read consistently from the authoritative store. */
+  nativeState?: PiNativeState;
 }
 
 export interface PiMemorySessionOptions extends PiMemoryCommonOptions {
@@ -107,6 +119,7 @@ interface NativeMemorySessionOptions extends PiMemoryCommonOptions {
   connect(
     signal: AbortSignal,
     tools: Readonly<Record<string, MaasTool>>,
+    identity: PiModelCallIdentity,
   ): Promise<NativeConnection>;
 }
 class PiConnectionError extends Error {
@@ -210,13 +223,11 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
       },
     ]),
   );
-  const manager = SessionManager.inMemory(options.cwd);
-  const captureNativeState = (): PiNativeState =>
-    structuredClone({
-      header: manager.getHeader(),
-      entries: manager.getEntries(),
-      leafId: manager.getLeafId(),
-    });
+  const manager = options.nativeState
+    ? restorePiNativeState(options.nativeState)
+    : SessionManager.inMemory(options.cwd);
+  const captureNativeState = (): PiNativeState => capturePiNativeState(manager);
+  const saveState = (): PiNativeState => freezePiNativeState(manager);
   const settings = SettingsManager.inMemory({
     compaction: { enabled: false },
     retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } },
@@ -259,8 +270,11 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
   });
   // 只满足原生 Session 的已配置鉴权检查；每次真实发送仍重新解析可信身份与凭据。
   await runtime.setRuntimeApiKey(model.provider, options.bootstrapApiKey);
-  manager.appendModelChange(model.provider, model.id);
-  manager.appendThinkingLevelChange('off');
+  const restored = manager.buildSessionContext();
+  if (restored.model?.provider !== model.provider || restored.model.modelId !== model.id)
+    manager.appendModelChange(model.provider, model.id);
+  if (!options.nativeState || restored.thinkingLevel !== 'off')
+    manager.appendThinkingLevelChange('off');
   let active: ActiveRun | undefined;
   let disposed = false;
   let blocked = false;
@@ -316,11 +330,17 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
     return permitted(run);
   };
   const agent = new Agent({
-    initialState: { model, thinkingLevel: 'off', tools: [], messages: [] },
+    initialState: {
+      model,
+      thinkingLevel: 'off',
+      tools: [],
+      messages: manager.buildSessionContext().messages,
+    },
     toolExecution: 'sequential',
     streamFn: (_requestedModel, transcript, streamOptions) => {
       const output = createAssistantMessageEventStream();
       const run = active;
+      const identity: PiModelCallIdentity = Object.freeze({ modelRequestId: randomUUID() });
       void (async () => {
         let observation: (() => MaasObservation | undefined) | undefined;
         const acceptedText = new Map<number, string>();
@@ -329,7 +349,7 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
             !run ||
             !(await barrier(
               run,
-              () => options.barriers?.beforeModel?.(captureNativeState()) ?? Promise.resolve(),
+              () => options.barriers?.beforeModel?.(saveState(), identity) ?? Promise.resolve(),
             ))
           ) {
             throw new Error('PI_EXECUTION_REVOKED');
@@ -341,7 +361,9 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
           ]);
           let connection: NativeConnection;
           try {
-            connection = await waitForPreparation(run, () => options.connect(signal, toolMap));
+            connection = await waitForPreparation(run, () =>
+              options.connect(signal, toolMap, identity),
+            );
           } catch (cause) {
             if (!run.stopped && !run.failureCode)
               block(
@@ -351,7 +373,12 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
             throw cause;
           }
           if (!permitted(run)) throw new Error('PI_EXECUTION_REVOKED');
-          if (!(await barrier(run, options.barriers?.beforeModelDispatch))) {
+          if (
+            !(await barrier(
+              run,
+              () => options.barriers?.beforeModelDispatch?.(identity) ?? Promise.resolve(),
+            ))
+          ) {
             throw new Error('PI_EXECUTION_REVOKED');
           }
           observation = connection.transport.observation;
@@ -419,6 +446,7 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
       return output;
     },
   });
+  const toolIdentities = new Map<string, PiToolCallIdentity>();
   const hostTools: Record<string, AgentTool> = Object.fromEntries(
     tools.map((tool) => [
       tool.name,
@@ -440,7 +468,15 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
           ) {
             throw new Error('PI_TOOL_EXECUTION_REVOKED');
           }
-          if (!(await barrier(run, options.barriers?.beforeToolDispatch))) {
+          const identity = toolIdentities.get(toolCallId);
+          if (
+            !identity ||
+            identity.toolName !== tool.name ||
+            !(await barrier(
+              run,
+              () => options.barriers?.beforeToolDispatch?.(identity) ?? Promise.resolve(),
+            ))
+          ) {
             throw new Error('PI_TOOL_EXECUTION_REVOKED');
           }
           let text: string;
@@ -481,12 +517,32 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
   const nativeBeforeTool = agent.beforeToolCall;
   agent.beforeToolCall = async (toolContext, signal) => {
     const run = active;
+    const source = [...manager.getEntries()]
+      .reverse()
+      .find(
+        (entry) =>
+          entry.type === 'message' &&
+          entry.message.role === 'assistant' &&
+          entry.message.content.some(
+            (part) =>
+              part.type === 'toolCall' &&
+              part.id === toolContext.toolCall.id &&
+              part.name === toolContext.toolCall.name,
+          ),
+      );
+    if (!source) return { block: true, terminate: true, reason: 'PI_TOOL_SOURCE_MISSING' };
+    const identity: PiToolCallIdentity = Object.freeze({
+      sourceNativeEntryId: source.id,
+      toolCallId: toolContext.toolCall.id,
+      toolName: toolContext.toolCall.name,
+    });
+    toolIdentities.set(identity.toolCallId, identity);
     if (
       !run ||
       !(await barrier(
         run,
         () =>
-          options.barriers?.beforeTool?.(captureNativeState(), toolContext.toolCall.name) ??
+          options.barriers?.beforeTool?.(saveState(), toolContext.toolCall.name, identity) ??
           Promise.resolve(),
       ))
     ) {
@@ -498,6 +554,21 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
     const run = active;
     if (!run) return;
     if (event.type !== 'message_end') return;
+    if (event.message.role === 'user' && permitted(run)) {
+      const entry = manager.getLeafEntry();
+      if (!entry || entry.type !== 'message' || entry.message !== event.message) {
+        block(run, 'PI_INPUT_SOURCE_MISSING');
+        return;
+      }
+      await barrier(
+        run,
+        () =>
+          options.barriers?.afterInput?.(
+            saveState(),
+            Object.freeze({ nativeEntryIds: Object.freeze([entry.id]) }),
+          ) ?? Promise.resolve(),
+      );
+    }
     if (
       event.message.role === 'assistant' &&
       ['stop', 'toolUse'].includes(event.message.stopReason) &&
@@ -519,18 +590,23 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
         run,
         () =>
           options.barriers?.afterAssistant?.(
-            captureNativeState(),
+            saveState(),
             structuredClone(event.message) as AssistantMessage,
           ) ?? Promise.resolve(),
       );
     }
     if (event.message.role === 'toolResult') {
-      await barrier(
-        run,
-        () => options.barriers?.afterTool?.(captureNativeState()) ?? Promise.resolve(),
-      );
+      await barrier(run, () => options.barriers?.afterTool?.(saveState()) ?? Promise.resolve());
     }
   });
+
+  // This is a host-owned awaited boundary, before prompt() can become reachable.
+  try {
+    await options.barriers?.afterAssembly?.(saveState());
+  } catch {
+    session.dispose();
+    throw new Error('PI_ASSEMBLY_BARRIER_FAILED');
+  }
 
   return {
     async prompt(text: string, onText?: (text: string) => void): Promise<PiPromptResult> {
@@ -614,7 +690,7 @@ export function createPiMemorySession(options: PiMemorySessionOptions) {
     config,
     provider: 'tyde-maas',
     bootstrapApiKey: config.serviceToken,
-    connect: async (signal, tools) => {
+    connect: async (signal, tools, requestIdentity) => {
       let identity: TrustedMaasIdentity;
       try {
         identity = await resolveIdentity(signal);
@@ -642,6 +718,7 @@ export function createPiMemorySession(options: PiMemorySessionOptions) {
             fetch: options.fetch,
             signal,
             tools,
+            modelRequestId: requestIdentity.modelRequestId,
           },
         ),
       };
@@ -657,12 +734,13 @@ export function createPiDirectModelSession(options: PiDirectModelSessionOptions)
     config,
     provider: config.provider,
     bootstrapApiKey: config.apiKey,
-    connect: async (signal, tools) => ({
+    connect: async (signal, tools, identity) => ({
       apiKey: config.apiKey,
       transport: createDirectModelTransport(boundedConfig(config, options.barriers), {
         fetch: options.fetch,
         signal,
         tools,
+        modelRequestId: identity.modelRequestId,
       }),
       samplingParams:
         config.provider === 'deepseek' ? { thinking: { type: 'disabled' } } : undefined,

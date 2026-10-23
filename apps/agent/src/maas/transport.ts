@@ -64,6 +64,8 @@ interface TransportOptions {
   socket?: MaasSocketOptions;
   signal?: AbortSignal;
   tools?: Readonly<Record<string, MaasTool>>;
+  /** Fixed before durable authorization; one transport may dispatch it only once. */
+  modelRequestId?: string;
   limits?: { responseBytes?: number; eventBytes?: number; toolArgumentsBytes?: number };
 }
 
@@ -597,7 +599,12 @@ function createGuardedTransport(
   const all: MaasObservation[] = [];
   const tools = options.tools ?? {};
   const endpoint = `${config.baseUrl}/chat/completions`;
+  let dispatched = false;
   const guardedFetch: typeof globalThis.fetch = async (input, init) => {
+    if (options.modelRequestId) {
+      assert(!dispatched, 'MAAS_MODEL_AUTHORIZATION_REUSED');
+      dispatched = true;
+    }
     const url = input instanceof Request ? input.url : String(input);
     assert(
       url === endpoint && init?.method?.toUpperCase() === 'POST' && typeof init.body === 'string',
@@ -608,7 +615,7 @@ function createGuardedTransport(
       profile: profile.kind,
       ...(profile.kind === 'direct-model' ? { provider: profile.config.provider } : {}),
       modelCallId: randomUUID(),
-      modelRequestId: randomUUID(),
+      modelRequestId: options.modelRequestId ?? randomUUID(),
       platformRequestId: null,
       upstreamRequestId: null,
       routeVersion: null,

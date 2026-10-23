@@ -5,6 +5,7 @@ export interface AgentConfig {
   host: string;
   port: number;
   auth: AgentAuthConfig;
+  storage?: { mode: 'memory' } | { mode: 'postgres'; databaseUrl?: string };
 }
 
 export type AgentAuthConfig =
@@ -70,7 +71,19 @@ export function readConfig(source: NodeJS.ProcessEnv = process.env): AgentConfig
           bearerToken: source.AGENT_TEST_BEARER_TOKEN ?? '',
         }
       : { mode: 'disabled' };
-  const config: AgentConfig = { env, host, port, auth };
+  const storageMode = source.AGENT_STORAGE_MODE ?? 'postgres';
+  if (storageMode !== 'postgres' && storageMode !== 'memory')
+    throw new Error('AGENT_STORAGE_MODE 必须是 postgres 或 memory');
+  if (storageMode === 'memory' && env === 'production')
+    throw new Error('production 禁止开发内存模式');
+  const storage: NonNullable<AgentConfig['storage']> =
+    storageMode === 'memory'
+      ? { mode: 'memory' }
+      : {
+          mode: 'postgres',
+          ...(source.AGENT_DATABASE_URL ? { databaseUrl: source.AGENT_DATABASE_URL } : {}),
+        };
+  const config: AgentConfig = { env, host, port, auth, storage };
   assertAuthConfiguration(config);
   return config;
 }

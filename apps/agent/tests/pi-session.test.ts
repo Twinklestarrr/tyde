@@ -288,6 +288,193 @@ test('原生输入、assistant、工具结果屏障串行等待后才放行下�
   }
 });
 
+test('真实内核等待输入、完整工具调用及工具结果的未完成保存，身份贯穿实际派发', async () => {
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  };
+  const input = deferred();
+  const assistant = deferred();
+  const result = deferred();
+  const reachedInput = deferred();
+  const reachedAssistant = deferred();
+  const reachedResult = deferred();
+  const requestIds: string[] = [];
+  let calls = 0;
+  let tools = 0;
+  const session = await createPiMemorySession({
+    config,
+    context: context(),
+    resolveIdentity: identity,
+    tools: [
+      echoTool(async (_args, tool) => {
+        assert.equal(tool.toolCallId, 'call-one');
+        tools += 1;
+        return 'safe';
+      }),
+    ],
+    barriers: {
+      afterInput: async (state, source) => {
+        assert.ok(Object.isFrozen(state.entries));
+        assert.equal(source.nativeEntryIds.length, 1);
+        const entry = state.entries.find((candidate) => candidate.id === source.nativeEntryIds[0]);
+        assert.ok(entry?.type === 'message' && entry.message.role === 'user');
+        reachedInput.resolve();
+        await input.promise;
+      },
+      beforeModel: async (_state, call) => {
+        requestIds.push(call.modelRequestId);
+      },
+      beforeModelDispatch: async (call) => {
+        assert.equal(call.modelRequestId, requestIds.at(-1));
+      },
+      afterAssistant: async (state, message) => {
+        if (message.stopReason !== 'toolUse') return;
+        assert.ok(
+          state.entries.some(
+            (entry) =>
+              entry.type === 'message' &&
+              entry.message.role === 'assistant' &&
+              entry.message.stopReason === 'toolUse',
+          ),
+        );
+        reachedAssistant.resolve();
+        await assistant.promise;
+      },
+      beforeTool: async (state, toolName, call) => {
+        assert.equal(call.toolName, toolName);
+        assert.equal(call.toolCallId, 'call-one');
+        const source = state.entries.find((entry) => entry.id === call.sourceNativeEntryId);
+        assert.ok(source?.type === 'message' && source.message.role === 'assistant');
+      },
+      beforeToolDispatch: async (call) => {
+        assert.equal(call.toolCallId, 'call-one');
+      },
+      afterTool: async (state) => {
+        assert.equal(state.entries.at(-1)?.type, 'message');
+        reachedResult.resolve();
+        await result.promise;
+      },
+    },
+    fetch: async (_url, init) => {
+      assert.equal(new Headers(init?.headers).get('x-agent-model-request-id'), requestIds.at(-1));
+      calls += 1;
+      return response(init, calls === 1 ? toolAnswer() : answer('done'));
+    },
+  });
+  try {
+    const pending = session.prompt('Call the isolated read-only fixture.');
+    await reachedInput.promise;
+    assert.equal(calls, 0);
+    input.resolve();
+    await reachedAssistant.promise;
+    assert.equal(calls, 1);
+    assert.equal(tools, 0);
+    assistant.resolve();
+    await reachedResult.promise;
+    assert.equal(tools, 1);
+    assert.equal(calls, 1);
+    result.resolve();
+    assert.equal((await pending).status, 'completed');
+    assert.equal(calls, 2);
+    assert.equal(new Set(requestIds).size, 2);
+  } finally {
+    input.resolve();
+    assistant.resolve();
+    result.resolve();
+    session.dispose();
+  }
+});
+
+test('装配保存失败不返回可执行会话；输入保存失败不会发送模型请求', async () => {
+  let calls = 0;
+  const options = {
+    config,
+    context: context(),
+    resolveIdentity: identity,
+    fetch: async (_url: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      return response(init, answer());
+    },
+  };
+  await assert.rejects(
+    createPiMemorySession({
+      ...options,
+      barriers: {
+        afterAssembly: async () => {
+          throw new Error('database unavailable');
+        },
+      },
+    }),
+    /PI_ASSEMBLY_BARRIER_FAILED/,
+  );
+  const session = await createPiMemorySession({
+    ...options,
+    barriers: {
+      afterInput: async () => {
+        throw new Error('database unavailable');
+      },
+    },
+  });
+  try {
+    assert.equal((await session.prompt('Cannot persist input')).status, 'failed');
+    assert.equal(calls, 0);
+    await assert.rejects(session.prompt('must remain blocked'), /PI_SESSION_BLOCKED/);
+  } finally {
+    session.dispose();
+  }
+});
+
+test('从固定原生revision装配后沿同一Pi Session延续已完成上下文', async () => {
+  const first = await createPiMemorySession({
+    config,
+    context: context(),
+    resolveIdentity: identity,
+    fetch: async (_url, init) => response(init, answer('amber remembered')),
+  });
+  await first.prompt('Remember amber.');
+  const saved = first.captureNativeState();
+  first.dispose();
+  let payload: Record<string, unknown> | undefined;
+  let assembled = false;
+  const restored = await createPiMemorySession({
+    config,
+    context: context(),
+    resolveIdentity: identity,
+    nativeState: saved,
+    barriers: {
+      afterAssembly: async (state) => {
+        assembled = true;
+        assert.equal(state.header?.id, saved.header?.id);
+        assert.deepEqual(state.entries.slice(0, saved.entries.length), saved.entries);
+      },
+    },
+    fetch: async (_url, init) => {
+      assert.ok(assembled);
+      payload = JSON.parse(String(init?.body));
+      return response(init, answer('amber recalled'));
+    },
+  });
+  try {
+    assert.equal((await restored.prompt('What word?')).status, 'completed');
+    const messages = payload?.messages as { role: string; content: unknown }[];
+    assert.ok(
+      messages.some((message) => JSON.stringify(message.content).includes('Remember amber.')),
+    );
+    assert.ok(
+      messages.some(
+        (message) => message.role === 'assistant' && message.content === 'amber remembered',
+      ),
+    );
+    assert.equal(restored.captureNativeState().header?.id, saved.header?.id);
+  } finally {
+    restored.dispose();
+  }
+});
+
 for (const boundary of ['beforeModel', 'afterAssistant', 'beforeTool', 'afterTool'] as const) {
   test(`${boundary} 屏障失败后不继续模型或工具，并锁住会话`, async () => {
     let calls = 0;

@@ -8,6 +8,7 @@ const bearerToken = 'test-only-token-0123456789-abcdef-0123456789';
 const developmentConfig = () =>
   readConfig({
     NODE_ENV: 'test',
+    AGENT_STORAGE_MODE: 'memory',
     AGENT_AUTH_MODE: 'development',
     AGENT_TEST_USER_ID: 'server-owned-user',
     AGENT_TEST_BEARER_TOKEN: bearerToken,
@@ -82,7 +83,7 @@ test('缺失、错误、多份或错误格式凭证均不能通过，自报用�
 });
 
 test('默认未装配授权时拒绝资源访问，健康检查与 Swagger 仍可匿名访问', async (t) => {
-  const app = await testApp(readConfig({ NODE_ENV: 'test' }));
+  const app = await testApp(readConfig({ NODE_ENV: 'test', AGENT_STORAGE_MODE: 'memory' }));
   t.after(() => app.close());
   const resource = await app.inject({
     method: 'POST',
@@ -125,7 +126,7 @@ test('私有会话只允许本人，未知、其他用户与已删除会话统�
 test('未来平台适配器仅从可信服务端注入，每次校验凭证并支持撤销，不回退测试身份', async (t) => {
   let valid = true;
   const received: string[] = [];
-  const app = await testApp(readConfig({ NODE_ENV: 'test' }), {
+  const app = await testApp(readConfig({ NODE_ENV: 'test', AGENT_STORAGE_MODE: 'memory' }), {
     async authenticateBearer(token) {
       received.push(token);
       return valid ? { userId: 'platform-user' } : null;
@@ -157,7 +158,10 @@ test('平台校验异常或非法用户标识均拒绝，且不暴露上游错�
       },
     },
   ]) {
-    const app = await testApp(readConfig({ NODE_ENV: 'test' }), adapter);
+    const app = await testApp(
+      readConfig({ NODE_ENV: 'test', AGENT_STORAGE_MODE: 'memory' }),
+      adapter,
+    );
     t.after(() => app.close());
     const response = await app.inject({
       method: 'POST',
