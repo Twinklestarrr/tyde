@@ -1,8 +1,38 @@
 # Agent 服务
 
-独立 Fastify 服务，默认监听 `http://127.0.0.1:3002`。W1 提供健康、Swagger、受控身份和命令摘要基础；W2 增加 Pi 1.3.0 内存执行、MaaS 协议校验及无界面验证入口。W3 增加 `/api/agent/v1/conversations` 下的开发内存 API、任务协调与产品 SSE。健康响应仍只表示 HTTP 进程存活；聊天需要显式身份和服务端模型配置。
+独立 Fastify 服务，默认监听 `http://127.0.0.1:3002`。W5 默认 PostgreSQL 18 持久模式；缺少独立数据库、迁移版本、发布快照或运行产物时拒绝启动，不回退内存。完整 Pi 原生状态、命令裁决、产品投影/outbox 与预算保存在 Agent 自有 schema；健康响应仍只表示 HTTP 进程存活。W2/W3 真实证据保持原记录，不等于 W5 或 W4 联调验收。
 
-在仓库根目录使用 Node.js 24 与 pnpm 11 安装依赖后：
+## W5 启动与运行边界
+
+W4／W5 当前在 `integration/agent-w4-w5` 合流。以下 W5 验收与末尾 W4 工具说明分别保留原分支历史；合并后尚未运行测试、构建或发布配置。按用户要求等待确认后再执行，接入与待验清单见 [合流记录](../../docs/AGENT_W4_W5_INTEGRATION.md)。
+
+实际切换并核实 Node.js **24.19.0**、pnpm **11.23.0**；worktree 的 shell 可能覆盖 PATH，`.nvmrc` 不能替代实测。保留原服务端 `.env`，不打印模型/身份凭据。并行窗口使用独立 worktree、端口和 Agent 数据库；本次验收专用 PG18.6 实例端口 55435，页面/服务最终使用 35153/35152。
+
+先由管理员确认独立 Agent 数据库，配置权限组及互相独立的迁移、发布、运行账号，步骤见 [迁移说明](migrations/README.md)。三个 URL 只在服务端注入；不要使用业务 `DATABASE_URL` 或业务 `db:*` 命令。
+
+```sh
+pnpm migrate:agent           # AGENT_MIGRATION_DATABASE_URL；一次完整事务
+pnpm check:agent-db          # 同一变量；只检查，不执行 DDL
+pnpm publish:agent-config    # AGENT_PUBLISH_DATABASE_URL；无凭据配置快照
+pnpm dev:agent              # AGENT_STORAGE_MODE=postgres、AGENT_DATABASE_URL
+pnpm dev:agent-web          # 其他服务端口时设置 AGENT_PROXY_TARGET
+pnpm test:agent-db          # 显式 AGENT_TEST_DATABASE_URL；串行文件、内部并发照常测试
+pnpm test:agent-budget-realtime  # 显式执行真实600000ms；不加入快速单测
+```
+
+`AGENT_DATABASE_URL` 使用无 owner/DDL/TRUNCATE/历史删除/配置发布权限的运行账号。HTTP 只检查 PG18、已安装迁移/对象指纹和已发布执行快照；绝不自动迁移或临时发布配置。配置发布沿用既有模型 URL/Key 入口，保存 API、模型、compat、预设/端点版本、凭据槽引用和执行策略，不保存 Key。
+
+构建/测试/开发命令生成 `runtime/manifest.json`，固定精确 Node/SDK/native 格式、平台/架构、代码/迁移/shared 契约/锁文件及实际 SDK 代码身份；source 与 compiled 的 release digest 相同。源代码或依赖改变后，重新生成并登记**新**执行快照，不改旧快照。最终 `pnpm build:agent` 在编译后生成并核验 compiled 清单；包内须保留 `dist`、`migrations`、`runtime` 和公开依赖。部署可用独立发布账号执行 `node --env-file-if-exists=.env dist/storage/execution-config.js`。不要用只有 source 清单的包启动 dist。
+
+开发内存模式仅显式 `AGENT_STORAGE_MODE=memory` 时启用，生产禁止。认证只读 `GET /api/agent/v1/runtime` 返回当前实际模式；页面连接、选择和重连先核对，未知/故障不显示“已持久保存”。PG 模式重启保留展示；查询、刷新和 SSE 不创建 Attempt 或重投输入。完成的会话允许用户明确发送后续问题，沿同一 Pi Session 的固定 revision 恢复上下文；未完成目标仍阻止新 Task 绕过。
+
+同一 Agent 数据库只运行一个服务进程，启动持专用连接的协调锁；该锁不是旧进程失效证明。活动 Attempt 遗留时不自动接管或重跑。私有 `recoverInterruptedAttempt` 只在同机原 PID 明确 ESRCH、完整 owner/generation/head 匹配后记录 interrupted；存活/复用 PID、远端主机、EPERM、锁断开或心跳过期都不能放行。公开继续、重试、补充和恢复按钮仍未开放，跨主机/多实例与 Electron 留给后续。
+
+数据库异常先取消在途执行再核实，保存未知时保留未决状态，不伪造 completed/stopped/failed。可靠事件永久补读水位不因重启换流；本轮默认不做产品删除/保留裁剪，活动/待核实授权证据不能提前清除。单机恢复、实际 PG 连接故障、受控工具、真实时钟和真实供应商的证据分开记在 [W5 验收记录](../../docs/AGENT_W5_VALIDATION.md)。
+
+## W1—W3 基础与兼容说明
+
+在仓库根目录使用 Node.js 24.19.0 与 pnpm 11.23.0 安装依赖后：
 
 ```sh
 pnpm --filter @tyde/agent dev
@@ -19,11 +49,11 @@ W1 已提供受控测试身份适配器，默认 `AGENT_AUTH_MODE=disabled`。�
 
 平台身份预留 `createApp(config, { identityAdapter })` 服务端注入点，后续由适配器验证真实平台 Bearer 及撤销状态；开发身份与平台适配器不能同时装配。默认未装配时资源身份验证失败关闭，格式合法的 Bearer 因无法验证返回 503；缺失／格式非法的凭证，以及已装配适配器判定无效的凭证返回 401。匿名健康检查和 Swagger 不变。`pnpm --filter @tyde/agent test` 覆盖显式配置、凭证验证、客户端伪造身份、归属／删除隔离、平台撤销及验证异常。
 
-## W3 浏览器聊天与本机身份
+## W3 浏览器聊天与本机身份（历史阶段）
 
 先实际核对 `node --version` 为 24.19.0、`pnpm --version` 为 11.23.0；`.nvmrc` 不会自动切换终端，使用相应版本管理器切换后再执行。
 
-保留现有 `apps/agent/.env`，仅补齐缺少的本机身份项。先执行下面命令生成一个新的本机凭据，再填入配置；它与模型 Key 是两种凭据，不互相替代：
+保留现有 `apps/agent/.env`，仅补齐缺少的本机身份项；已有值继续沿用，不为 W5 擅自轮换。缺少凭据时才执行下面命令生成并填入配置；它与模型 Key 是两种凭据，不互相替代：
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -102,7 +132,7 @@ pnpm --filter @tyde/agent smoke:model --stop-after-ms 2000
 
 停止会撤销本次执行资格并传播 AbortSignal，迟到文字不恢复旧执行，停止后不放行下一轮模型／工具。停止或失败前已接受的文字保留为原生 aborted／error 事实；结构化结果的 text 仅用于完整成功回答，失败片段不成为交付结果或可执行工具。授权解析与执行屏障的等待同样可取消并有准备时限。模型超时分为独立建连、响应头、首个有效进展、进展空闲和总预算；默认分别为 3、15、60、45、180 秒，上限为 300 秒。受控 HTTP 传输使用精确锁定的 Undici，单次请求独立持有并释放连接资源，不安装重试或重定向拦截器；平台取消传播及供应商实际停止、计费行为仍须真实联调。
 
-独立用量观察只记录实际响应；缺失统计的计数为 null，费用始终未知，不把 Pi 默认 0 或静态估算当作账单。原生状态快照与可等待执行关口留在适配边界内，尚未验证 PostgreSQL 保存屏障、重启恢复、持久幂等或可靠业务写入。内存结果随进程退出丢失，不能作为产品持久完成的确认。Agent 迁移预留在 [migrations](migrations/README.md)，本阶段不建表、不运行迁移，也不修改业务 Prisma。
+独立用量观察只记录实际响应；缺失统计的计数为 null，费用始终未知，不把 Pi 默认 0 或静态估算当作账单。W2 的原生状态快照与可等待执行关口留在适配边界内，该阶段没有验证 PostgreSQL 保存屏障、重启恢复或持久幂等；W5 的后续独立证据见本文上方。独立模型冒烟的内存结果随进程退出丢失，不能作为产品持久完成的确认。Agent 独立迁移说明见 [migrations](migrations/README.md)，该冒烟命令不建表、不运行迁移，也不修改业务 Prisma。
 
 ### 可选平台转发验收
 
@@ -133,20 +163,22 @@ pnpm --filter @tyde/agent smoke:maas --stop-after-ms 2000
 
 `--check-config` 加载配置并调用身份模块，随后退出；不会发送模型请求，也不表示平台路由已通过。模块加载、首次授权和会话装配共用一个准备预算，取配置的总预算；超时或 SIGINT／SIGTERM 以非零状态退出，迟到解析不会启动模型请求。独立 CLI 在结局输出和本地 Session 清理后最多再保留 1 秒退出窗口，防止身份模块遗留活动句柄；作为库使用的适配器不会退出服务进程。默认冒烟发起两轮真实模型请求，用随机口令验证原生上下文连续性，输出临时流式文字和结构化结果。停止计时从 prompt 开始；仅已收到真实文字、HTTP 200 的模型流取消且本地结果为 stopped 时通过。停止发生在准备阶段、尚无文字进展或远端已完成时均失败，提示调整停止时机，不能据此宣称执行中流式停止已验通。执行中的 SIGINT／SIGTERM 请求本地停止。命令失败不回退为模拟回答。
 
-隔离测试使用受控本机接口替身核对 SDK 真实路径、请求／响应、停止和故障。用户已提供 DeepSeek Flash 的 W2 真实两轮召回、流式与本地停止通过日志；DeepSeek V4 Pro 仅配置检查，可选平台路径尚未真实联调。W3 页面已接通同一模型入口，真实浏览器结果见 [W3 验证记录](../../docs/AGENT_W3_VALIDATION.md)。正式平台身份与 PostgreSQL 仍待后续工作包。
+隔离测试使用受控本机接口替身核对 SDK 真实路径、请求／响应、停止和故障。用户已提供 DeepSeek Flash 的 W2 真实两轮召回、流式与本地停止通过日志；DeepSeek V4 Pro 仅配置检查，可选平台路径尚未真实联调。W3 页面已接通同一模型入口，真实浏览器结果见 [W3 验证记录](../../docs/AGENT_W3_VALIDATION.md)。正式平台身份仍待后续工作包；PostgreSQL 已由 W5 单独接入，W4／W5 联合路径当前待用户确认后验证。
 
 协作边界及后续工作见 [Agent 开发说明](../../docs/AGENT_DEVELOPMENT.md)。
 
 ## W4 受控宿主装配与追溯
 
-`createApp(config, { resources })` 接受 `freezePiResources` 生成的可信冻结资源，默认 `main.ts` 不装配资源，也不读 `.local/`。宿主显式提供已读取的固定文本、预期 SHA-256、逻辑版本、工具声明与数据／代码资产身份。加载顺序为基础提示词 → Skill 正文 → 非提示词资产；所有摘要先校验，缺失或不符立即拒绝。工具声明摘要覆盖名称、描述、schema、时限及公开元数据。执行期间不重新读资源，同一 Pi Session 的配置固定。
+`createApp(config, { resources, deployment })` 接受 `freezePiResources` 生成的可信冻结资源及 PostgreSQL 使用的可信部署声明；显式 memory 模式可只传 `resources`。PG 启用工具／Skill 时需要同一宿主提供 `TrustedPiDeployment`，不能只有内存资源就跳过数据库发布验证。默认 `main.ts` 不装配资源，也不读 `.local/`。宿主显式提供已读取的固定文本、预期 SHA-256、逻辑版本、工具声明与数据／代码资产身份。加载顺序为基础提示词 → Skill 正文 → 非提示词资产；所有摘要先校验，缺失或不符立即拒绝。工具声明摘要覆盖名称、描述、schema、时限及公开元数据。执行期间不重新读资源，同一 Pi Session 的配置固定。
 
 Skill 采用 `host-preloaded-system-prompt`：将已校验的固定正文放入实际 system prompt。Pi 1.3.0 的 `getSkills` 仍为空，`expandPromptTemplates:false` 保持，不宣称自动发现或原生按需读取已验通；不开放 read、bash、目录扫描或页面指定服务器路径。
 
-显式工具保留完整原生调用及结果，`modelRequestId` 在授权／HTTP／用量记录／工具关联中一致，`toolCallId` 用于授权去重及阻止重复执行。`PiMemoryBarriers` 和运行时的 `saveNativeState`／`beforeDispatch` 为可等待保存和最终派发门禁；拒绝后阻断后续模型／工具，失败不退授权。`PiNativeState.configuration` 捕获模型声明、资源 manifest、工具声明与配置摘要，不含 Key 或身份凭据；这是服务端捕获信封，原生 header／entries／leafId 不变。
+显式工具保留完整原生调用及结果，`modelRequestId` 在授权／HTTP／用量记录／工具关联中一致，`toolCallId` 用于授权去重及阻止重复执行。`PiMemoryBarriers` 的 `beforeTool` 保存原生 assistant 并授权，`checkToolEligibility` 可重复检查执行资格，`beforeToolDispatch` 仅在真正执行前消费一次持久许可；running 投影等待前后复检资格，不重复消耗许可。`afterTool` 在原生 toolResult 追加后等待保存，再等待工具终态投影。内存运行时的 `saveNativeState`／`beforeDispatch` 与 PG 原生仓储分别接入可等待保存及最终派发门禁；拒绝后阻断后续模型／工具，失败不退授权。`PiNativeState.configuration` 捕获模型声明、资源 manifest、工具声明与配置摘要，不含 Key 或身份凭据；这是服务端捕获信封，原生 header／entries／leafId 不变。
 
 工具局部超时默认 30 秒，显式上限不超过 300 秒；Attempt deadline 单独锁存并通过同一取消信号生效。停止前后与异步保存后均复检资格。用户停止、预算取消、工具超时和执行失败分开；不协作的迟到结果不能恢复执行。普通工具异常会锁住本次 Pi 会话，继续／重试仍未开放。
 
 产品只返回 `tool_executions` 安全投影和 `tool.updated` 可靠事件，不返回原始参数、SDK 事件、完整结果、服务端路径或思考，不生成业务 Operation。快照、历史、任务和结果读取均关联真实调用；刷新／重连只补展示。旧冻结读取可缺少可选数组，新服务始终返回数组；未知可靠事件仍失败关闭。
 
-本机演示包在 `.local/agent-w4-demo/`，不提交。仅拉取通用代码不能直接复现该演示，普通聊天、测试和构建完全不依赖它。已具备本机包时先运行 `pnpm build:agent` 和 `pnpm build:agent-web`，再按包内 README 显式启动，使用独立 3102／3103；原 `.env` 仅由进程读取，不复制到 worktree。实际证据及 W5 协作见 [W4 验收记录](../../docs/AGENT_W4_VALIDATION.md)。
+PG 可信装配由 `storage/pi-deployment.ts` 的 `createTrustedPiDeployment`、`prepareTrustedPiDeployment` 和 `publishTrustedPiDeploymentSnapshot` 连接 W4 冻结资源与 W5 资源发布：核对固定成员、实际代码导出／字节，使用数据库规范化得到的 `resourceManifestHash`；执行快照的 `tool_manifest.host_resources` 保留同一 W4 manifest。运行清单改变后需生成并发布新配置，旧快照不可改写。启用资源的发布须使用该适配器，默认 `publish:agent-config` 仍只发布默认无工具配置；HTTP 不自动发布。
+
+本机演示包在 `.local/agent-w4-demo/`，不提交。仅拉取通用代码不能直接复现该演示，普通聊天、测试和构建完全不依赖它。原 W4 包启动入口只证明过独立 memory 路径，不能直接用作本轮 PG 演示：PG 入口须显式提供同一可信资源和部署声明，完成新运行清单／Agent 迁移／资源及执行快照发布后再启动。本轮暂不执行这些命令，等待用户确认；原 `.env` 仅由进程读取，不复制到 worktree。既有真实证据见 [W4 验收记录](../../docs/AGENT_W4_VALIDATION.md)，本轮接入待验说明见 [合流记录](../../docs/AGENT_W4_W5_INTEGRATION.md)。

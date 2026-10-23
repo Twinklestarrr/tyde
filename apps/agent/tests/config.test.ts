@@ -8,10 +8,17 @@ test('Agent 配置默认仅监听回环地址，并允许显式覆盖', () => {
     host: '127.0.0.1',
     port: 3002,
     auth: { mode: 'disabled' },
+    storage: { mode: 'postgres' },
   });
   assert.deepEqual(
     readConfig({ NODE_ENV: 'production', AGENT_HOST: '0.0.0.0', AGENT_PORT: '43002' }),
-    { env: 'production', host: '0.0.0.0', port: 43002, auth: { mode: 'disabled' } },
+    {
+      env: 'production',
+      host: '0.0.0.0',
+      port: 43002,
+      auth: { mode: 'disabled' },
+      storage: { mode: 'postgres' },
+    },
   );
   assert.equal(readConfig({ AGENT_HOST: '::1' }).host, '::1');
 });
@@ -66,4 +73,14 @@ test('无效环境、监听地址或端口在启动前拒绝', () => {
   for (const port of ['', '0', '-1', '65536', '3.5', '3002abc', ' 3002']) {
     assert.throws(() => readConfig({ AGENT_PORT: port }), /AGENT_PORT/);
   }
+});
+
+test('PostgreSQL is the default and memory requires explicit nonproduction selection', () => {
+  assert.deepEqual(readConfig({}).storage, { mode: 'postgres' });
+  assert.deepEqual(readConfig({ AGENT_STORAGE_MODE: 'memory' }).storage, { mode: 'memory' });
+  assert.throws(() => readConfig({ AGENT_STORAGE_MODE: 'other' }), /AGENT_STORAGE_MODE/);
+  assert.throws(
+    () => readConfig({ NODE_ENV: 'production', AGENT_STORAGE_MODE: 'memory' }),
+    /production/,
+  );
 });

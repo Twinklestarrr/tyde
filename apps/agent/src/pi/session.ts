@@ -20,9 +20,14 @@ import {
   SettingsManager,
   createExtensionRuntime,
   type ResourceLoader,
-  type SessionEntry,
-  type SessionHeader,
 } from '@earendil-works/pi-coding-agent';
+import {
+  PI_SDK_VERSION,
+  capturePiNativeState,
+  freezePiNativeState,
+  restorePiNativeState,
+  type PiNativeState,
+} from './native-state.js';
 import {
   createMaasTransport,
   createDirectModelTransport,
@@ -34,17 +39,7 @@ import {
 } from '../maas/index.js';
 import { assertTrustedPiResources, resourceSha256, type TrustedPiResources } from './resources.js';
 
-export const PI_SDK_VERSION = '1.3.0';
-export const PI_SOURCE_COMMIT = '71023aec1546d6d677a65669c5665c0927ce0dd0';
-
-/** 原生内存树的只读副本；不是持久提交回执或另一种恢复格式。 */
-export interface PiNativeState {
-  header: SessionHeader | null;
-  entries: SessionEntry[];
-  leafId: string | null;
-  /** Host envelope metadata, not a replacement for the native header/entries tree. */
-  configuration?: PiExecutionConfiguration;
-}
+export { PI_SDK_VERSION, PI_SOURCE_COMMIT, type PiNativeState } from './native-state.js';
 
 export interface PiExecutionConfiguration {
   schemaVersion: 1;
@@ -101,6 +96,10 @@ export interface PiToolCallContext extends PiModelRequestContext {
   sourceNativeEntryId: string;
 }
 
+/** Compatibility names for W5 callers; both carry the same dispatch identity. */
+export type PiModelCallIdentity = PiModelRequestContext;
+export type PiToolCallIdentity = PiToolCallContext;
+
 export interface PiToolLifecycle extends PiToolCallContext {
   status: 'running' | 'succeeded' | 'failed' | 'cancelled';
   startedAt: string;
@@ -116,16 +115,23 @@ export interface PiToolLifecycle extends PiToolCallContext {
 
 /** 后续保存屏障的等待点。拒绝后锁住会话，禁止工具或下一轮模型。 */
 export interface PiMemoryBarriers {
-  beforeModel?(state: PiNativeState, request?: PiModelRequestContext): Promise<void>;
+  /** Await native assembly before this session can receive a prompt. */
+  afterAssembly?(state: PiNativeState): Promise<void>;
+  /** Entries appended by this prompt, captured after the native SDK append. */
+  afterInput?(state: PiNativeState, input: { nativeEntryIds: readonly string[] }): Promise<void>;
+  beforeModel?(state: PiNativeState, request: PiModelRequestContext): Promise<void>;
   /** 授权后、实际模型发送前再次校验资格，不重复计数。 */
-  beforeModelDispatch?(request?: PiModelRequestContext): Promise<void>;
+  beforeModelDispatch?(request: PiModelRequestContext): Promise<void>;
   afterAssistant?(
     state: PiNativeState,
     message: AssistantMessage,
-    request?: PiModelRequestContext,
+    request: PiModelRequestContext,
   ): Promise<void>;
-  beforeTool?(state: PiNativeState, toolName: string, call?: PiToolCallContext): Promise<void>;
-  beforeToolDispatch?(call?: PiToolCallContext): Promise<void>;
+  beforeTool?(state: PiNativeState, toolName: string, call: PiToolCallContext): Promise<void>;
+  /** Reentrant eligibility check; never authorizes or consumes an execution permit. */
+  checkToolEligibility?(call: PiToolCallContext): Promise<void>;
+  /** Consume the already authorized permit exactly once, immediately before execute. */
+  beforeToolDispatch?(call: PiToolCallContext): Promise<void>;
   afterTool?(state: PiNativeState, call?: PiToolCallContext): Promise<void>;
   /** Awaited capture/projection hook; receives no raw arguments or tool receipt. */
   onToolLifecycle?(event: PiToolLifecycle): Promise<void>;
@@ -143,6 +149,8 @@ interface PiMemoryCommonOptions {
   resources?: TrustedPiResources;
   /** 仅宿主提供的逻辑工作目录；此适配不发现或读取其中的资源。 */
   cwd?: string;
+  /** One fixed committed revision, already read consistently from the authoritative store. */
+  nativeState?: PiNativeState;
 }
 
 export interface PiMemorySessionOptions extends PiMemoryCommonOptions {
@@ -293,12 +301,9 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
       },
     ]),
   );
-  const manager = SessionManager.inMemory(options.cwd);
-  if (options.resources)
-    manager.appendCustomEntry(
-      'tyde.execution.resources',
-      structuredClone(options.resources.manifest),
-    );
+  const manager = options.nativeState
+    ? restorePiNativeState(options.nativeState)
+    : SessionManager.inMemory(options.cwd);
   const configurationBody = {
     schemaVersion: 1 as const,
     piSdkVersion: PI_SDK_VERSION,
@@ -329,13 +334,55 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
     ...configurationBody,
     sha256: resourceSha256(canonicalize(configurationBody)!),
   };
-  const captureNativeState = (): PiNativeState =>
-    structuredClone({
-      header: manager.getHeader(),
-      entries: manager.getEntries(),
-      leafId: manager.getLeafId(),
-      configuration,
-    });
+  // A native custom entry persists the host envelope with the exact native revision.
+  // Never retrofit a resource bundle into a previous, unversioned session history.
+  const configurationEntries = manager
+    .getEntries()
+    .filter(
+      (entry) => entry.type === 'custom' && entry.customType === 'tyde.execution.configuration',
+    );
+  if (configurationEntries.length > 1) throw new Error('PI_EXECUTION_CONFIGURATION_MISMATCH');
+  const priorConfiguration = configurationEntries[0];
+  const restoredConfiguration =
+    priorConfiguration?.type === 'custom'
+      ? priorConfiguration.data
+      : options.nativeState?.configuration;
+  if (
+    options.nativeState?.configuration &&
+    canonicalize(options.nativeState.configuration) !== canonicalize(configuration)
+  )
+    throw new Error('PI_EXECUTION_CONFIGURATION_MISMATCH');
+  if (restoredConfiguration !== undefined) {
+    if (canonicalize(restoredConfiguration) !== canonicalize(configuration))
+      throw new Error('PI_EXECUTION_CONFIGURATION_MISMATCH');
+  } else if (
+    options.nativeState &&
+    manager.getEntries().length &&
+    (options.resources || tools.length || options.systemPrompt !== undefined)
+  ) {
+    throw new Error('PI_EXECUTION_CONFIGURATION_MISSING');
+  }
+  if (!priorConfiguration)
+    manager.appendCustomEntry('tyde.execution.configuration', structuredClone(configuration));
+  const resourceEntries = manager
+    .getEntries()
+    .filter((entry) => entry.type === 'custom' && entry.customType === 'tyde.execution.resources');
+  if (
+    resourceEntries.length > 1 ||
+    resourceEntries.some(
+      (entry) =>
+        entry.type === 'custom' &&
+        canonicalize(entry.data) !== canonicalize(options.resources?.manifest ?? null),
+    )
+  )
+    throw new Error('PI_EXECUTION_CONFIGURATION_MISMATCH');
+  if (options.resources && !resourceEntries.length)
+    manager.appendCustomEntry(
+      'tyde.execution.resources',
+      structuredClone(options.resources.manifest),
+    );
+  const captureNativeState = (): PiNativeState => capturePiNativeState(manager, configuration);
+  const saveState = (): PiNativeState => freezePiNativeState(manager, configuration);
   const settings = SettingsManager.inMemory({
     compaction: { enabled: false },
     retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } },
@@ -378,8 +425,11 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
   });
   // 只满足原生 Session 的已配置鉴权检查；每次真实发送仍重新解析可信身份与凭据。
   await runtime.setRuntimeApiKey(model.provider, options.bootstrapApiKey);
-  manager.appendModelChange(model.provider, model.id);
-  manager.appendThinkingLevelChange('off');
+  const restored = manager.buildSessionContext();
+  if (restored.model?.provider !== model.provider || restored.model.modelId !== model.id)
+    manager.appendModelChange(model.provider, model.id);
+  if (!options.nativeState || restored.thinkingLevel !== 'off')
+    manager.appendThinkingLevelChange('off');
   let active: ActiveRun | undefined;
   let disposed = false;
   let blocked = false;
@@ -435,12 +485,17 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
     return permitted(run);
   };
   const agent = new Agent({
-    initialState: { model, thinkingLevel: 'off', tools: [], messages: [] },
+    initialState: {
+      model,
+      thinkingLevel: 'off',
+      tools: [],
+      messages: manager.buildSessionContext().messages,
+    },
     toolExecution: 'sequential',
     streamFn: (_requestedModel, transcript, streamOptions) => {
       const output = createAssistantMessageEventStream();
       const run = active;
-      const request: PiModelRequestContext = { modelRequestId: randomUUID() };
+      const request: PiModelRequestContext = Object.freeze({ modelRequestId: randomUUID() });
       void (async () => {
         let observation: (() => MaasObservation | undefined) | undefined;
         const acceptedText = new Map<number, string>();
@@ -449,8 +504,7 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
             !run ||
             !(await barrier(
               run,
-              () =>
-                options.barriers?.beforeModel?.(captureNativeState(), request) ?? Promise.resolve(),
+              () => options.barriers?.beforeModel?.(saveState(), request) ?? Promise.resolve(),
             ))
           ) {
             throw new Error('PI_EXECUTION_REVOKED');
@@ -555,17 +609,45 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
         (entry) =>
           entry.type === 'message' &&
           entry.message.role === 'assistant' &&
-          entry.message.content.some((part) => part.type === 'toolCall' && part.id === toolCallId),
+          entry.message.content.some(
+            (part) => part.type === 'toolCall' && part.id === toolCallId && part.name === toolName,
+          ),
       );
     const observed = active?.observations.at(-1);
-    if (!source || !observed || observed.state !== 'complete')
+    if (
+      !source ||
+      !observed ||
+      observed.state !== 'complete' ||
+      !entries.some(
+        (entry) =>
+          entry.type === 'custom' &&
+          ['tyde.maas.usage-observation', 'tyde.model.usage-observation'].includes(
+            entry.customType,
+          ) &&
+          !!entry.data &&
+          typeof entry.data === 'object' &&
+          'sourceNativeEntryId' in entry.data &&
+          entry.data.sourceNativeEntryId === source.id &&
+          'modelRequestId' in entry.data &&
+          entry.data.modelRequestId === observed.modelRequestId,
+      )
+    )
       throw new Error('PI_TOOL_NATIVE_LINK_MISSING');
-    return {
+    return Object.freeze({
       toolCallId,
       toolName,
       sourceNativeEntryId: source.id,
       modelRequestId: observed.modelRequestId,
-    };
+    });
+  };
+  const isBudgetFailure = (reason: unknown): boolean => {
+    const code =
+      reason && typeof reason === 'object' && 'code' in reason
+        ? String(reason.code)
+        : reason instanceof Error
+          ? reason.message
+          : '';
+    return /^ATTEMPT_(?:DURATION|MODEL_REQUEST|TOOL_CALL)_LIMIT_EXCEEDED$/.test(code);
   };
   const safeSummary = (value: string): string => {
     if (
@@ -627,10 +709,13 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
             block(run, 'PI_TOOL_DUPLICATE_CALL');
             throw new Error('PI_TOOL_DUPLICATE_CALL');
           }
+          // Claim callback identity before the first await; reentrant SDK callbacks
+          // cannot obtain a second authorization or invoke this tool twice.
+          run.executedToolIds.add(toolCallId);
           if (
             !(await barrier(
               run,
-              () => options.barriers?.beforeToolDispatch?.(call) ?? Promise.resolve(),
+              () => options.barriers?.checkToolEligibility?.(call) ?? Promise.resolve(),
             ))
           ) {
             throw new Error('PI_TOOL_EXECUTION_REVOKED');
@@ -668,6 +753,14 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
           )
             throw new Error('PI_TOOL_EXECUTION_REVOKED');
           // Projection/save waits do not extend the authorization into a later stop.
+          // This check may run repeatedly; the dispatch gate below consumes once.
+          if (
+            !(await barrier(
+              run,
+              () => options.barriers?.checkToolEligibility?.(call) ?? Promise.resolve(),
+            ))
+          )
+            throw new Error('PI_TOOL_EXECUTION_REVOKED');
           if (
             !(await barrier(
               run,
@@ -675,7 +768,6 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
             ))
           )
             throw new Error('PI_TOOL_EXECUTION_REVOKED');
-          run.executedToolIds.add(toolCallId);
           const timeout = new AbortController();
           const remaining = options.barriers?.executionRemainingMs?.() ?? Infinity;
           const executionSignal = options.barriers?.executionSignal?.();
@@ -725,12 +817,7 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
             return { content: [{ type: 'text' as const, text }], details: {} };
           } catch {
             const budgetExceeded =
-              toolSignal.reason &&
-              typeof toolSignal.reason === 'object' &&
-              'code' in toolSignal.reason &&
-              /^ATTEMPT_(?:DURATION|MODEL_REQUEST|TOOL_CALL)_LIMIT_EXCEEDED$/.test(
-                String(toolSignal.reason.code),
-              );
+              isBudgetFailure(toolSignal.reason) || isBudgetFailure(executionSignal?.reason);
             lifecycle.status = run.stopped && !budgetExceeded ? 'cancelled' : 'failed';
             lifecycle.errorCode = budgetExceeded
               ? 'budget_exceeded'
@@ -782,7 +869,7 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
       !(await barrier(
         run,
         () =>
-          options.barriers?.beforeTool?.(captureNativeState(), toolContext.toolCall.name, call) ??
+          options.barriers?.beforeTool?.(saveState(), toolContext.toolCall.name, call) ??
           Promise.resolve(),
       ))
     ) {
@@ -794,6 +881,21 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
     const run = active;
     if (!run) return;
     if (event.type !== 'message_end') return;
+    if (event.message.role === 'user' && permitted(run)) {
+      const entry = manager.getLeafEntry();
+      if (!entry || entry.type !== 'message' || entry.message !== event.message) {
+        block(run, 'PI_INPUT_SOURCE_MISSING');
+        return;
+      }
+      await barrier(
+        run,
+        () =>
+          options.barriers?.afterInput?.(
+            saveState(),
+            Object.freeze({ nativeEntryIds: Object.freeze([entry.id]) }),
+          ) ?? Promise.resolve(),
+      );
+    }
     if (
       event.message.role === 'assistant' &&
       ['stop', 'toolUse'].includes(event.message.stopReason) &&
@@ -801,33 +903,88 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
     ) {
       const sourceNativeEntryId = manager.getLeafId();
       const observed = run.observations.at(-1);
-      if (observed?.state === 'complete')
-        manager.appendCustomEntry(
-          options.provider === 'tyde-maas'
-            ? 'tyde.maas.usage-observation'
-            : 'tyde.model.usage-observation',
-          {
-            ...observed,
-            sourceNativeEntryId,
-          },
-        );
+      if (observed?.state !== 'complete') {
+        block(run, 'PI_MODEL_NATIVE_LINK_MISSING');
+        return;
+      }
+      manager.appendCustomEntry(
+        options.provider === 'tyde-maas'
+          ? 'tyde.maas.usage-observation'
+          : 'tyde.model.usage-observation',
+        {
+          ...observed,
+          sourceNativeEntryId,
+        },
+      );
       await barrier(
         run,
         () =>
           options.barriers?.afterAssistant?.(
-            captureNativeState(),
+            saveState(),
             structuredClone(event.message) as AssistantMessage,
-            observed ? { modelRequestId: observed.modelRequestId } : undefined,
+            { modelRequestId: observed.modelRequestId },
           ) ?? Promise.resolve(),
       );
     }
     if (event.message.role === 'toolResult') {
       const toolCallId = event.message.toolCallId;
-      const lifecycle = run.toolCalls.get(toolCallId);
+      const nativeToolName = event.message.toolName;
+      let lifecycle = run.toolCalls.get(toolCallId);
+      if (!lifecycle) {
+        // Pi can append an error result without reaching host execute (for
+        // example, input validation or a revoked beforeTool gate). Project the
+        // actual rejected call, never invent a running or successful execution.
+        const tool = tools.find((candidate) => candidate.name === nativeToolName);
+        if (tool) {
+          try {
+            const call = toolContextForHook(toolCallId, tool.name);
+            const source = manager
+              .getEntries()
+              .find((entry) => entry.id === call.sourceNativeEntryId);
+            const nativeCall =
+              source?.type === 'message' && source.message.role === 'assistant'
+                ? source.message.content.find(
+                    (part) => part.type === 'toolCall' && part.id === toolCallId,
+                  )
+                : undefined;
+            const invalidArguments =
+              nativeCall?.type === 'toolCall' &&
+              !toolMap[tool.name]!.validate(nativeCall.arguments);
+            const budgetExceeded = isBudgetFailure(options.barriers?.executionSignal?.().reason);
+            lifecycle = {
+              ...call,
+              status: run.stopped && !budgetExceeded ? 'cancelled' : 'failed',
+              startedAt: source?.timestamp ?? new Date().toISOString(),
+              endedAt: new Date().toISOString(),
+              isDemo: tool.publicMetadata?.isDemo ?? false,
+              displayLabel: tool.publicMetadata?.displayLabel ?? tool.name,
+              inputSummary: '工具调用未派发',
+              resultSummary: null,
+              errorCode: budgetExceeded
+                ? 'budget_exceeded'
+                : run.stopped
+                  ? 'cancelled'
+                  : invalidArguments
+                    ? 'invalid_arguments'
+                    : 'tool_failed',
+              resultNativeEntryId: null,
+            };
+            run.toolCalls.set(toolCallId, lifecycle);
+            if (!run.stopped && !run.failureCode) block(run, 'PI_TOOL_EXECUTION_REVOKED');
+          } catch {
+            if (!run.stopped) block(run, 'PI_TOOL_NATIVE_LINK_MISSING');
+          }
+        }
+      }
       if (lifecycle?.status === 'running') {
-        lifecycle.status = run.stopped ? 'cancelled' : 'failed';
+        const budgetExceeded = isBudgetFailure(options.barriers?.executionSignal?.().reason);
+        lifecycle.status = run.stopped && !budgetExceeded ? 'cancelled' : 'failed';
         lifecycle.endedAt = new Date().toISOString();
-        lifecycle.errorCode = run.stopped ? 'cancelled' : 'tool_failed';
+        lifecycle.errorCode = budgetExceeded
+          ? 'budget_exceeded'
+          : run.stopped
+            ? 'cancelled'
+            : 'tool_failed';
       }
       const nativeResult = [...manager.getEntries()]
         .reverse()
@@ -838,12 +995,22 @@ async function createNativeMemorySession(options: NativeMemorySessionOptions) {
             entry.message.toolCallId === toolCallId,
         );
       if (lifecycle && nativeResult) lifecycle.resultNativeEntryId = nativeResult.id;
+      const finalLifecycle = lifecycle ? structuredClone(lifecycle) : undefined;
       await settleBarrier(run, async () => {
-        await options.barriers?.afterTool?.(captureNativeState(), lifecycle);
-        if (lifecycle) await options.barriers?.onToolLifecycle?.(structuredClone(lifecycle));
+        await options.barriers?.afterTool?.(saveState(), finalLifecycle);
+        if (finalLifecycle)
+          await options.barriers?.onToolLifecycle?.(structuredClone(finalLifecycle));
       });
     }
   });
+
+  // This is a host-owned awaited boundary, before prompt() can become reachable.
+  try {
+    await options.barriers?.afterAssembly?.(saveState());
+  } catch {
+    session.dispose();
+    throw new Error('PI_ASSEMBLY_BARRIER_FAILED');
+  }
 
   return {
     async prompt(text: string, onText?: (text: string) => void): Promise<PiPromptResult> {

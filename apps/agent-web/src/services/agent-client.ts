@@ -9,6 +9,8 @@ import {
 } from '@tyde/shared/agent';
 import { AgentEventError, SseParseError, SseParser, type RawSseEvent } from '../agent-events';
 
+export type AgentStorageMode = 'postgres' | 'memory';
+
 type Fetch = typeof globalThis.fetch;
 
 const API = '/agent-api/api/agent/v1/conversations';
@@ -94,6 +96,32 @@ export class AgentClient {
       );
     }
     return new AgentApiError(`Agent 服务返回 HTTP ${status}`, status, 'HTTP_ERROR');
+  }
+
+  /** Authenticated read-only runtime metadata. An unavailable mode stays unknown. */
+  async storageMode(signal?: AbortSignal): Promise<AgentStorageMode> {
+    const response = await this.fetcher('/agent-api/api/agent/v1/runtime', {
+      method: 'GET',
+      headers: this.headers(),
+      credentials: 'omit',
+      cache: 'no-store',
+      signal,
+    });
+    const data = await this.readJson(response);
+    if (!response.ok) throw this.responseError(response.status, data);
+    if (
+      typeof data !== 'object' ||
+      data === null ||
+      !('storage_mode' in data) ||
+      (data.storage_mode !== 'postgres' && data.storage_mode !== 'memory')
+    ) {
+      throw new AgentApiError(
+        'Agent 存储模式尚未确认，请检查客户端与服务版本。',
+        response.status,
+        'INVALID_RUNTIME_METADATA',
+      );
+    }
+    return data.storage_mode;
   }
 
   list(signal?: AbortSignal, cursor?: string) {

@@ -42,7 +42,25 @@ function queryParameters(request: FastifyRequest, allowed: string[]): Query {
   return result;
 }
 
-export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMemoryRuntime) {
+type RuntimeMethod =
+  | 'createConversation'
+  | 'listConversations'
+  | 'getConversation'
+  | 'getSnapshot'
+  | 'listMessages'
+  | 'getTask'
+  | 'getResult'
+  | 'getCommand'
+  | 'submitCommand'
+  | 'subscribe'
+  | 'close';
+export type AgentRuntime = {
+  [K in RuntimeMethod]: (
+    ...args: Parameters<AgentMemoryRuntime[K]>
+  ) => ReturnType<AgentMemoryRuntime[K]> | Promise<ReturnType<AgentMemoryRuntime[K]>>;
+};
+
+export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentRuntime) {
   registerContractDocumentation(app);
   const streams = new Set<ReturnType<typeof createSseWriter>>();
   app.addHook('preClose', async () => {
@@ -172,14 +190,14 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
     };
     route(prefix, 'post', async (req, reply) => {
       queryParameters(req, []);
-      const data = runtime.createConversation(await principal(req), req.body);
+      const data = await runtime.createConversation(await principal(req), req.body);
       return reply.code(201).send(result('CreateConversationResponse', data));
     });
     route(prefix, 'get', async (req) => {
       const query = queryParameters(req, ['limit', 'cursor']);
       return result(
         'ConversationListResponse',
-        runtime.listConversations(await principal(req), {
+        await runtime.listConversations(await principal(req), {
           limit: integer(query.limit, 20),
           ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
         }),
@@ -189,14 +207,14 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
       queryParameters(req, []);
       return result(
         'ConversationDetailResponse',
-        runtime.getConversation(await principal(req), id(req)),
+        await runtime.getConversation(await principal(req), id(req)),
       );
     });
     route(`${prefix}/{conversation_id}/snapshot`, 'get', async (req) => {
       const query = queryParameters(req, ['message_limit']);
       return result(
         'SnapshotResponse',
-        runtime.getSnapshot(await principal(req), id(req), integer(query.message_limit, 50)),
+        await runtime.getSnapshot(await principal(req), id(req), integer(query.message_limit, 50)),
       );
     });
     route(`${prefix}/{conversation_id}/messages`, 'get', async (req) => {
@@ -208,7 +226,7 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
       ]);
       return result(
         'MessageHistoryResponse',
-        runtime.listMessages(await principal(req), id(req), {
+        await runtime.listMessages(await principal(req), id(req), {
           streamId: requiredScalar('UUID', query.stream_id).toLowerCase(),
           upperMessageSeq: requiredScalar('NonNegativeBigInt', query.upper_message_seq),
           ...(query.before_message_seq === undefined
@@ -222,7 +240,7 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
       queryParameters(req, []);
       return result(
         'TaskDetailResponse',
-        runtime.getTask(
+        await runtime.getTask(
           await principal(req),
           id(req),
           requiredScalar('UUID', (req.params as Params).task_id).toLowerCase(),
@@ -233,7 +251,7 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
       queryParameters(req, []);
       return result(
         'ResultDetailResponse',
-        runtime.getResult(
+        await runtime.getResult(
           await principal(req),
           id(req),
           requiredScalar('UUID', (req.params as Params).result_id).toLowerCase(),
@@ -244,7 +262,7 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
       queryParameters(req, []);
       return result(
         'CommandLookupResponse',
-        runtime.getCommand(
+        await runtime.getCommand(
           await principal(req),
           id(req),
           requiredScalar('UUID', (req.params as Params).request_key).toLowerCase(),
@@ -253,7 +271,7 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
     });
     route(`${prefix}/{conversation_id}/commands`, 'post', async (req, reply) => {
       queryParameters(req, []);
-      const submission = runtime.submitCommand(
+      const submission = await runtime.submitCommand(
         await principal(req),
         id(req),
         req.body,
@@ -296,7 +314,7 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
                 authenticated.source !== identity.source
               )
                 throw new Error('IDENTITY_CHANGED');
-              runtime.getConversation(authenticated, conversationId);
+              await runtime.getConversation(authenticated, conversationId);
             } catch {
               if (!ended) {
                 writer.send({ schema_version: 1, frame_kind: 'control', code: 'reauthenticate' });
@@ -336,10 +354,57 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
           void pump();
         });
       };
-      const subscription = runtime.subscribe(identity, conversationId, {
+      let installed = false;
+      let earlyError: unknown;
+      let earlyBytes = 0;
+      let earlyOverflow = false;
+      const earlyFrames: AgentFrame[] = [];
+      const onStreamError = (error: unknown) => {
+        if (!installed) {
+          earlyError = error;
+          return;
+        }
+        if (ended) return;
+        const reasons = {
+          STREAM_CHANGED: 'stream_changed',
+          CURSOR_EXPIRED: 'cursor_expired',
+          CURSOR_AHEAD: 'cursor_ahead',
+          EVENT_HISTORY_GAP: 'event_gap',
+        } as const;
+        if (error instanceof AgentRuntimeError && error.code in reasons)
+          writer.send({
+            schema_version: 1,
+            frame_kind: 'control',
+            code: 'resync_required',
+            reason: reasons[error.code as keyof typeof reasons],
+            action: 'reload_snapshot',
+          });
+        else
+          writer.send({
+            schema_version: 1,
+            frame_kind: 'control',
+            code: 'server_retry',
+            retry_after_ms: 1000,
+          });
+        writer.close();
+      };
+      const subscription = await runtime.subscribe(identity, conversationId, {
         streamId,
         afterEventSeq,
-        onFrame: enqueue,
+        onFrame: (frame) => {
+          if (installed) {
+            enqueue(frame);
+            return;
+          }
+          const bytes = Buffer.byteLength(encodeFrame(frame));
+          if (earlyFrames.length >= 512 || earlyBytes + bytes > 1024 * 1024) {
+            earlyOverflow = true;
+            return;
+          }
+          earlyFrames.push(frame);
+          earlyBytes += bytes;
+        },
+        onError: onStreamError,
       });
       // subscribe 与 ready/replay 同步入队；异步鉴权不能让实时事件越过补读。
       reply.hijack();
@@ -364,6 +429,18 @@ export async function registerAgentRoutes(app: FastifyInstance, runtime: AgentMe
       streams.add(writer);
       enqueue(subscription.ready);
       for (const frame of subscription.replay) enqueue(frame);
+      installed = true;
+      if (earlyError) onStreamError(earlyError);
+      else if (earlyOverflow) {
+        writer.send({
+          schema_version: 1,
+          frame_kind: 'control',
+          code: 'slow_consumer',
+          retry_after_ms: 1000,
+        });
+        writer.close();
+      } else for (const frame of earlyFrames) enqueue(frame);
+      earlyFrames.length = 0;
     });
   });
 }

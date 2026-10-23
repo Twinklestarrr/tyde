@@ -69,7 +69,7 @@ async function openStream(url: string) {
   };
 }
 
-async function setup() {
+async function setup(asyncLive = false) {
   let authorized = true;
   let starts = 0;
   let stops = 0;
@@ -92,7 +92,31 @@ async function setup() {
     }),
   });
   const app = await createApp(readConfig({ NODE_ENV: 'test' }), {
-    runtime,
+    runtime: asyncLive
+      ? new Proxy(runtime, {
+          get(target, property) {
+            if (property === 'subscribe')
+              return async (...args: Parameters<AgentMemoryRuntime['subscribe']>) => {
+                const result = target.subscribe(...args);
+                args[2].onFrame({
+                  schema_version: 1,
+                  frame_kind: 'delta',
+                  conversation_id: args[1],
+                  stream_id: args[2].streamId,
+                  attempt_id: randomUUID(),
+                  message_id: randomUUID(),
+                  output_stream_id: randomUUID(),
+                  delta_index: 1,
+                  text: 'isolated async subscription callback',
+                });
+                await tick();
+                return result;
+              };
+            const value = Reflect.get(target, property);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        })
+      : runtime,
     identityAdapter: {
       authenticateBearer: async (token) =>
         authorized && token === bearer ? { userId: principal.userId } : null,
@@ -237,4 +261,20 @@ test('真 TCP 断开订阅不停止任务，重连仅按已应用 after_seq 补�
   );
   assert.equal(fixture.starts(), 1);
   assert.equal(fixture.stops(), 0);
+});
+
+test('async persistent subscription callbacks cannot overtake ready and replay', async () => {
+  const harness = await setup(true);
+  const stream = await openStream(harness.streamUrl('0'));
+  try {
+    const first = await stream.next();
+    assert.equal(first?.data.frame_kind, 'control');
+    assert.equal(first?.data.code, 'ready');
+    const second = await stream.next();
+    assert.equal(second?.data.frame_kind, 'delta');
+    assert.equal(harness.starts(), 0);
+  } finally {
+    await stream.close();
+    await harness.app.close();
+  }
 });

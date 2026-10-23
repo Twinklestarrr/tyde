@@ -6,6 +6,7 @@ import { AttemptStats } from './components/AttemptStats';
 import { AgentClient } from './services/agent-client';
 import { ChatController } from './services/chat-controller';
 import { taskExecutionPhase, type TaskExecutionPhase } from './lib/task-state';
+import { storageModeCopy } from './lib/storage-mode';
 import { useLocalCalendarDay } from './hooks/useLocalCalendarDay';
 
 const TASK_LABELS: Record<TaskExecutionPhase, string> = {
@@ -29,11 +30,22 @@ export function App() {
   const [credential, setCredential] = useState('');
   const [controller, setController] = useState<ChatController | null>(null);
   const [dark, setDark] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
   useEffect(() => () => controller?.dispose(), [controller]);
 
-  const connect = () => {
-    if (!credential.trim()) return;
+  const connect = async () => {
+    if (!credential.trim() || connecting) return;
+    setConnecting(true);
+    setConnectError(null);
     const next = new ChatController(new AgentClient(credential.trim()));
+    const confirmed = await next.refreshStorageMode();
+    setConnecting(false);
+    if (!confirmed) {
+      setConnectError(next.getSnapshot().error);
+      next.dispose();
+      return;
+    }
     setCredential('');
     setController(next);
     void next.refreshList().then(() => {
@@ -61,7 +73,7 @@ export function App() {
             <div className="setup-symbol" aria-hidden="true">
               π
             </div>
-            <span className="eyebrow">开发内存模式</span>
+            <span className="eyebrow">存储模式尚未确认</span>
             <h1>连接你的 Agent 工作区</h1>
             <p>
               使用本机 Agent 服务配置的开发身份凭据连接。凭据只留在本页内存中，刷新后需要重新输入。
@@ -69,7 +81,7 @@ export function App() {
             <form
               onSubmit={(event) => {
                 event.preventDefault();
-                connect();
+                void connect();
               }}
             >
               <label htmlFor="agent-credential">Agent 开发身份凭据</label>
@@ -82,13 +94,20 @@ export function App() {
                 placeholder="输入服务端配置的 Bearer 凭据"
                 required
               />
-              <button className="primary-button" type="submit" disabled={!credential.trim()}>
-                连接工作区
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={!credential.trim() || connecting}
+              >
+                {connecting ? '正在确认存储模式…' : '连接工作区'}
               </button>
             </form>
-            <p className="mode-note">
-              服务重启会清空会话；本页可在同一服务进程内恢复历史和订阅。模型由服务端配置。
-            </p>
+            {connectError && (
+              <p role="alert" className="mode-note">
+                {connectError}
+              </p>
+            )}
+            <p className="mode-note">连接后读取服务端存储模式。模型由服务端配置。</p>
           </section>
         </main>
       )}
@@ -109,6 +128,7 @@ function Workspace({
 }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const calendarDay = useLocalCalendarDay();
+  const storage = storageModeCopy(state.storageMode);
   const [draft, setDraft] = useState('');
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -226,8 +246,8 @@ function Workspace({
           </button>
         )}
         <div className="sidebar-footer">
-          <strong>开发内存模式</strong>
-          <p>同进程刷新和断线可恢复展示。服务重启后会话失效。</p>
+          <strong>{storage.label}</strong>
+          <p>{storage.description}</p>
           <button className="text-button" onClick={onDisconnect}>
             重新连接身份
           </button>
@@ -236,7 +256,7 @@ function Workspace({
       <main className="agent-main">
         <header className="agent-header">
           <div>
-            <span className="eyebrow">TYDE AGENT · 开发内存模式</span>
+            <span className="eyebrow">TYDE AGENT · {storage.label}</span>
             <h1>{view?.conversation.title || 'Agent 工作区'}</h1>
           </div>
           <div className="header-actions">
@@ -400,7 +420,7 @@ function Workspace({
             onSend={send}
             unavailableReason={unavailableReason}
           />
-          <p className="composer-hint">开发内存模式 · 服务重启会清空历史 · 关闭页面不会停止任务</p>
+          <p className="composer-hint">{storage.hint}</p>
         </footer>
       </main>
     </>

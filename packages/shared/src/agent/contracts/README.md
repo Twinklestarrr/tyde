@@ -27,3 +27,7 @@ node scripts/generate-agent-contracts.mjs --check
 快照、消息历史、任务详情、结果详情新增可选 `tool_executions` 数组；旧冻结投影缺省兼容，新 W4 运行必须返回数组。快照覆盖 focus、messages、pinned_messages、results 对应任务的完整工具投影，与水位 H 一起安装后再消费同一可靠序号流；历史按消息关联 task 覆盖全部工具过程，但不推进可靠游标。刷新、切换与重连只恢复展示，不重派模型或工具。终态按 ID/row_version 收敛，迟到结果不恢复旧执行。
 
 这是对当前外部 22 设计和机器契约的明确 W4 新增修订，21 源文件未修改。公开 `schema_version=1` 保持不变，不新增产品命令；新增可靠事件需要前后端配套升级。旧严格客户端不能消费新字段/事件时按原协议失败关闭，不宣称无条件向后兼容，不允许忽略未知事件或跳号。默认服务不包含具体演示资源或 Skill，示例仅用于契约测试与 Swagger，不能作为页面工具执行来源。
+
+W5 独立阶段未修改其基线的两份公开命令／读取源和生成产物；本轮合流保留 W4 的 22 号扩展及全部同源生成文件，持久化由 Agent 自有运行时实现，不把设计中未开放的 continue/retry/provide_input 当成已交付。新增认证只读部署信息 `GET /api/agent/v1/runtime` 由 Agent 本地 Swagger 定义 `{storage_mode:"postgres"|"memory"}` 及401/503错误；它不参与 Pi 上下文、产品事件或执行授权。W4 接入仍使用同一共享源，合流时通过现有生成器维护，禁止手改 generated 文件。
+
+W4／W5 合流不另建持久化专用的公开工具 DTO。PostgreSQL 运行时应按同一 `ToolExecutionSummary` 冻结工具投影，并与原生版本／可靠 `tool.updated` 保持提交关联。冲突处理和接口接入状态见 [合流记录](../../../../../docs/AGENT_W4_W5_INTEGRATION.md)；既有分支测试不等于合并后验证，当前等待用户确认后测试。

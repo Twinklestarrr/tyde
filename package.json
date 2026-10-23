@@ -57,7 +57,15 @@
     "db:migrate": "pnpm --filter @tyde/server db:migrate",
     "db:deploy": "pnpm --filter @tyde/server db:deploy",
     "db:cleanup": "pnpm --filter @tyde/server db:cleanup",
-    "db:deploy:test": "node scripts/migrate-test.mjs"
+    "db:deploy:test": "node scripts/migrate-test.mjs",
+    "migrate:agent": "pnpm --filter @tyde/agent migrate",
+    "check:agent-db": "pnpm --filter @tyde/agent db:check",
+    "test:agent-db": "pnpm --filter @tyde/shared build && pnpm --filter @tyde/agent test:db",
+    "test:agent-budget-realtime": "pnpm --filter @tyde/agent test:budget:realtime",
+    "publish:agent-config": "pnpm --filter @tyde/agent publish:config",
+    "agent:db:migrate": "pnpm --filter @tyde/agent migrate",
+    "agent:db:check": "pnpm --filter @tyde/agent db:check",
+    "test:agent:db": "pnpm --filter @tyde/shared build && pnpm --filter @tyde/agent test:db"
   },
   "lint-staged": {
     "*.{js,cjs,mjs,jsx,ts,tsx}": "eslint --max-warnings 0 --no-warn-ignored",

@@ -64,7 +64,7 @@ interface TransportOptions {
   socket?: MaasSocketOptions;
   signal?: AbortSignal;
   tools?: Readonly<Record<string, MaasTool>>;
-  /** Stable host dispatch/authorization identity, generated before the save gate. */
+  /** Fixed before durable authorization; one transport may dispatch it only once. */
   modelRequestId?: string;
   limits?: { responseBytes?: number; eventBytes?: number; toolArgumentsBytes?: number };
 }
@@ -599,20 +599,18 @@ function createGuardedTransport(
   const all: MaasObservation[] = [];
   const tools = options.tools ?? {};
   const endpoint = `${config.baseUrl}/chat/completions`;
-  let hostDispatchUsed = false;
+  let dispatched = false;
   const guardedFetch: typeof globalThis.fetch = async (input, init) => {
+    if (options.modelRequestId !== undefined) {
+      assert(!dispatched, 'MAAS_MODEL_AUTHORIZATION_REUSED');
+      dispatched = true;
+    }
     const url = input instanceof Request ? input.url : String(input);
     assert(
       url === endpoint && init?.method?.toUpperCase() === 'POST' && typeof init.body === 'string',
       'MAAS_REQUEST_INVALID',
     );
     validatePayload(init.body, config, tools, profile);
-    // A host authorization is a single dispatch, even if an SDK unexpectedly
-    // invokes fetch twice. Standalone transports keep their existing API.
-    if (options.modelRequestId !== undefined) {
-      assert(!hostDispatchUsed, 'MAAS_REQUEST_INVALID');
-      hostDispatchUsed = true;
-    }
     const observation: MaasObservation = {
       profile: profile.kind,
       ...(profile.kind === 'direct-model' ? { provider: profile.config.provider } : {}),

@@ -600,3 +600,178 @@ test('执行中deadline撤销工具信号，预算失败保留真实计数且不
     session.dispose();
   }
 });
+
+test('W4/W5 工具可重入资格检查不重复消费一次性派发许可', async () => {
+  const stages: string[] = [];
+  let permits = 0;
+  let dispatches = 0;
+  let modelCalls = 0;
+  const session = await create({
+    tools: [
+      lookup(async () => {
+        assert.equal(permits, 0);
+        stages.push('execute');
+        return { content: 'synthetic-value', summary: 'Synthetic fixture value' };
+      }),
+    ],
+    barriers: {
+      beforeTool: async (state, _name, call) => {
+        assert.ok(Object.isFrozen(state.entries));
+        assert.ok(state.entries.some((entry) => entry.id === call.sourceNativeEntryId));
+        permits += 1;
+        stages.push('authorize');
+      },
+      checkToolEligibility: async () => {
+        assert.equal(permits, 1);
+        stages.push('eligibility');
+      },
+      beforeToolDispatch: async () => {
+        assert.equal(permits, 1);
+        permits -= 1;
+        dispatches += 1;
+        stages.push('dispatch');
+      },
+      onToolLifecycle: async (event) => {
+        stages.push(event.status);
+        if (event.status === 'succeeded') assert.ok(event.resultNativeEntryId);
+      },
+      afterTool: async (state, call) => {
+        assert.ok(Object.isFrozen(state.entries));
+        assert.ok(
+          state.entries.some(
+            (entry) =>
+              entry.type === 'message' &&
+              entry.message.role === 'toolResult' &&
+              entry.message.toolCallId === call?.toolCallId,
+          ),
+        );
+        stages.push('native-result-saved');
+      },
+    },
+    fetch: async (_input, init) => {
+      modelCalls += 1;
+      if (modelCalls === 2) {
+        assert.equal(stages.at(-1), 'succeeded');
+        assert.ok(String(init?.body).includes('synthetic-value'));
+      }
+      return response(init, modelCalls === 1 ? toolCall() : answer('Synthetic fixture value.'));
+    },
+  });
+  try {
+    assert.equal((await session.prompt('Read the fixture.')).status, 'completed');
+    assert.equal(modelCalls, 2);
+    assert.equal(dispatches, 1);
+    assert.deepEqual(stages, [
+      'authorize',
+      'eligibility',
+      'running',
+      'eligibility',
+      'dispatch',
+      'execute',
+      'native-result-saved',
+      'succeeded',
+    ]);
+  } finally {
+    session.dispose();
+  }
+});
+
+test('W4/W5 running 保存后资格撤销不会消费派发许可或执行工具', async () => {
+  let eligible = true;
+  let dispatches = 0;
+  let executions = 0;
+  const lifecycles: PiToolLifecycle[] = [];
+  const session = await create({
+    tools: [
+      lookup(async () => {
+        executions += 1;
+        return 'unused';
+      }),
+    ],
+    barriers: {
+      checkToolEligibility: async () => {
+        if (!eligible) throw new Error('execution revoked');
+      },
+      beforeToolDispatch: async () => {
+        dispatches += 1;
+      },
+      onToolLifecycle: async (event) => {
+        lifecycles.push(event);
+        if (event.status === 'running') eligible = false;
+      },
+    },
+    fetch: async (_input, init) => response(init, toolCall()),
+  });
+  try {
+    assert.equal((await session.prompt('Read the fixture.')).status, 'failed');
+    assert.equal(executions, 0);
+    assert.equal(dispatches, 0);
+    assert.deepEqual(
+      lifecycles.map((event) => event.status),
+      ['running', 'failed'],
+    );
+    assert.ok(lifecycles.at(-1)?.resultNativeEntryId);
+  } finally {
+    session.dispose();
+  }
+});
+
+test('W4 Skill 与工具原生历史通过 W5 版本格式恢复，拒绝混入不同资源版本', async () => {
+  const bundle = (version: string) =>
+    freezePiResources({
+      id: 'restore-fixture',
+      version,
+      systemPrompt: resource('restore-prompt', 'Use only supplied synthetic fixtures.'),
+      skills: [
+        resource('restore-skill', 'For fixture questions call lookup, then cite its actual value.'),
+      ],
+      tools: [
+        lookup(async () => ({
+          content: 'persisted-synthetic-value',
+          summary: 'Synthetic data',
+        })),
+      ],
+    });
+  const resources = bundle('1');
+  let calls = 0;
+  const first = await create({
+    resources,
+    fetch: async (_input, init) => {
+      calls += 1;
+      return response(init, calls === 1 ? toolCall() : answer('Synthetic data.'));
+    },
+  });
+  let nativeState: ReturnType<typeof first.captureNativeState>;
+  try {
+    assert.equal((await first.prompt('Read the fixture.')).status, 'completed');
+    nativeState = first.captureNativeState();
+  } finally {
+    first.dispose();
+  }
+  // The authoritative native store saves header/entries/version fields; the host
+  // envelope must also be recoverable from its native custom entry.
+  delete nativeState.configuration;
+  await assert.rejects(
+    create({ resources: bundle('2'), nativeState }),
+    /PI_EXECUTION_CONFIGURATION_MISMATCH/,
+  );
+  let restoredCalls = 0;
+  const restored = await create({
+    resources,
+    nativeState,
+    fetch: async (_input, init) => {
+      restoredCalls += 1;
+      const body = String(init?.body);
+      assert.ok(body.includes('persisted-synthetic-value'));
+      assert.ok(body.includes('For fixture questions call lookup'));
+      return response(init, answer('The synthetic value is preserved.'));
+    },
+  });
+  try {
+    assert.equal((await restored.prompt('What was the synthetic value?')).status, 'completed');
+    assert.equal(restoredCalls, 1);
+    assert.equal(restored.captureNativeState().configuration?.resources?.version, '1');
+  } finally {
+    restored.dispose();
+  }
+});

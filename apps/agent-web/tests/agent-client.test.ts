@@ -150,3 +150,27 @@ test('default browser fetch retains its required global receiver', async () => {
     globalThis.fetch = original;
   }
 });
+
+test('storage metadata is authenticated, read only, and accepts only explicit server modes', async () => {
+  const { AgentClient } = await import('../src/services/agent-client');
+  for (const storage_mode of ['postgres', 'memory'] as const) {
+    const client = new AgentClient('controlled-identity', async (url, init) => {
+      assert.equal(url, '/agent-api/api/agent/v1/runtime');
+      assert.equal(init?.method, 'GET');
+      assert.equal(init?.credentials, 'omit');
+      assert.equal(init?.cache, 'no-store');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer controlled-identity');
+      assert.equal(init?.body, undefined);
+      return Response.json({ storage_mode });
+    });
+    assert.equal(await client.storageMode(), storage_mode);
+  }
+  for (const data of [{}, { storage_mode: 'unknown' }, null]) {
+    const client = new AgentClient('controlled-identity', async () => Response.json(data));
+    await assert.rejects(client.storageMode(), /存储模式尚未确认/);
+  }
+  const unavailable = new AgentClient('controlled-identity', async () =>
+    Response.json({}, { status: 503 }),
+  );
+  await assert.rejects(unavailable.storageMode(), /503/);
+});

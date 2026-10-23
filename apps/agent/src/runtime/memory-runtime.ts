@@ -78,7 +78,7 @@ export interface NativeExecutionCapture {
 export class AgentRuntimeError extends Error {
   constructor(
     public readonly statusCode: number,
-    public readonly code: ReadError['code'],
+    public readonly code: ReadError['code'] | UnconfirmedError['code'],
     message: string,
     public readonly action: ReadError['action'] = 'fix_request',
     public readonly details: ReadError['details'] = {},
@@ -425,6 +425,7 @@ export class AgentMemoryRuntime {
       streamId: string;
       afterEventSeq: string;
       onFrame(frame: RuntimeFrame): void;
+      onError?(error: unknown): void;
     },
   ): { ready: ReadyControlFrame; replay: readonly ProductFrame[]; close(): void } {
     const conversation = this.owned(principal, id);
@@ -723,7 +724,7 @@ export class AgentMemoryRuntime {
               call?.toolCallId,
             );
           },
-          beforeToolDispatch: async (call) => {
+          checkToolEligibility: async (call) => {
             const active = this.executionFor(conversation, call);
             await this.dispatchGate(conversation, active, 'tool', call, call?.toolCallId);
           },

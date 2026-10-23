@@ -11,9 +11,15 @@ import {
 import { AgentMemoryRuntime } from './runtime/memory-runtime.js';
 import { readDirectModelConfig } from './maas/direct-model.js';
 import { createPiDirectModelSession } from './pi/session.js';
-import type { TrustedPiResources } from './pi/resources.js';
+import { assertTrustedPiResources, type TrustedPiResources } from './pi/resources.js';
 import { registerAgentRoutes } from './api/routes.js';
 import { transformAgentOpenApi } from './api/documentation.js';
+import type { AgentRuntime } from './api/routes.js';
+import { AgentPostgresRuntime } from './runtime/postgres-runtime.js';
+import { createAgentDatabase } from './storage/database.js';
+import { modelExecutionConfig, requireExecutionSnapshot } from './storage/execution-config.js';
+import { checkAgentDatabase } from './storage/migrations.js';
+import { prepareTrustedPiDeployment, type TrustedPiDeployment } from './storage/pi-deployment.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -25,12 +31,17 @@ export async function createApp(
   config: AgentConfig,
   options: {
     identityAdapter?: PlatformIdentityAdapter;
-    runtime?: AgentMemoryRuntime;
+    runtime?: AgentRuntime;
     /** Trusted host injection only. Default startup never discovers deployment/demo resources. */
     resources?: TrustedPiResources;
+    /** PostgreSQL resources require a complete, fixed deployment publication. */
+    deployment?: TrustedPiDeployment;
   } = {},
 ) {
-  const resources = options.resources;
+  if (options.resources && options.deployment && options.resources !== options.deployment.resources)
+    throw new Error('PI_RESOURCE_DEPLOYMENT_MISMATCH');
+  const resources = options.deployment?.resources ?? options.resources;
+  if (resources) assertTrustedPiResources(resources);
   const agentAccess = createAgentAccess(config, options.identityAdapter);
   const app = Fastify({
     logger:
@@ -53,7 +64,7 @@ export async function createApp(
         title: 'tyde Agent API',
         version: '0.1.0',
         description:
-          'W4 开发内存模式：私有会话、问答任务、幂等命令、停止、独立工具过程与产品 SSE 仅在同一进程存活期间有效。工具与 Skill 仅由可信宿主显式注入，默认入口不加载演示资源；只读工具不产生业务操作。未接 PostgreSQL、重启恢复、业务写工具或正式平台授权。',
+          '私有聊天、持久命令裁决、完整 Pi 原生版本、预算授权、独立工具过程和产品 SSE。PostgreSQL 模式重启只恢复展示；完成目标可显式发送后续问题。工具与 Skill 仅由可信宿主显式注入，资源须与已发布执行配置匹配，默认入口不加载演示资源；只读工具不产生业务操作。继续、重试和补充尚未公开。开发内存模式必须显式选择，数据库故障不会回退。',
       },
       components: {
         securitySchemes: {
@@ -67,7 +78,10 @@ export async function createApp(
       },
       tags: [
         { name: 'Health', description: 'Agent 服务进程存活检查，不代表模型或数据库就绪。' },
-        { name: 'Agent', description: '开发内存模式的私有聊天、任务和事件。' },
+        {
+          name: 'Agent',
+          description: '私有聊天、任务与可靠产品事件。存储模式由运行信息接口确认。',
+        },
       ],
     },
   });
@@ -93,14 +107,128 @@ export async function createApp(
   );
 
   let modelConfig: ReturnType<typeof readDirectModelConfig> | undefined;
-  const runtime =
-    options.runtime ??
-    new AgentMemoryRuntime({
-      createSession: async (_conversationId, barriers) => {
-        modelConfig ??= readDirectModelConfig();
-        return createPiDirectModelSession({ config: modelConfig, barriers, resources });
+  let runtime = options.runtime;
+  const mode = config.storage?.mode ?? 'memory';
+  if (!runtime && mode === 'postgres') {
+    if (config.storage?.mode !== 'postgres' || !config.storage.databaseUrl)
+      throw new Error('PostgreSQL 模式需要独立 AGENT_DATABASE_URL；不读取业务 DATABASE_URL');
+    if (resources && !options.deployment)
+      throw new Error('PI_RESOURCE_DEPLOYMENT_REQUIRED: PostgreSQL 资源必须提供固定部署声明');
+    const database = createAgentDatabase({ connectionString: config.storage.databaseUrl });
+    try {
+      await checkAgentDatabase(database.pool);
+      modelConfig = readDirectModelConfig();
+      const executionConfig = modelExecutionConfig(modelConfig);
+      const deployment = options.deployment
+        ? await prepareTrustedPiDeployment(database.pool, options.deployment)
+        : undefined;
+      await requireExecutionSnapshot(
+        database.pool,
+        executionConfig,
+        deployment?.toolManifest,
+        deployment?.resourceManifestHash,
+      );
+      const persistent = new AgentPostgresRuntime({
+        pool: database.pool,
+        executionConfig,
+        ...(deployment ?? {}),
+        createSession: async (_id, barriers, nativeState) =>
+          createPiDirectModelSession({ config: modelConfig!, barriers, nativeState, resources }),
+      });
+      await persistent.initialize();
+      runtime = persistent;
+      app.addHook('onClose', () => database.close());
+    } catch (error) {
+      await database.close();
+      throw error;
+    }
+  }
+  runtime ??= new AgentMemoryRuntime({
+    createSession: async (_conversationId, barriers) => {
+      modelConfig ??= readDirectModelConfig();
+      return createPiDirectModelSession({ config: modelConfig, barriers, resources });
+    },
+  });
+  app.get(
+    '/api/agent/v1/runtime',
+    {
+      schema: {
+        operationId: 'agentRuntimeStorage',
+        tags: ['Agent'],
+        summary: '读取当前服务存储模式',
+        description: '认证后的只读部署信息；不会启动或恢复尝试。PostgreSQL 故障不会自动切换内存。',
+        security: [{ AgentBearer: [] }],
+        response: {
+          200: {
+            type: 'object',
+            description: '当前服务经过身份核验后的存储模式；不会透露数据库地址或凭据',
+            additionalProperties: false,
+            required: ['storage_mode'],
+            properties: {
+              storage_mode: {
+                type: 'string',
+                enum: ['postgres', 'memory'],
+                description: '当前服务实际存储模式；postgres 持久保存，memory 重启清空',
+                example: 'postgres',
+              },
+            },
+            example: { storage_mode: 'postgres' },
+          },
+          401: {
+            type: 'object',
+            description: '缺少或无效的 Agent 身份凭据；重新认证后再读取模式',
+            required: ['statusCode', 'error', 'message'],
+            properties: {
+              statusCode: { type: 'integer', const: 401, description: 'HTTP 状态码', example: 401 },
+              code: { type: 'string', description: '身份错误分类', example: 'UNAUTHENTICATED' },
+              error: { type: 'string', description: 'HTTP 错误名称', example: 'Unauthorized' },
+              message: {
+                type: 'string',
+                description: '可展示的脱敏说明',
+                example: '请重新验证身份',
+              },
+            },
+            example: {
+              statusCode: 401,
+              code: 'UNAUTHENTICATED',
+              error: 'Unauthorized',
+              message: '请重新验证身份',
+            },
+          },
+          503: {
+            type: 'object',
+            description: '可信身份适配不可用；模式保持未确认，不能回退为内存或持久成功',
+            required: ['statusCode', 'error', 'message'],
+            properties: {
+              statusCode: { type: 'integer', const: 503, description: 'HTTP 状态码', example: 503 },
+              code: { type: 'string', description: '服务错误分类', example: 'SERVICE_UNAVAILABLE' },
+              error: {
+                type: 'string',
+                description: 'HTTP 错误名称',
+                example: 'Service Unavailable',
+              },
+              message: {
+                type: 'string',
+                description: '可展示的脱敏说明',
+                example: '身份验证暂不可用',
+              },
+            },
+            example: {
+              statusCode: 503,
+              code: 'SERVICE_UNAVAILABLE',
+              error: 'Service Unavailable',
+              message: '身份验证暂不可用',
+            },
+          },
+        },
       },
-    });
+    },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      await app.agentAccess.authenticate(request);
+      return { storage_mode: mode };
+    },
+  );
   await registerAgentRoutes(app, runtime);
 
   return app;
