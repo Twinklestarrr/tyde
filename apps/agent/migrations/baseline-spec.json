@@ -1,0 +1,3618 @@
+{
+  "schema": "agent",
+  "design_version": "2026-10-22",
+  "tables": {
+    "agent_conversations": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "产品会话主键"
+        },
+        {
+          "name": "owner_user_id",
+          "type": "text",
+          "nullable": false,
+          "description": "平台登录用户；创建后不转移给其他用户"
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "nullable": false,
+          "description": "会话标题，可使用默认标题"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "首次任务前可空；非空唯一，绑定后不静默替换"
+        },
+        {
+          "name": "row_version",
+          "type": "bigint",
+          "nullable": false,
+          "description": "默认 0，标题、绑定或删除等记录变化时递增"
+        },
+        {
+          "name": "last_message_seq",
+          "type": "bigint",
+          "nullable": false,
+          "description": "默认 0，已提交最大消息序号；更新同一消息不重新分配"
+        },
+        {
+          "name": "event_stream_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "当前产品事件流身份，普通运行不变；与事件序号共同确定补读位置"
+        },
+        {
+          "name": "last_event_seq",
+          "type": "bigint",
+          "nullable": false,
+          "description": "默认 0，当前流已提交最大事件序号"
+        },
+        {
+          "name": "event_pruned_through_seq",
+          "type": "bigint",
+          "nullable": false,
+          "description": "默认 0，当前流已裁剪完整前缀上界，不大于 last_event_seq"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "创建时间"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "最近记录修改时间"
+        },
+        {
+          "name": "last_activity_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "最近已接收输入或持久消息时间，不随逐 token 输出更新"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "逻辑删除标记；不是物理清理已完成的证明"
+        }
+      ]
+    },
+    "agent_tasks": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "任务主键"
+        },
+        {
+          "name": "conversation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属产品会话"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "固定关联该会话的 Pi 会话，支持直接校验执行互斥"
+        },
+        {
+          "name": "task_kind",
+          "type": "text",
+          "nullable": false,
+          "description": "business_query 或 scheduling_draft；MVP 演示可沿用查询类并明确演示标识"
+        },
+        {
+          "name": "goal_text",
+          "type": "text",
+          "nullable": false,
+          "description": "本项目标，原始输入另由命令保存；不是完整 Pi 上下文"
+        },
+        {
+          "name": "business_scope",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "部门、日期、人员、时区等规范化业务条件"
+        },
+        {
+          "name": "scope_locked_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "必要范围已确认并固定的时间；有业务效果的请求前必须具备"
+        },
+        {
+          "name": "execution_snapshot_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "FK 指向不可变执行快照；接受任务后固定所选模型、运行时及工具／资源配置"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "description": "下表八种任务状态"
+        },
+        {
+          "name": "row_version",
+          "type": "bigint",
+          "nullable": false,
+          "description": "默认 0，协调状态、可见尝试进展或已确认业务条件变化时递增"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "首次接受任务时间"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "最近任务记录修改时间"
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "可信交付结果与完成事实提交时间；仅 completed 非空"
+        }
+      ]
+    },
+    "agent_attempts": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "尝试主键"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属任务"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "必须与任务相同；活动唯一约束的作用范围"
+        },
+        {
+          "name": "attempt_no",
+          "type": "integer",
+          "nullable": false,
+          "description": "同任务从 1 递增，在协调事务中分配，不能先查询再无锁写入"
+        },
+        {
+          "name": "trigger_command_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "首个创建本尝试的命令，唯一；其他复用命令不改变它"
+        },
+        {
+          "name": "previous_attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "继续、补充或重试所承接的旧尝试，必须属于同一任务"
+        },
+        {
+          "name": "start_reason",
+          "type": "text",
+          "nullable": false,
+          "description": "initial、provide_input、continue 或 retry"
+        },
+        {
+          "name": "outcome",
+          "type": "text",
+          "nullable": true,
+          "description": "未结束时为空；结束值见下文"
+        },
+        {
+          "name": "execution_owner_id",
+          "type": "text",
+          "nullable": true,
+          "description": "实际执行进程的本次启动身份，未分配时为空；不能只用稳定机器名"
+        },
+        {
+          "name": "execution_generation",
+          "type": "bigint",
+          "nullable": true,
+          "description": "从 Pi 会话权威执行权领取的代次；用于本次提交比对"
+        },
+        {
+          "name": "base_revision_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "本次选定的原生起点，一旦选定固定；实际运行 Pi 前必须具备"
+        },
+        {
+          "name": "last_committed_revision_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "本尝试最近成功提交的原生版本；仅仅读取旧版本不算本次提交"
+        },
+        {
+          "name": "stop_requested_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "已可靠接受停止意图的时间，不代表实际停止"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "新尝试登记时间，含等待分配阶段"
+        },
+        {
+          "name": "started_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "执行者开始准备／恢复核对的时间，不是首 token 时间；首次写入时同时固定执行期限"
+        },
+        {
+          "name": "execution_deadline_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "已跟踪且开始的尝试，等于 started_at＋任务固定快照的 max_duration_ms；排队不计时，不是租约"
+        },
+        {
+          "name": "model_requests_used",
+          "type": "integer",
+          "nullable": true,
+          "description": "模型请求准入已占用次数；新尝试显式为0，实际请求前原子预占；历史未跟踪可空"
+        },
+        {
+          "name": "tool_calls_used",
+          "type": "integer",
+          "nullable": true,
+          "description": "Pi 工具执行准入已占用次数；新尝试显式为0，执行前原子预占；历史未跟踪可空"
+        },
+        {
+          "name": "limit_exceeded_kind",
+          "type": "text",
+          "nullable": true,
+          "description": "首次超限锁存原因：duration、model_requests 或 tool_calls；不由用户提交"
+        },
+        {
+          "name": "limit_exceeded_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "首次锁存时间，与 kind 同空同非空；锁存后不可改写或清除"
+        },
+        {
+          "name": "ended_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "实际执行已收敛或旧执行者已确认失效，并已记录结局的时间"
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "nullable": true,
+          "description": "失败或中断的可分类原因"
+        },
+        {
+          "name": "error_summary",
+          "type": "text",
+          "nullable": true,
+          "description": "脱敏摘要，不保存凭据或完整敏感上下文"
+        }
+      ]
+    },
+    "agent_commands": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "服务端命令标识"
+        },
+        {
+          "name": "conversation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "已验证归属的产品会话"
+        },
+        {
+          "name": "actor_user_id",
+          "type": "text",
+          "nullable": false,
+          "description": "可信登录用户，必须等于会话 owner_user_id"
+        },
+        {
+          "name": "client_instance_id",
+          "type": "text",
+          "nullable": true,
+          "description": "关联桌面实例和退出范围，不能用作授权依据"
+        },
+        {
+          "name": "request_key",
+          "type": "text",
+          "nullable": false,
+          "description": "客户端在一次意图首次发送前生成，网络重试原样复用"
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false,
+          "description": "下表五类命令"
+        },
+        {
+          "name": "payload_schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "请求内容规范化与解析的版本，首期为 1"
+        },
+        {
+          "name": "payload",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "原始语义请求：正文、业务上下文及原目标，不存 Token 或密钥；保持不变"
+        },
+        {
+          "name": "payload_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "服务端对规范化请求计算的摘要；同 key 不同内容必须冲突"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "验证后关联的任务；start_task 在同事务创建后回填，被拒绝时可空"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "与 task_id 成对回填，用于约束输入版本属于本任务的 Pi 会话，不是客户端可选项"
+        },
+        {
+          "name": "target_attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "本次请求明确针对的旧／当前尝试，不随服务端当前尝试漂移"
+        },
+        {
+          "name": "result_attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "实际创建、复用或作用的尝试；多个命令允许相同结果"
+        },
+        {
+          "name": "expected_task_version",
+          "type": "bigint",
+          "nullable": true,
+          "description": "补充、继续、重试要求提供的已知任务版本；停止主要依靠明确的尝试目标"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "description": "accepted、applied 或 rejected；表示命令协调处理，不表示任务成功"
+        },
+        {
+          "name": "outcome_code",
+          "type": "text",
+          "nullable": true,
+          "description": "创建、复用、已登记停止、目标已结束、状态冲突等处理结论，编码随接口冻结"
+        },
+        {
+          "name": "result_summary",
+          "type": "jsonb",
+          "nullable": true,
+          "description": "本次处理的结果标识与确认事实；幂等重放返回原处理结果"
+        },
+        {
+          "name": "input_state",
+          "type": "text",
+          "nullable": false,
+          "description": "none、pending、consumed 或 handled"
+        },
+        {
+          "name": "input_attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "实际消费或处理输入的尝试，可能不同于首次 result_attempt_id"
+        },
+        {
+          "name": "input_revision_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "输入进入原生状态时对应的已提交版本；consumed 时必需"
+        },
+        {
+          "name": "input_handling_result",
+          "type": "jsonb",
+          "nullable": true,
+          "description": "输入由受控 SDK 命令处理、未进入模型时的处理结论"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "首次接收时间"
+        },
+        {
+          "name": "processed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "applied 或 rejected 的协调处理时间，不是任务结束时间"
+        }
+      ]
+    },
+    "pi_sessions": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "项目内部 Pi 会话主键，供产品表关联"
+        },
+        {
+          "name": "conversation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属产品会话，唯一；沿该会话继承 owner_user_id"
+        },
+        {
+          "name": "native_session_id",
+          "type": "text",
+          "nullable": false,
+          "description": "原生 header.id，创建后固定，不与内部 ID 混用"
+        },
+        {
+          "name": "head_revision_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "唯一已提交恢复入口，只能指向本 Pi 会话的版本"
+        },
+        {
+          "name": "active_attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "当前占用会话的尝试；可处于等待分配阶段，不表示已开始模型调用"
+        },
+        {
+          "name": "writer_owner_id",
+          "type": "text",
+          "nullable": true,
+          "description": "当前获准写入的执行进程启动身份；未分配时为空"
+        },
+        {
+          "name": "execution_generation",
+          "type": "bigint",
+          "nullable": false,
+          "description": "默认 0，授予／撤销执行权时递增；不得回退或随意复用"
+        },
+        {
+          "name": "restore_issue_revision_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "最近记录恢复问题所针对的版本，必须属于本会话"
+        },
+        {
+          "name": "restore_issue_code",
+          "type": "text",
+          "nullable": true,
+          "description": "格式不兼容、原生状态不合法、资源不可用等原因"
+        },
+        {
+          "name": "restore_issue_summary",
+          "type": "text",
+          "nullable": true,
+          "description": "脱敏诊断摘要，不保存完整敏感上下文"
+        },
+        {
+          "name": "restore_issue_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "检测时间；四个恢复诊断字段同时为空或同时存在"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "创建时间"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "head、执行权或诊断记录最近变化时间"
+        }
+      ]
+    },
+    "pi_session_entries": {
+      "fields": [
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属 Pi 会话"
+        },
+        {
+          "name": "native_entry_id",
+          "type": "text",
+          "nullable": false,
+          "description": "原生 entry.id；与会话 ID 组成主键"
+        },
+        {
+          "name": "parent_entry_id",
+          "type": "text",
+          "nullable": true,
+          "description": "原生 parentId；非空时引用同会话的父记录"
+        },
+        {
+          "name": "entry_seq",
+          "type": "bigint",
+          "nullable": false,
+          "description": "正整数，完整原生追加顺序；同会话唯一"
+        },
+        {
+          "name": "entry_type",
+          "type": "text",
+          "nullable": false,
+          "description": "从 raw_entry.type 提取的查询字段，不替代完整 payload"
+        },
+        {
+          "name": "raw_entry",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "完整原生记录，保留所有有效字段和嵌套内容"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "服务端入库时间，不用于恢复排序"
+        }
+      ]
+    },
+    "pi_session_revisions": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "提交版本主键"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属 Pi 会话"
+        },
+        {
+          "name": "revision_no",
+          "type": "bigint",
+          "nullable": false,
+          "description": "从 0 开始递增，同会话唯一"
+        },
+        {
+          "name": "previous_revision_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "R0 为空；其他版本指向提交时的预期 head，且属于同会话"
+        },
+        {
+          "name": "last_entry_seq",
+          "type": "bigint",
+          "nullable": false,
+          "description": "本版本包含 seq 1…N；N 可为 0，只增不减"
+        },
+        {
+          "name": "active_leaf_entry_id",
+          "type": "text",
+          "nullable": true,
+          "description": "所选原生叶子，非空时引用本会话前缀内记录"
+        },
+        {
+          "name": "raw_header",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "完整原生 header，不用摘要代替"
+        },
+        {
+          "name": "sdk_version",
+          "type": "text",
+          "nullable": false,
+          "description": "实际使用的 SDK 版本"
+        },
+        {
+          "name": "native_format_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "与 header.version 一致；当前验证基线为格式 3"
+        },
+        {
+          "name": "execution_snapshot_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "FK 指向本次实际采用的任务固定执行配置；R0 可空，其他提交须与 writer attempt 所属 task 一致"
+        },
+        {
+          "name": "writer_attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "实际提交尝试；仅 R0 可以为空"
+        },
+        {
+          "name": "writer_owner_id",
+          "type": "text",
+          "nullable": true,
+          "description": "本次提交者的启动身份，R0 为空"
+        },
+        {
+          "name": "execution_generation",
+          "type": "bigint",
+          "nullable": false,
+          "description": "本次实际领取的代次，R0 为 0，正常提交为正数"
+        },
+        {
+          "name": "commit_key",
+          "type": "uuid",
+          "nullable": false,
+          "description": "一次保存动作在首次提交前生成，重试不更换"
+        },
+        {
+          "name": "commit_schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "保存请求规范化版本，首期为 1"
+        },
+        {
+          "name": "commit_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "完整提交语义的规范化摘要，防止同 key 不同内容"
+        },
+        {
+          "name": "commit_reason",
+          "type": "text",
+          "nullable": false,
+          "description": "初始化、装配、输入、模型结果、工具结果、上下文变化、恢复修复、停止收尾或完成等主要原因"
+        },
+        {
+          "name": "committed_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "服务端写入时间，事务提交成功后才对外确认"
+        }
+      ]
+    },
+    "agent_command_input_entries": {
+      "fields": [
+        {
+          "name": "command_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "原用户命令"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "与命令和原生记录一致"
+        },
+        {
+          "name": "input_revision_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "与命令 input_revision_id 一致"
+        },
+        {
+          "name": "native_entry_id",
+          "type": "text",
+          "nullable": false,
+          "description": "该输入实际产生／进入原生上下文的记录"
+        },
+        {
+          "name": "link_order",
+          "type": "integer",
+          "nullable": false,
+          "description": "命令内关联顺序，从 1 开始"
+        }
+      ]
+    },
+    "agent_messages": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "稳定消息 ID；开始临时流式输出前固定，终态仍使用同一 ID"
+        },
+        {
+          "name": "conversation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属产品会话"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属任务，必须属于该会话"
+        },
+        {
+          "name": "attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "Agent 输出或提示的实际来源尝试；用户输入为空"
+        },
+        {
+          "name": "message_seq",
+          "type": "bigint",
+          "nullable": false,
+          "description": "会话内从 1 递增的展示顺序，创建后固定"
+        },
+        {
+          "name": "message_type",
+          "type": "text",
+          "nullable": false,
+          "description": "user_input、assistant_output 或 notice"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "description": "in_progress、complete 或 interrupted，仅描述展示记录"
+        },
+        {
+          "name": "content_schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "正整数，首期为 1"
+        },
+        {
+          "name": "content",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "允许展示的文字块与上下文摘要；占位可为空，最终结果正文以 result 为准"
+        },
+        {
+          "name": "row_version",
+          "type": "bigint",
+          "nullable": false,
+          "description": "默认 0；可靠终态收敛时递增，临时片段不递增"
+        },
+        {
+          "name": "producer_key",
+          "type": "text",
+          "nullable": false,
+          "description": "首次创建前固定的逻辑输出身份，同会话唯一；不是每次回调重新生成"
+        },
+        {
+          "name": "source_command_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "用户正文来源，非空时唯一"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "普通原生输出来源，须与任务相同"
+        },
+        {
+          "name": "source_revision_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "本条普通输出实际提交的原生版本"
+        },
+        {
+          "name": "source_native_entry_id",
+          "type": "text",
+          "nullable": true,
+          "description": "普通输出对应的原生 assistant 记录"
+        },
+        {
+          "name": "result_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "最终交付引用，非空时唯一；从 result 取得回答或草案卡片内容"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "创建时间，包括空输出槽"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "最近可靠修改时间"
+        }
+      ]
+    },
+    "agent_results": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "首次完成提交前固定，重试不更换"
+        },
+        {
+          "name": "conversation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属产品会话"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属任务，唯一；首期一任务只有一个最终交付"
+        },
+        {
+          "name": "delivery_attempt_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "本次核验并交付结果的尝试，必须属于该任务"
+        },
+        {
+          "name": "result_type",
+          "type": "text",
+          "nullable": false,
+          "description": "answer 或 scheduling_draft，与任务类型对应"
+        },
+        {
+          "name": "payload_schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "payload 与 verification 的结构版本，正整数，首期为 1"
+        },
+        {
+          "name": "payload",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "已校验回答，或可信业务对象引用与必要展示摘要"
+        },
+        {
+          "name": "verification",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "目标满足依据、业务范围、查询／数据时间及可信来源引用；不是模型自称成功"
+        },
+        {
+          "name": "source_operation_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "业务操作证据；排班草案交付必须具备"
+        },
+        {
+          "name": "source_operation_receipt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "实际采用的不可变成功回执，必须与 source_operation_id 同空同非空且属于本任务"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "原生审计来源，非空时与任务相同"
+        },
+        {
+          "name": "source_pi_revision_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "对应已提交原生版本；不充当恢复 head，可为空"
+        },
+        {
+          "name": "content_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "不可变交付语义摘要，用于核对同次提交重试"
+        },
+        {
+          "name": "verified_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "可信服务端确认满足整项目标的时间"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "结果入库时间，不表示用户已收到"
+        }
+      ]
+    },
+    "agent_outbox_events": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "持久事件标识，重复发送保持不变"
+        },
+        {
+          "name": "conversation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属私有产品会话"
+        },
+        {
+          "name": "stream_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "必须等于该会话当前 event_stream_id"
+        },
+        {
+          "name": "event_seq",
+          "type": "bigint",
+          "nullable": false,
+          "description": "当前流内从 1 递增的提交顺序"
+        },
+        {
+          "name": "event_type",
+          "type": "text",
+          "nullable": false,
+          "description": "message.created、message.updated、task.updated、task.completed 等产品事件，完整枚举随接口冻结"
+        },
+        {
+          "name": "schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "正整数，决定 payload 的解析方式"
+        },
+        {
+          "name": "payload",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "允许产品展示的记录视图或稳定引用，包含变化对象必要的行版本"
+        },
+        {
+          "name": "producer_key",
+          "type": "text",
+          "nullable": false,
+          "description": "同一产品事实的稳定发布身份；同会话唯一，重试不随机更换"
+        },
+        {
+          "name": "payload_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "对类型、结构版本、关联与 payload 的规范化摘要"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "任务类事件必填；必须属于当前会话"
+        },
+        {
+          "name": "attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "非空时必须属于 task_id"
+        },
+        {
+          "name": "command_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "非空时必须属于当前会话；有任务时必须匹配"
+        },
+        {
+          "name": "message_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "非空时必须属于当前会话与任务"
+        },
+        {
+          "name": "result_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "非空时必须属于当前会话与任务"
+        },
+        {
+          "name": "operation_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "操作事实事件的稳定引用，非空时 task_id 必填，须属于同会话与任务"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "保存通知意图的时间"
+        }
+      ]
+    },
+    "agent_operations": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "稳定 operation ID；后端支持时直接作为业务幂等 key，所有重发沿用"
+        },
+        {
+          "name": "conversation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "沿 task 继承所属用户，不另建团队归属"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "原业务目标，必须属于该会话"
+        },
+        {
+          "name": "created_attempt_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "首次登记操作的尝试；创建后固定，不一定是原工具调用的生成尝试"
+        },
+        {
+          "name": "action_key",
+          "type": "text",
+          "nullable": false,
+          "description": "宿主定义的业务动作槽，不能由模型或客户端任意命名"
+        },
+        {
+          "name": "action_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "同任务同动作槽从 1 递增；网络重试不递增"
+        },
+        {
+          "name": "previous_operation_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "第 1 版为空；后续版引用同 task、同 action_key 的前版，不可跳号或分叉"
+        },
+        {
+          "name": "intent_change_basis",
+          "type": "jsonb",
+          "nullable": true,
+          "description": "后续版必填：旧操作无效果依据、变更原因及当前目标允许该变更的依据"
+        },
+        {
+          "name": "operation_kind",
+          "type": "text",
+          "nullable": false,
+          "description": "受控业务动作，例如 save_schedule_draft，不是任意 HTTP 方法"
+        },
+        {
+          "name": "business_service",
+          "type": "text",
+          "nullable": false,
+          "description": "固定逻辑业务服务，引用服务端配置，不保存任意可执行 URL"
+        },
+        {
+          "name": "contract_version",
+          "type": "text",
+          "nullable": false,
+          "description": "业务接口与映射规则版本，重发保持同一语义契约"
+        },
+        {
+          "name": "request_schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "请求规范化结构版本，正整数，首期为 1"
+        },
+        {
+          "name": "request_payload",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "固定业务请求、前置版本条件、稳定主体／命名空间与 task／动作槽关联，不含凭据"
+        },
+        {
+          "name": "request_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "对服务、动作、契约、稳定主体、业务请求及锁定范围计算的规范化摘要"
+        },
+        {
+          "name": "scope_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "创建时 task 已锁定业务范围的摘要；不是可独立编辑的第二份范围"
+        },
+        {
+          "name": "idempotency_contract",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "固定的已核实幂等规则快照：作用域、有效期语义、并发与失败缓存规则；未知项明确保留未知"
+        },
+        {
+          "name": "confirmation_state",
+          "type": "text",
+          "nullable": false,
+          "description": "prepared、unknown、processing、succeeded、failed_no_effect 或 conflicted"
+        },
+        {
+          "name": "confirmed_receipt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "支撑当前核实结论的已接受回执，必须属于本 operation"
+        },
+        {
+          "name": "conflicting_receipt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "conflicted 时必填，与前一证据形成冲突；其他状态为空"
+        },
+        {
+          "name": "row_version",
+          "type": "bigint",
+          "nullable": false,
+          "description": "默认 0，确认投影改变时递增，不等于 task 或 Pi 版本"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "操作登记时间"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "确认投影最近变化时间"
+        }
+      ]
+    },
+    "agent_operation_requests": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "本次网络请求身份，登记重试沿用；实际再次发送创建新 request"
+        },
+        {
+          "name": "operation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "稳定业务操作，执行与查询都关联它"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "与 operation 相同，用于复合关联"
+        },
+        {
+          "name": "attempt_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "实际发起本次发送／查询的尝试，可为 A2"
+        },
+        {
+          "name": "request_no",
+          "type": "integer",
+          "nullable": false,
+          "description": "同 operation 从 1 递增，锁内分配；不是后端事实版本"
+        },
+        {
+          "name": "request_kind",
+          "type": "text",
+          "nullable": false,
+          "description": "execute 或 status_query"
+        },
+        {
+          "name": "execution_owner_id",
+          "type": "text",
+          "nullable": false,
+          "description": "该 attempt 领取的进程启动身份"
+        },
+        {
+          "name": "execution_generation",
+          "type": "bigint",
+          "nullable": false,
+          "description": "该 attempt 领取的历史代次；不引用不断变化的当前代次作为历史外键"
+        },
+        {
+          "name": "request_schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "正整数，首期为 1"
+        },
+        {
+          "name": "request_payload",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "本次规范化发送／查询参数；execute 必须保持 operation 原语义"
+        },
+        {
+          "name": "request_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "execute 与 operation 的语义 hash 一致；查询按其请求内容另算"
+        },
+        {
+          "name": "authorization_basis",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "未授权可为空对象，授权时一次固定操作版本、确认行版本、相关回执及幂等有效性依据；不是可重复使用的权限令牌"
+        },
+        {
+          "name": "dispatch_authorized_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "发送前已提交的授权时间；为空不能发 HTTP，非空代表可能已发送"
+        },
+        {
+          "name": "closed_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "本机请求处理收敛时间，不证明业务后端已停止"
+        },
+        {
+          "name": "transport_outcome",
+          "type": "text",
+          "nullable": true,
+          "description": "response_received、timeout、cancelled、connection_error、not_dispatched 或 orphaned"
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "nullable": true,
+          "description": "本地传输或请求处理错误分类"
+        },
+        {
+          "name": "error_summary",
+          "type": "text",
+          "nullable": true,
+          "description": "脱敏摘要，不含完整请求、凭据或堆栈"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "请求登记时间"
+        }
+      ]
+    },
+    "agent_operation_receipts": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "首次保存前固定的回执 ID"
+        },
+        {
+          "name": "operation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "原业务操作"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "与 operation 相同"
+        },
+        {
+          "name": "request_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "对应已登记且有发送授权的请求，非空唯一；不能绑定任意迟到消息"
+        },
+        {
+          "name": "schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "规范化响应及证据结构版本，正整数，首期为 1"
+        },
+        {
+          "name": "source_kind",
+          "type": "text",
+          "nullable": false,
+          "description": "execute_response 或 status_response，与 request_kind 对应"
+        },
+        {
+          "name": "http_status",
+          "type": "integer",
+          "nullable": false,
+          "description": "真实 HTTP 状态；单独不能证明业务成功、失败或未执行"
+        },
+        {
+          "name": "reported_state",
+          "type": "text",
+          "nullable": false,
+          "description": "processing、succeeded、failed_no_effect、not_found 或 unclassified"
+        },
+        {
+          "name": "verification_state",
+          "type": "text",
+          "nullable": false,
+          "description": "accepted 或 rejected；由可信适配器按固定契约校验"
+        },
+        {
+          "name": "verification_code",
+          "type": "text",
+          "nullable": false,
+          "description": "已匹配、身份不符、结构非法、来源不可信等分类"
+        },
+        {
+          "name": "verification_basis",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "服务、操作身份、主体、请求及契约关联的校验依据"
+        },
+        {
+          "name": "covered_execute_request_no",
+          "type": "integer",
+          "nullable": true,
+          "description": "无效果回执经核验的固定 execute 授权覆盖上界；采用它作为当前无效果结论时必填并覆盖当前全部授权"
+        },
+        {
+          "name": "backend_operation_id",
+          "type": "text",
+          "nullable": true,
+          "description": "后端稳定操作标识；是否必须回传及其映射由契约规定"
+        },
+        {
+          "name": "backend_state_version",
+          "type": "text",
+          "nullable": true,
+          "description": "后端操作状态版本；仅在契约提供可比较语义时用于排序"
+        },
+        {
+          "name": "backend_reported_at",
+          "type": "timestamptz",
+          "nullable": true,
+          "description": "后端报告时间，不能擅自当作全序版本"
+        },
+        {
+          "name": "business_result",
+          "type": "jsonb",
+          "nullable": true,
+          "description": "真实业务结果引用、版本和必要摘要；草案成功需有匹配的稳定引用"
+        },
+        {
+          "name": "evidence",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "足以核实的响应内容，去掉凭据及无关敏感字段，不替代业务数据库"
+        },
+        {
+          "name": "evidence_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "操作、请求、来源、规范化响应及证据的不可变摘要，不含本机写入时间"
+        },
+        {
+          "name": "received_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "本机实际收到响应的时间，不代表业务事实更新顺序"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "证据可靠入库时间"
+        }
+      ]
+    },
+    "agent_operation_links": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "首次保存前固定的关联 ID"
+        },
+        {
+          "name": "operation_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属业务操作"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "与 operation 相同"
+        },
+        {
+          "name": "linked_attempt_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "实际登记来源或提交补记的尝试，必须属于本任务"
+        },
+        {
+          "name": "link_type",
+          "type": "text",
+          "nullable": false,
+          "description": "tool_call、command、tool_result 或 verified_fact"
+        },
+        {
+          "name": "source_link_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "原生补记必填，指向本操作的原 tool_call 来源；来源行为空"
+        },
+        {
+          "name": "command_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "command 来源必填，指向同会话／任务已应用命令；其他类型为空"
+        },
+        {
+          "name": "pi_session_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "原生关联必填，须与 task 相同"
+        },
+        {
+          "name": "pi_revision_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "所关联原生记录的已提交版本"
+        },
+        {
+          "name": "native_entry_id",
+          "type": "text",
+          "nullable": true,
+          "description": "tool_call 为原 assistant entry；补记为新增 toolResult 或核实事实 entry"
+        },
+        {
+          "name": "native_writer_attempt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "对应 revision 的实际写入尝试，须属于本任务；原调用作者可与 linked_attempt 不同"
+        },
+        {
+          "name": "tool_call_id",
+          "type": "text",
+          "nullable": true,
+          "description": "tool_call 来源必填，原生工具 ID 使用 text；其他类型由 source_link 定位"
+        },
+        {
+          "name": "receipt_id",
+          "type": "uuid",
+          "nullable": true,
+          "description": "tool_result／verified_fact 必填，关联本 operation 的 accepted 回执"
+        },
+        {
+          "name": "projection_schema_version",
+          "type": "integer",
+          "nullable": true,
+          "description": "原生补记映射结构版本，正整数；来源行为空"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "关联创建时间"
+        }
+      ]
+    },
+    "agent_execution_snapshots": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "不可变执行快照主键"
+        },
+        {
+          "name": "schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "配置、规范化和摘要规则版本，正整数，首期为 1"
+        },
+        {
+          "name": "scene_key",
+          "type": "text",
+          "nullable": false,
+          "description": "可信场景标识，如 business_query、scheduling_draft"
+        },
+        {
+          "name": "snapshot_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "对完整配置与成员语义计算的 SHA-256，按 schema_version 去重"
+        },
+        {
+          "name": "runtime_manifest",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "实际可执行发布版本、SDK／Node、依赖锁、原生格式和兼容要求"
+        },
+        {
+          "name": "model_config",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "已解析的模型与 MaaS 路由配置，只含逻辑凭据引用"
+        },
+        {
+          "name": "tool_manifest",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "启用工具、声明、实现与业务契约／结果映射的明确绑定"
+        },
+        {
+          "name": "execution_policy",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "固定执行参数、资源装配与允许能力规则，不保存当前业务权限"
+        },
+        {
+          "name": "resource_manifest_hash",
+          "type": "text",
+          "nullable": false,
+          "description": "完整成员表按规范化顺序计算的摘要，空集合也有确定摘要"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "首次冻结保存时间，不纳入内容摘要"
+        }
+      ]
+    },
+    "agent_resource_artifacts": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "制品身份，供快照成员引用"
+        },
+        {
+          "name": "artifact_key",
+          "type": "text",
+          "nullable": false,
+          "description": "稳定逻辑标识，如 skills.scheduling、business.scheduling-adapter"
+        },
+        {
+          "name": "version_label",
+          "type": "text",
+          "nullable": false,
+          "description": "发布版本标签，同 artifact_key 唯一；不能替代内容摘要"
+        },
+        {
+          "name": "manifest_schema_version",
+          "type": "integer",
+          "nullable": false,
+          "description": "文件清单与制品描述结构版本，正整数"
+        },
+        {
+          "name": "source_descriptor",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "仓库完整 commit／路径，或 npm registry、确切版本、lock／integrity 等来源依据"
+        },
+        {
+          "name": "file_manifest",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "完整展开文件清单：规范化相对路径、大小、原字节 SHA-256、模式及受控链接信息"
+        },
+        {
+          "name": "archive_digest",
+          "type": "text",
+          "nullable": false,
+          "description": "实际归档原字节摘要，算法与值明确"
+        },
+        {
+          "name": "tree_digest",
+          "type": "text",
+          "nullable": false,
+          "description": "文件树内容、路径及模式的规范化摘要，不与归档摘要混用"
+        },
+        {
+          "name": "archive_size_bytes",
+          "type": "bigint",
+          "nullable": false,
+          "description": "非负实际归档大小，不由客户端自由申报"
+        },
+        {
+          "name": "storage_descriptor",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "可取回的不可变发布包／镜像身份及包内位置；不含临时缓存路径或带凭据 URL"
+        },
+        {
+          "name": "runtime_compatibility",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "依赖来源、模块／原生组件、OS／架构及运行时兼容条件"
+        },
+        {
+          "name": "publication",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "可信构建与评审发布依据、清单校验结果及发布身份，不是模型自报可信"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "description": "登记时间"
+        }
+      ]
+    },
+    "agent_snapshot_resources": {
+      "fields": [
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "所属执行快照"
+        },
+        {
+          "name": "member_key",
+          "type": "text",
+          "nullable": false,
+          "description": "快照内稳定逻辑成员名，与 snapshot_id 组成主键"
+        },
+        {
+          "name": "artifact_id",
+          "type": "uuid",
+          "nullable": false,
+          "description": "已可信发布的不可变制品"
+        },
+        {
+          "name": "resource_kind",
+          "type": "text",
+          "nullable": false,
+          "description": "skill、prompt、extension、context 或 business_adapter"
+        },
+        {
+          "name": "entry_path",
+          "type": "text",
+          "nullable": false,
+          "description": "相对制品根的实际入口，须存在于文件清单中"
+        },
+        {
+          "name": "load_order",
+          "type": "integer",
+          "nullable": false,
+          "description": "非负显式加载顺序，同快照唯一，不依赖目录扫描次序"
+        },
+        {
+          "name": "options",
+          "type": "jsonb",
+          "nullable": false,
+          "description": "版本化静态装配选项，由快照 schema_version 校验；不含凭据或用户数据"
+        }
+      ]
+    }
+  },
+  "table_creation_order": [
+    "agent_resource_artifacts",
+    "agent_execution_snapshots",
+    "agent_snapshot_resources",
+    "agent_conversations",
+    "pi_sessions",
+    "agent_tasks",
+    "agent_commands",
+    "agent_attempts",
+    "pi_session_entries",
+    "pi_session_revisions",
+    "agent_command_input_entries",
+    "agent_operations",
+    "agent_operation_requests",
+    "agent_operation_receipts",
+    "agent_operation_links",
+    "agent_results",
+    "agent_messages",
+    "agent_outbox_events"
+  ],
+  "primary_keys": [
+    {
+      "name": "pk_agent_c",
+      "table": "agent_conversations",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_t",
+      "table": "agent_tasks",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_a",
+      "table": "agent_attempts",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_q",
+      "table": "agent_commands",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_p",
+      "table": "pi_sessions",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_e",
+      "table": "pi_session_entries",
+      "columns": ["pi_session_id", "native_entry_id"]
+    },
+    {
+      "name": "pk_agent_r",
+      "table": "pi_session_revisions",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_i",
+      "table": "agent_command_input_entries",
+      "columns": ["command_id", "pi_session_id", "native_entry_id"]
+    },
+    {
+      "name": "pk_agent_m",
+      "table": "agent_messages",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_d",
+      "table": "agent_results",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_v",
+      "table": "agent_outbox_events",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_o",
+      "table": "agent_operations",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_h",
+      "table": "agent_operation_requests",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_b",
+      "table": "agent_operation_receipts",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_l",
+      "table": "agent_operation_links",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_s",
+      "table": "agent_execution_snapshots",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_f",
+      "table": "agent_resource_artifacts",
+      "columns": ["id"]
+    },
+    {
+      "name": "pk_agent_g",
+      "table": "agent_snapshot_resources",
+      "columns": ["snapshot_id", "member_key"]
+    }
+  ],
+  "unique_constraints": [
+    {
+      "name": "uq_agent_c_ref01",
+      "table": "agent_conversations",
+      "columns": ["id", "pi_session_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_c_ref02",
+      "table": "agent_conversations",
+      "columns": ["id", "owner_user_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_c_ref03",
+      "table": "agent_conversations",
+      "columns": ["id", "event_stream_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_c_business01",
+      "table": "agent_conversations",
+      "columns": ["pi_session_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_t_ref01",
+      "table": "agent_tasks",
+      "columns": ["id", "pi_session_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_t_ref02",
+      "table": "agent_tasks",
+      "columns": ["id", "conversation_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_a_ref01",
+      "table": "agent_attempts",
+      "columns": ["id", "task_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_a_ref02",
+      "table": "agent_attempts",
+      "columns": ["id", "pi_session_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_a_ref03",
+      "table": "agent_attempts",
+      "columns": ["id", "pi_session_id", "execution_owner_id", "execution_generation"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_a_ref04",
+      "table": "agent_attempts",
+      "columns": ["id", "task_id", "execution_owner_id", "execution_generation"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_a_business01",
+      "table": "agent_attempts",
+      "columns": ["task_id", "attempt_no"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_a_business02",
+      "table": "agent_attempts",
+      "columns": ["trigger_command_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_q_ref01",
+      "table": "agent_commands",
+      "columns": ["id", "task_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_q_ref02",
+      "table": "agent_commands",
+      "columns": ["id", "pi_session_id", "input_revision_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_q_ref03",
+      "table": "agent_commands",
+      "columns": ["id", "task_id", "conversation_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_q_ref04",
+      "table": "agent_commands",
+      "columns": ["id", "conversation_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_q_business01",
+      "table": "agent_commands",
+      "columns": ["actor_user_id", "request_key"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_p_ref01",
+      "table": "pi_sessions",
+      "columns": ["id", "conversation_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_p_business01",
+      "table": "pi_sessions",
+      "columns": ["conversation_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_e_business01",
+      "table": "pi_session_entries",
+      "columns": ["pi_session_id", "entry_seq"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_r_ref01",
+      "table": "pi_session_revisions",
+      "columns": ["id", "pi_session_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_r_ref02",
+      "table": "pi_session_revisions",
+      "columns": ["id", "pi_session_id", "writer_attempt_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_r_business01",
+      "table": "pi_session_revisions",
+      "columns": ["pi_session_id", "revision_no"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_r_business02",
+      "table": "pi_session_revisions",
+      "columns": ["pi_session_id", "commit_key"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_r_business03",
+      "table": "pi_session_revisions",
+      "columns": ["pi_session_id", "previous_revision_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_i_business01",
+      "table": "agent_command_input_entries",
+      "columns": ["command_id", "link_order"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_m_ref01",
+      "table": "agent_messages",
+      "columns": ["id", "task_id", "conversation_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_m_business01",
+      "table": "agent_messages",
+      "columns": ["conversation_id", "message_seq"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_m_business02",
+      "table": "agent_messages",
+      "columns": ["conversation_id", "producer_key"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_m_business03",
+      "table": "agent_messages",
+      "columns": ["source_command_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_m_business04",
+      "table": "agent_messages",
+      "columns": ["pi_session_id", "source_native_entry_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_m_business05",
+      "table": "agent_messages",
+      "columns": ["result_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_d_ref01",
+      "table": "agent_results",
+      "columns": ["id", "task_id", "conversation_id", "delivery_attempt_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_d_ref02",
+      "table": "agent_results",
+      "columns": ["id", "task_id", "conversation_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_d_business01",
+      "table": "agent_results",
+      "columns": ["task_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_v_business01",
+      "table": "agent_outbox_events",
+      "columns": ["conversation_id", "event_seq"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_v_business02",
+      "table": "agent_outbox_events",
+      "columns": ["conversation_id", "producer_key"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_o_ref01",
+      "table": "agent_operations",
+      "columns": ["id", "task_id", "conversation_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_o_ref02",
+      "table": "agent_operations",
+      "columns": ["id", "task_id", "action_key"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_o_ref03",
+      "table": "agent_operations",
+      "columns": ["id", "task_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_o_business01",
+      "table": "agent_operations",
+      "columns": ["task_id", "action_key", "action_version"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_o_business02",
+      "table": "agent_operations",
+      "columns": ["previous_operation_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_h_ref01",
+      "table": "agent_operation_requests",
+      "columns": ["id", "operation_id", "task_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_h_business01",
+      "table": "agent_operation_requests",
+      "columns": ["operation_id", "request_no"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_b_ref01",
+      "table": "agent_operation_receipts",
+      "columns": ["operation_id", "id", "task_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_b_ref02",
+      "table": "agent_operation_receipts",
+      "columns": ["operation_id", "id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_b_business01",
+      "table": "agent_operation_receipts",
+      "columns": ["request_id"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_l_ref01",
+      "table": "agent_operation_links",
+      "columns": ["id", "operation_id"],
+      "predicate": null,
+      "purpose": "复合外键目标键",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_s_business01",
+      "table": "agent_execution_snapshots",
+      "columns": ["schema_version", "snapshot_hash"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_f_business01",
+      "table": "agent_resource_artifacts",
+      "columns": ["artifact_key", "version_label"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "uq_agent_g_business01",
+      "table": "agent_snapshot_resources",
+      "columns": ["snapshot_id", "load_order"],
+      "predicate": null,
+      "purpose": "业务唯一性",
+      "deferrable": false
+    }
+  ],
+  "partial_unique_indexes": [
+    {
+      "name": "ux_agent_t_partial01",
+      "table": "agent_tasks",
+      "columns": ["conversation_id"],
+      "predicate": "status <> 'completed'",
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "ux_agent_a_partial01",
+      "table": "agent_attempts",
+      "columns": ["pi_session_id"],
+      "predicate": "ended_at IS NULL",
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "ux_agent_m_partial01",
+      "table": "agent_messages",
+      "columns": ["attempt_id"],
+      "predicate": "status = 'in_progress'",
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "ux_agent_h_partial01",
+      "table": "agent_operation_requests",
+      "columns": ["operation_id"],
+      "predicate": "closed_at IS NULL",
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "ux_agent_l_partial01",
+      "table": "agent_operation_links",
+      "columns": ["pi_session_id", "native_entry_id", "tool_call_id"],
+      "predicate": "link_type = 'tool_call'",
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "ux_agent_l_partial02",
+      "table": "agent_operation_links",
+      "columns": ["operation_id", "command_id"],
+      "predicate": "link_type = 'command'",
+      "purpose": "业务唯一性",
+      "deferrable": false
+    },
+    {
+      "name": "ux_agent_l_partial03",
+      "table": "agent_operation_links",
+      "columns": ["pi_session_id", "native_entry_id"],
+      "predicate": "link_type IN ('tool_result','verified_fact')",
+      "purpose": "业务唯一性",
+      "deferrable": false
+    }
+  ],
+  "query_indexes": [
+    {
+      "name": "ix_agent_c_owner_history",
+      "table": "agent_conversations",
+      "columns": ["owner_user_id", "last_activity_at DESC", "id DESC"],
+      "predicate": "deleted_at IS NULL",
+      "purpose": "用户私有会话列表；复合游标",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_t_conversation_history",
+      "table": "agent_tasks",
+      "columns": ["conversation_id", "created_at DESC", "id DESC"],
+      "predicate": null,
+      "purpose": "会话内全部历史任务；部分未完成索引不覆盖历史",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_t_snapshot",
+      "table": "agent_tasks",
+      "columns": ["execution_snapshot_id"],
+      "predicate": null,
+      "purpose": "配置引用与保留反查",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_q_task_history",
+      "table": "agent_commands",
+      "columns": ["task_id", "created_at", "id"],
+      "predicate": null,
+      "purpose": "任务命令历史；时间排序仅用于审计",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_q_pending",
+      "table": "agent_commands",
+      "columns": ["task_id", "created_at", "id"],
+      "predicate": "status = 'applied' AND input_state = 'pending'",
+      "purpose": "待消费候选；消费顺序还需核对命令及尝试语义",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_q_conversation",
+      "table": "agent_commands",
+      "columns": ["conversation_id"],
+      "predicate": null,
+      "purpose": "会话清理和归属反查，覆盖task_id为空的拒绝命令",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_r_writer_latest",
+      "table": "pi_session_revisions",
+      "columns": ["writer_attempt_id", "revision_no DESC"],
+      "predicate": "writer_attempt_id IS NOT NULL",
+      "purpose": "校验本尝试last_committed为其最新提交",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_r_snapshot",
+      "table": "pi_session_revisions",
+      "columns": ["execution_snapshot_id"],
+      "predicate": "execution_snapshot_id IS NOT NULL",
+      "purpose": "历史原生配置引用与保留",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_i_entry_source",
+      "table": "agent_command_input_entries",
+      "columns": ["pi_session_id", "native_entry_id"],
+      "predicate": null,
+      "purpose": "反查真实输入来源，允许多个command关联同一entry",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_m_task_history",
+      "table": "agent_messages",
+      "columns": ["task_id", "message_seq"],
+      "predicate": null,
+      "purpose": "任务消息与交付检查",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_v_retention",
+      "table": "agent_outbox_events",
+      "columns": ["conversation_id", "created_at", "event_seq"],
+      "predicate": null,
+      "purpose": "寻找保留候选；实际删除仍只删除完整序号前缀",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_o_task_state",
+      "table": "agent_operations",
+      "columns": ["task_id", "confirmation_state"],
+      "predicate": null,
+      "purpose": "未决业务事实筛选，不以状态索引授权重发",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_b_operation_history",
+      "table": "agent_operation_receipts",
+      "columns": ["operation_id", "created_at", "id"],
+      "predicate": null,
+      "purpose": "回执审计时间线；不能据此裁决业务状态新旧",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_l_operation_history",
+      "table": "agent_operation_links",
+      "columns": ["operation_id", "created_at", "id"],
+      "predicate": null,
+      "purpose": "来源／补记审计",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_l_source",
+      "table": "agent_operation_links",
+      "columns": ["source_link_id"],
+      "predicate": "source_link_id IS NOT NULL",
+      "purpose": "定位原调用已有可信补记",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_s_scene_history",
+      "table": "agent_execution_snapshots",
+      "columns": ["scene_key", "created_at DESC", "id DESC"],
+      "predicate": null,
+      "purpose": "场景配置历史；可信发布配置另指定可选择版本",
+      "unique": false
+    },
+    {
+      "name": "ix_agent_g_artifact",
+      "table": "agent_snapshot_resources",
+      "columns": ["artifact_id", "snapshot_id"],
+      "predicate": null,
+      "purpose": "制品被哪些快照使用",
+      "unique": false
+    }
+  ],
+  "foreign_keys": [
+    {
+      "id": "FK-01",
+      "source": "agent_conversations",
+      "columns": ["pi_session_id", "id"],
+      "target": "pi_sessions",
+      "target_columns": ["id", "conversation_id"],
+      "note": "产品绑定可空；已有Pi时要求双向绑定",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_01_c_p",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": true,
+      "initially": "IMMEDIATE",
+      "defer_for": ["conversation_cleanup"]
+    },
+    {
+      "id": "FK-02",
+      "source": "agent_tasks",
+      "columns": ["conversation_id", "pi_session_id"],
+      "target": "agent_conversations",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_02_t_c",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-03",
+      "source": "agent_tasks",
+      "columns": ["execution_snapshot_id"],
+      "target": "agent_execution_snapshots",
+      "target_columns": ["id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_03_t_s",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-04",
+      "source": "agent_attempts",
+      "columns": ["task_id", "pi_session_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_04_a_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-05",
+      "source": "agent_attempts",
+      "columns": ["trigger_command_id", "task_id"],
+      "target": "agent_commands",
+      "target_columns": ["id", "task_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_05_a_q",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": true,
+      "initially": "IMMEDIATE",
+      "defer_for": ["conversation_cleanup"]
+    },
+    {
+      "id": "FK-06",
+      "source": "agent_attempts",
+      "columns": ["previous_attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "可空；直接已结束前序另核验",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_06_a_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-07",
+      "source": "agent_attempts",
+      "columns": ["base_revision_id", "pi_session_id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "可空；允许前任务/前尝试作者",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_07_a_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-08",
+      "source": "agent_attempts",
+      "columns": ["last_committed_revision_id", "pi_session_id", "id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id", "writer_attempt_id"],
+      "note": "可空；必须本尝试作者，最新性另核验",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_08_a_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-09",
+      "source": "agent_commands",
+      "columns": ["conversation_id", "actor_user_id"],
+      "target": "agent_conversations",
+      "target_columns": ["id", "owner_user_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 1,
+      "name": "fk_agent_09_q_c",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-10",
+      "source": "agent_commands",
+      "columns": ["task_id", "conversation_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "conversation_id"],
+      "note": "task可空",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_10_q_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-11",
+      "source": "agent_commands",
+      "columns": ["task_id", "pi_session_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "两者同空同非空",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_11_q_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-12",
+      "source": "agent_commands",
+      "columns": ["target_attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "attempt可空；非空时task必填",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_12_q_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-13",
+      "source": "agent_commands",
+      "columns": ["result_attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "attempt可空；非空时task必填",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_13_q_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-14",
+      "source": "agent_commands",
+      "columns": ["input_attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "attempt可空；非空时task必填",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_14_q_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-15",
+      "source": "agent_commands",
+      "columns": ["input_revision_id", "pi_session_id", "input_attempt_id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id", "writer_attempt_id"],
+      "note": "revision可空；消费状态决定必填",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_15_q_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-16",
+      "source": "pi_sessions",
+      "columns": ["conversation_id"],
+      "target": "agent_conversations",
+      "target_columns": ["id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_16_p_c",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-17",
+      "source": "pi_sessions",
+      "columns": ["head_revision_id", "id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "NOT NULL；初始化窄循环可延迟",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_17_p_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": true,
+      "initially": "IMMEDIATE",
+      "defer_for": ["pi_initialization", "conversation_cleanup"]
+    },
+    {
+      "id": "FK-18",
+      "source": "pi_sessions",
+      "columns": ["active_attempt_id", "id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "可空；与开放attempt双向一致",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_18_p_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-19",
+      "source": "pi_sessions",
+      "columns": ["restore_issue_revision_id", "id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "可空；四项诊断字段成组",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_19_p_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": true,
+      "initially": "IMMEDIATE",
+      "defer_for": ["conversation_cleanup"]
+    },
+    {
+      "id": "FK-20",
+      "source": "pi_session_entries",
+      "columns": ["pi_session_id"],
+      "target": "pi_sessions",
+      "target_columns": ["id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_20_e_p",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-21",
+      "source": "pi_session_entries",
+      "columns": ["pi_session_id", "parent_entry_id"],
+      "target": "pi_session_entries",
+      "target_columns": ["pi_session_id", "native_entry_id"],
+      "note": "父可空；父序早于子序",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 1,
+      "name": "fk_agent_21_e_e",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-22",
+      "source": "pi_session_revisions",
+      "columns": ["pi_session_id"],
+      "target": "pi_sessions",
+      "target_columns": ["id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_22_r_p",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-23",
+      "source": "pi_session_revisions",
+      "columns": ["previous_revision_id", "pi_session_id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "只有R0为空",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_23_r_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-24",
+      "source": "pi_session_revisions",
+      "columns": ["pi_session_id", "active_leaf_entry_id"],
+      "target": "pi_session_entries",
+      "target_columns": ["pi_session_id", "native_entry_id"],
+      "note": "leaf可空；前缀范围另核验",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 1,
+      "name": "fk_agent_24_r_e",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-25",
+      "source": "pi_session_revisions",
+      "columns": ["writer_attempt_id", "pi_session_id", "writer_owner_id", "execution_generation"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "pi_session_id", "execution_owner_id", "execution_generation"],
+      "note": "R0作者为空/generation为0；其他完整",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_25_r_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": true,
+      "initially": "IMMEDIATE",
+      "defer_for": ["conversation_cleanup"]
+    },
+    {
+      "id": "FK-26",
+      "source": "pi_session_revisions",
+      "columns": ["execution_snapshot_id"],
+      "target": "agent_execution_snapshots",
+      "target_columns": ["id"],
+      "note": "只有R0可空；普通版等于writer的task快照",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_26_r_s",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-27",
+      "source": "agent_command_input_entries",
+      "columns": ["command_id", "pi_session_id", "input_revision_id"],
+      "target": "agent_commands",
+      "target_columns": ["id", "pi_session_id", "input_revision_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_27_i_q",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-28",
+      "source": "agent_command_input_entries",
+      "columns": ["pi_session_id", "native_entry_id"],
+      "target": "pi_session_entries",
+      "target_columns": ["pi_session_id", "native_entry_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 1,
+      "name": "fk_agent_28_i_e",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-29",
+      "source": "agent_messages",
+      "columns": ["task_id", "conversation_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "conversation_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_29_m_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-30",
+      "source": "agent_messages",
+      "columns": ["attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "用户消息可空；类别矩阵决定",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_30_m_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-31",
+      "source": "agent_messages",
+      "columns": ["source_command_id", "task_id", "conversation_id"],
+      "target": "agent_commands",
+      "target_columns": ["id", "task_id", "conversation_id"],
+      "note": "用户消息必填；applied正文命令另核验",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_31_m_q",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-32",
+      "source": "agent_messages",
+      "columns": ["task_id", "pi_session_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "普通原生输出Pi必填",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_32_m_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-33",
+      "source": "agent_messages",
+      "columns": ["source_revision_id", "pi_session_id", "attempt_id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id", "writer_attempt_id"],
+      "note": "普通原生输出必须本尝试提交",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_33_m_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-34",
+      "source": "agent_messages",
+      "columns": ["pi_session_id", "source_native_entry_id"],
+      "target": "pi_session_entries",
+      "target_columns": ["pi_session_id", "native_entry_id"],
+      "note": "普通输出新范围与assistant类型另核验",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 1,
+      "name": "fk_agent_34_m_e",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-35",
+      "source": "agent_messages",
+      "columns": ["result_id", "task_id", "conversation_id", "attempt_id"],
+      "target": "agent_results",
+      "target_columns": ["id", "task_id", "conversation_id", "delivery_attempt_id"],
+      "note": "最终输出result_id必填；其他消息形态result_id为空",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_35_m_d",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-36",
+      "source": "agent_results",
+      "columns": ["task_id", "conversation_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "conversation_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_36_d_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-37",
+      "source": "agent_results",
+      "columns": ["delivery_attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_37_d_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-38",
+      "source": "agent_results",
+      "columns": ["source_operation_id", "source_operation_receipt_id", "task_id"],
+      "target": "agent_operation_receipts",
+      "target_columns": ["operation_id", "id", "task_id"],
+      "note": "草案必填；其余两来源同空同非空",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_38_d_b",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-39",
+      "source": "agent_results",
+      "columns": ["task_id", "pi_session_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "原生审计可空",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_39_d_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-40",
+      "source": "agent_results",
+      "columns": ["source_pi_revision_id", "pi_session_id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "可空；不要求作者等于交付尝试",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_40_d_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-41",
+      "source": "agent_outbox_events",
+      "columns": ["conversation_id", "stream_id"],
+      "target": "agent_conversations",
+      "target_columns": ["id", "event_stream_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 1,
+      "name": "fk_agent_41_v_c",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-42",
+      "source": "agent_outbox_events",
+      "columns": ["task_id", "conversation_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "conversation_id"],
+      "note": "任务可空",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_42_v_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-43",
+      "source": "agent_outbox_events",
+      "columns": ["attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "非空attempt要求task",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_43_v_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-44",
+      "source": "agent_outbox_events",
+      "columns": ["command_id", "conversation_id"],
+      "target": "agent_commands",
+      "target_columns": ["id", "conversation_id"],
+      "note": "command可空",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_44_v_q",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-45",
+      "source": "agent_outbox_events",
+      "columns": ["command_id", "task_id"],
+      "target": "agent_commands",
+      "target_columns": ["id", "task_id"],
+      "note": "二者均非空时校验任务",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_45_v_q",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-46",
+      "source": "agent_outbox_events",
+      "columns": ["message_id", "task_id", "conversation_id"],
+      "target": "agent_messages",
+      "target_columns": ["id", "task_id", "conversation_id"],
+      "note": "非空message要求task",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_46_v_m",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-47",
+      "source": "agent_outbox_events",
+      "columns": ["result_id", "task_id", "conversation_id"],
+      "target": "agent_results",
+      "target_columns": ["id", "task_id", "conversation_id"],
+      "note": "非空result要求task",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_47_v_d",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-48",
+      "source": "agent_outbox_events",
+      "columns": ["operation_id", "task_id", "conversation_id"],
+      "target": "agent_operations",
+      "target_columns": ["id", "task_id", "conversation_id"],
+      "note": "非空operation要求task",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_48_v_o",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-49",
+      "source": "agent_operations",
+      "columns": ["task_id", "conversation_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "conversation_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_49_o_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-50",
+      "source": "agent_operations",
+      "columns": ["created_attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_50_o_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-51",
+      "source": "agent_operations",
+      "columns": ["previous_operation_id", "task_id", "action_key"],
+      "target": "agent_operations",
+      "target_columns": ["id", "task_id", "action_key"],
+      "note": "第1版空；线性连续及无效果另核验",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_51_o_o",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-52",
+      "source": "agent_operations",
+      "columns": ["id", "confirmed_receipt_id"],
+      "target": "agent_operation_receipts",
+      "target_columns": ["operation_id", "id"],
+      "note": "允许空；确认状态决定必填",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 1,
+      "name": "fk_agent_52_o_b",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-53",
+      "source": "agent_operations",
+      "columns": ["id", "conflicting_receipt_id"],
+      "target": "agent_operation_receipts",
+      "target_columns": ["operation_id", "id"],
+      "note": "仅conflicted非空且与前证据不同",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..1",
+      "anchor_index": 1,
+      "name": "fk_agent_53_o_b",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-54",
+      "source": "agent_operation_requests",
+      "columns": ["operation_id", "task_id"],
+      "target": "agent_operations",
+      "target_columns": ["id", "task_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_54_h_o",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": true,
+      "initially": "IMMEDIATE",
+      "defer_for": ["conversation_cleanup"]
+    },
+    {
+      "id": "FK-55",
+      "source": "agent_operation_requests",
+      "columns": ["attempt_id", "task_id", "execution_owner_id", "execution_generation"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id", "execution_owner_id", "execution_generation"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_55_h_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-56",
+      "source": "agent_operation_receipts",
+      "columns": ["request_id", "operation_id", "task_id"],
+      "target": "agent_operation_requests",
+      "target_columns": ["id", "operation_id", "task_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..1",
+      "anchor_index": 0,
+      "name": "fk_agent_56_b_h",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-57",
+      "source": "agent_operation_links",
+      "columns": ["operation_id", "task_id"],
+      "target": "agent_operations",
+      "target_columns": ["id", "task_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_57_l_o",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-58",
+      "source": "agent_operation_links",
+      "columns": ["linked_attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_58_l_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-59",
+      "source": "agent_operation_links",
+      "columns": ["command_id", "task_id"],
+      "target": "agent_commands",
+      "target_columns": ["id", "task_id"],
+      "note": "command类型必填；经task继承同会话",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_59_l_q",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-60",
+      "source": "agent_operation_links",
+      "columns": ["task_id", "pi_session_id"],
+      "target": "agent_tasks",
+      "target_columns": ["id", "pi_session_id"],
+      "note": "原生类型必填",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_60_l_t",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-61",
+      "source": "agent_operation_links",
+      "columns": ["pi_revision_id", "pi_session_id", "native_writer_attempt_id"],
+      "target": "pi_session_revisions",
+      "target_columns": ["id", "pi_session_id", "writer_attempt_id"],
+      "note": "原生类型必填",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_61_l_r",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-62",
+      "source": "agent_operation_links",
+      "columns": ["native_writer_attempt_id", "task_id"],
+      "target": "agent_attempts",
+      "target_columns": ["id", "task_id"],
+      "note": "禁止同Pi中借用旧task调用",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_62_l_a",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-63",
+      "source": "agent_operation_links",
+      "columns": ["pi_session_id", "native_entry_id"],
+      "target": "pi_session_entries",
+      "target_columns": ["pi_session_id", "native_entry_id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 1,
+      "name": "fk_agent_63_l_e",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-64",
+      "source": "agent_operation_links",
+      "columns": ["source_link_id", "operation_id"],
+      "target": "agent_operation_links",
+      "target_columns": ["id", "operation_id"],
+      "note": "补记必填；来源类型tool_call另核验",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_64_l_l",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-65",
+      "source": "agent_operation_links",
+      "columns": ["receipt_id", "operation_id"],
+      "target": "agent_operation_receipts",
+      "target_columns": ["id", "operation_id"],
+      "note": "补记必填；accepted另核验",
+      "parent_cardinality": "0..1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_65_l_b",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-66",
+      "source": "agent_snapshot_resources",
+      "columns": ["snapshot_id"],
+      "target": "agent_execution_snapshots",
+      "target_columns": ["id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_66_g_s",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    },
+    {
+      "id": "FK-67",
+      "source": "agent_snapshot_resources",
+      "columns": ["artifact_id"],
+      "target": "agent_resource_artifacts",
+      "target_columns": ["id"],
+      "note": "对应作用域一致",
+      "parent_cardinality": "1",
+      "child_cardinality": "0..N",
+      "anchor_index": 0,
+      "name": "fk_agent_67_g_f",
+      "on_delete": "NO ACTION",
+      "on_update": "NO ACTION",
+      "match": "SIMPLE",
+      "deferrable": false,
+      "initially": "IMMEDIATE",
+      "defer_for": []
+    }
+  ]
+}

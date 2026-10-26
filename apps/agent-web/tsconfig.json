@@ -1,0 +1,4 @@
+{
+  "extends": "../../packages/config/typescript/browser.json",
+  "include": ["src", "tests", "vite.config.ts"]
+}
