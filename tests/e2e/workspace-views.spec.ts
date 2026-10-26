@@ -302,6 +302,9 @@ async function backend(page: Page, desktop: boolean) {
         'Set-Cookie': 'view_session=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/',
       });
     }
+    if (path === '/api/v1/projects/list' && request.method() === 'GET') return reply([]);
+    if (path === '/api/v1/projects/draft/current' && request.method() === 'GET')
+      return reply({ hasDraft: false, draft: null });
     if (path === '/api/v1/expert-assignments/my-projects' && request.method() === 'GET')
       return reply(
         state.projectsStatus === 200 ? state.projects : null,
@@ -417,7 +420,7 @@ for (const [mode, desktop] of [
         .getByRole('link', { name: '我的组织', exact: true }),
     ).toBeVisible();
     await chooseDesktop(page, '领航员');
-    await expect(page.getByRole('heading', { name: '领航员工作台', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: /^(我的组织|组织管理|创建组织)$/ })).toHaveCount(0);
     await openProfile(page);
     await expect(
@@ -490,7 +493,7 @@ for (const [mode, desktop] of [
     const expertCount = expertReads(requests).length;
     await page.goto(`${origin}/#/organization`);
     await expect(page).toHaveURL(/#\/$/);
-    await expect(page.getByRole('heading', { name: '领航员工作台', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toBeVisible();
     await page.goto(`${origin}/#/organization/create`);
     await expect(page).toHaveURL(/#\/$/);
     expect(expertReads(requests)).toHaveLength(expertCount);

@@ -24,6 +24,9 @@ import { useSession } from '../hooks/useSession';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { Button } from '../components/ui/button';
 import { PageRecovery } from '../components/PageRecovery';
+import { NavigatorProjectsPage } from '../modules/projects/NavigatorProjectsPage';
+import { ProjectCreatePage } from '../modules/projects/ProjectCreatePage';
+import { ProjectDetailPage } from '../modules/projects/ProjectDetailPage';
 
 /** 离开注册资料页后销毁一次性凭证；布局由匹配路由决定。 */
 function RootLayout() {
@@ -125,7 +128,46 @@ function SessionBoundary({ children }: PropsWithChildren) {
 
 function HomePage() {
   const session = useSession();
+  if (session.data && (session.data.selectedRole ?? session.data.role) === 'NAVIGATOR')
+    return <NavigatorProjectsPage key={session.data.id} user={session.data} />;
   return session.data && <WelcomePage user={session.data} />;
+}
+
+function NavigatorProjectsRoute() {
+  const session = useSession();
+  const { created } = projectsRoute.useSearch();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'NAVIGATOR')
+    return <Navigate to="/" replace />;
+  return (
+    session.data && (
+      <NavigatorProjectsPage key={session.data.id} user={session.data} created={created} />
+    )
+  );
+}
+
+function NavigatorProjectCreateRoute() {
+  const session = useSession();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'NAVIGATOR')
+    return <Navigate to="/" replace />;
+  return session.data && <ProjectCreatePage key={session.data.id} user={session.data} />;
+}
+
+function NavigatorProjectDetailRoute() {
+  const session = useSession();
+  const { projectId } = projectDetailRoute.useParams();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'NAVIGATOR')
+    return <Navigate to="/" replace />;
+  if (!/^[1-9]\d*$/.test(projectId) || Number(projectId) > 2_147_483_647)
+    return <PageRecovery title="项目地址无效" description="请返回工作台，重新选择项目。" />;
+  return (
+    session.data && (
+      <ProjectDetailPage
+        key={`${session.data.id}:${projectId}`}
+        user={session.data}
+        projectId={Number(projectId)}
+      />
+    )
+  );
 }
 
 function CurrentProfilePage() {
@@ -171,6 +213,33 @@ const profileRoute = createRoute({
   component: CurrentProfilePage,
   errorComponent: () => <PageRecovery />,
 });
+const projectsRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/projects',
+  validateSearch: (search: Record<string, unknown>): { created?: number } => {
+    const created = Number(search.created);
+    return {
+      created:
+        Number.isSafeInteger(created) && created > 0 && created <= 2_147_483_647
+          ? created
+          : undefined,
+    };
+  },
+  component: NavigatorProjectsRoute,
+  errorComponent: () => <PageRecovery />,
+});
+const projectCreateRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/projects/create',
+  component: NavigatorProjectCreateRoute,
+  errorComponent: () => <PageRecovery />,
+});
+const projectDetailRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/projects/$projectId',
+  component: NavigatorProjectDetailRoute,
+  errorComponent: () => <PageRecovery />,
+});
 const organizationRoute = createRoute({
   getParentRoute: () => workspaceRoute,
   path: '/organization',
@@ -214,6 +283,9 @@ const router = createRouter({
     workspaceRoute.addChildren([
       homeRoute,
       profileRoute,
+      projectsRoute,
+      projectCreateRoute,
+      projectDetailRoute,
       organizationRoute,
       organizationCreateRoute,
     ]),

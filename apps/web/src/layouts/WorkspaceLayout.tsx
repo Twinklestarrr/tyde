@@ -21,6 +21,7 @@ import { useWorkspaceView, workspaceViewOptions, type WorkspaceView } from './Wo
 /** 登录后的公共顶栏，Web 与 Electron 使用相同导航和账户入口。 */
 export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: AuthUser }>) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const workbenchActive = pathname === '/' || pathname.startsWith('/projects');
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -106,8 +107,8 @@ export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: Au
           >
             <Link
               to="/"
-              aria-current={pathname === '/' ? 'page' : undefined}
-              className={`relative flex h-full items-center gap-[8px] px-[4px] text-[13px] font-medium outline-offset-4 transition-colors hover:text-[var(--color-primary-strong)] ${pathname === '/' ? 'text-[var(--color-primary-strong)] after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:rounded-t after:bg-primary' : 'text-[var(--color-neutral-strong)]'}`}
+              aria-current={workbenchActive ? 'page' : undefined}
+              className={`relative flex h-full items-center gap-[8px] px-[4px] text-[13px] font-medium outline-offset-4 transition-colors hover:text-[var(--color-primary-strong)] ${workbenchActive ? 'text-[var(--color-primary-strong)] after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:rounded-t after:bg-primary' : 'text-[var(--color-neutral-strong)]'}`}
             >
               <LayoutDashboard className="hidden size-[18px] sm:block" aria-hidden />
               工作台
