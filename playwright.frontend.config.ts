@@ -13,6 +13,7 @@ export default defineConfig({
     'organization-electron.spec.ts',
     'workspace-views.spec.ts',
     'navigator-projects.spec.ts',
+    'project-manager.spec.ts',
   ],
   workers: 1,
   timeout: 30_000,

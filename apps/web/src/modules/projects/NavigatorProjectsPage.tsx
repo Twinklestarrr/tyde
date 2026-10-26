@@ -190,7 +190,18 @@ export function NavigatorProjectsPage({ user, created }: { user: AuthUser; creat
                 <dt className="text-muted-foreground">截止时间</dt>
                 <dd>{project.deadline || '未设置'}（上海时间）</dd>
               </dl>
-              <div className="mt-auto flex justify-end border-t pt-4">
+              <div className="mt-auto flex flex-wrap justify-end gap-3 border-t pt-4">
+                {project.currentAction === 'RECRUIT_PROJECT_MANAGER' && (
+                  <Button asChild size="mobileTouch">
+                    <Link
+                      to="/projects/$projectId"
+                      params={{ projectId: String(project.id) }}
+                      hash="project-manager"
+                    >
+                      招募策略官
+                    </Link>
+                  </Button>
+                )}
                 <Button asChild variant="primaryOutline" size="mobileTouch">
                   <Link to="/projects/$projectId" params={{ projectId: String(project.id) }}>
                     查看项目

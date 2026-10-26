@@ -6,6 +6,7 @@ import { api } from '@/services/api';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
 import { ProjectWorkflow } from './ProjectWorkflow';
+import { ProjectManagerPanel } from './ProjectManagerPanel';
 
 const difficulty = { EASY: '简单', MEDIUM: '中等', HARD: '困难' };
 const education = {
@@ -89,6 +90,13 @@ export function ProjectDetailPage({ user, projectId }: { user: AuthUser; project
             </p>
           </header>
           <ProjectWorkflow currentNodeCode={project.currentNodeCode} />
+          <ProjectManagerPanel
+            user={user}
+            projectId={projectId}
+            refreshProject={async () => {
+              await detail.refetch({ throwOnError: true });
+            }}
+          />
           <section
             className="rounded-[16px] border bg-card p-5 sm:p-6"
             aria-labelledby="project-basic-title"
