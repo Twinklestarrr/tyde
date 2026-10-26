@@ -1,3 +1,4 @@
+import { queryTransferTasks } from './expert-transfer-query.js';
 import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
 import { Prisma } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
@@ -82,7 +83,8 @@ export async function queryExpertTasks(
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
-  if (!rows.length) return [];
+  const transferCards = await queryTransferTasks(tx, query, principal, projectId);
+  if (!rows.length) return transferCards;
   const ids = [...new Set(rows.map((r) => r.projectId))];
   const [members, attempts, exams, managers, creators, pendingEntries] = await Promise.all([
     tx.projectMember.findMany({
@@ -224,6 +226,9 @@ export async function queryExpertTasks(
     const manager = managers.find((m) => m.projectId === row.projectId)?.candidate;
     cards.push({
       assignmentId: row.id,
+      movementId: null,
+      sourceBizType: 'EXPERT_ASSIGNMENT',
+      sourceBizId: row.id,
       basicInfo: {
         projectId: project.id,
         projectName: project.projectName,
@@ -281,5 +286,21 @@ export async function queryExpertTasks(
       },
     });
   }
-  return cards;
+  return [
+    ...transferCards,
+    ...cards.filter(
+      (c) =>
+        !transferCards.some(
+          (t) =>
+            t.basicInfo.projectId === c.basicInfo.projectId &&
+            t.basicInfo.organizationId === c.basicInfo.organizationId &&
+            t.branchNodeCode !== 'MEMBER_MOVEMENT_APPROVAL',
+        ),
+    ),
+  ].sort(
+    (a, b) =>
+      b.basicInfo.assignedAt.localeCompare(a.basicInfo.assignedAt) ||
+      b.sourceBizId - a.sourceBizId ||
+      a.sourceBizType.localeCompare(b.sourceBizType),
+  );
 }

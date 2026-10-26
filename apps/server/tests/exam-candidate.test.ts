@@ -77,6 +77,10 @@ function fixture() {
     gradingStatus: 'NOT_STARTED',
   };
   const tx = {
+    projectMemberMovement: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     $queryRaw: vi.fn().mockResolvedValue([]),
     user: { findUnique: vi.fn().mockResolvedValue(user) },
     project: { findFirst: vi.fn().mockResolvedValue(project) },
@@ -406,7 +410,16 @@ test('candidate answer files stay inside owned attempt or effective organization
           examId: 1,
           OR: [
             { id: { in: [] } },
-            { organizationId: 'org', sourceBizType: 'EXPERT_ORDER', sourceBizId: 2 },
+            {
+              organizationId: 'org',
+              OR: [
+                { sourceBizType: 'EXPERT_ORDER', sourceBizId: 2 },
+                {
+                  sourceBizType: 'PROJECT_MEMBER_TRANSFER',
+                  transferMovement: { targetProjectId: 1, member: { organizationId: 'org' } },
+                },
+              ],
+            },
           ],
         },
       },

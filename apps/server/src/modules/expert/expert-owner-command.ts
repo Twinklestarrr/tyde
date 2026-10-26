@@ -1,3 +1,4 @@
+import { refreshMovementApprovers } from '../personnel/personnel-movement-approvers.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
@@ -212,6 +213,7 @@ export async function replaceProjectOwners(
           updatedBy: principal.uid,
         },
       });
+      await refreshMovementApprovers(tx, assignment.projectId, now);
       await refreshOwnerProgress(
         tx,
         assignment.projectId,

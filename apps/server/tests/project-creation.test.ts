@@ -378,6 +378,7 @@ test('creation HTTP and OpenAPI preserve full schemas, examples, nulls and exist
 
 test('claimed project attachment reads require active business relationship plus independent creator grant', async () => {
   const db = {
+    projectMember: { findMany: vi.fn().mockResolvedValue([]) },
     $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
     uploadedFile: {
       findUnique: vi.fn().mockResolvedValue({

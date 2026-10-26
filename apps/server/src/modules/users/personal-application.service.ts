@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
 import { businessDate } from '../organizations/member.service.js';
+import { displayName } from '../projects/project-detail.js';
 import { projectTime } from '../projects/project-time.js';
 
 export interface PersonalApplicationQuery {
@@ -67,10 +68,23 @@ export class PersonalApplicationService {
         const members = ids.length
           ? await tx.userOrgRel.findMany({ where: { id: { in: ids } }, include: { user: true } })
           : [];
+        const transferFlows = rows.filter((f) => f.businessType === 'PROJECT_MEMBER_TRANSFER');
+        const movements = transferFlows.length
+          ? await tx.projectMemberMovement.findMany({
+              where: {
+                flowId: { in: transferFlows.map((f) => f.id) },
+                initiatedBy: principal.userId,
+              },
+              include: { member: { include: { user: true } }, targetProject: true },
+            })
+          : [];
         const records = rows.map((flow, i) => {
           const data = snapshots[i]!;
           const text = (name: string) =>
             typeof data[name] === 'string' ? (data[name] as string) : null;
+          const movement = movements.find(
+            (m) => m.flowId === flow.id && String(m.id) === flow.businessId,
+          );
           const targetMemberId = text('targetMemberId');
           const member = members.find(
             (r) => r.id === targetMemberId && r.orgId === flow.applicantOrgId,
@@ -107,6 +121,24 @@ export class PersonalApplicationService {
                 : name || real || member.user.uid
               : text('targetMemberName'),
             plannedLeaveDate,
+            transfer: movement
+              ? {
+                  movementId: movement.id,
+                  memberId: movement.memberId,
+                  targetUserId: movement.userId,
+                  targetUserName: displayName(
+                    movement.member.user.displayName,
+                    movement.member.user.realName,
+                    movement.member.user.uid,
+                  ),
+                  sourceProjectId: movement.sourceProjectId,
+                  targetProjectId: movement.targetProjectId,
+                  targetProjectName: movement.targetProject?.projectName ?? null,
+                  organizationId: movement.member.organizationId,
+                  movementStatus: movement.status,
+                  plannedEffectiveDate: movement.plannedEffectiveDate.toISOString().slice(0, 10),
+                }
+              : null,
             appliedAt: projectTime(flow.appliedAt),
             finishedAt: flow.finishedAt ? projectTime(flow.finishedAt) : null,
           };

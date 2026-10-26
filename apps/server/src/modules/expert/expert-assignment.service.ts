@@ -1,3 +1,5 @@
+import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
+import { queryTransferTasks } from './expert-transfer-query.js';
 import { respondToAssignment, type RespondInput } from './expert-respond-command.js';
 import { queryExpertTasks, validateTaskQuery, type ExpertTaskQuery } from './expert-task-query.js';
 import { replaceProjectOwners, type OwnerChangeInput } from './expert-owner-command.js';
@@ -199,7 +201,31 @@ export class ExpertAssignmentService {
         const unique = [
           ...new Map(rows.map((a) => [a.projectId, a] as const).reverse()).values(),
         ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id - a.id);
-        if (!unique.length) return [];
+        const transferred = (await queryTransferTasks(tx, {}, principal))
+          .filter((c) => ['STANDARD_TRAINING', 'PRODUCTION_TASK'].includes(c.branchNodeCode ?? ''))
+          .map((c) => ({
+            assignmentId: null,
+            movementId: c.movementId,
+            projectId: c.basicInfo.projectId,
+            projectName: c.basicInfo.projectName,
+            requesterName: c.basicInfo.requesterName,
+            needWrittenExam: true,
+            admissionStatus: 'PASSED',
+            currentNodeCode: c.branchNodeCode!,
+          }));
+        if (!unique.length)
+          return transferred.filter(
+            (r) =>
+              !keyword?.trim() ||
+              [
+                r.projectName,
+                r.requesterName,
+                r.currentNodeCode,
+                expertNodeNames[r.currentNodeCode],
+                'PASSED',
+                '通过',
+              ].some((v) => v?.toLocaleLowerCase().includes(keyword.trim().toLocaleLowerCase())),
+          );
         const ids = unique.map((a) => a.projectId);
         const attempts = await tx.entranceExamAttempt.findMany({
           where: {
@@ -220,7 +246,7 @@ export class ExpertAssignmentService {
           },
         });
         const normalized = keyword?.trim().toLocaleLowerCase();
-        return unique
+        const ordinary = unique
           .map((a) => {
             const project = a.project;
             const status = admissionStatus(
@@ -251,6 +277,7 @@ export class ExpertAssignmentService {
               currentNodeCode = snapshot.branchNodeCode;
             return {
               assignmentId: a.id,
+              movementId: null,
               projectId: project.id,
               projectName: project.projectName,
               requesterName:
@@ -280,17 +307,56 @@ export class ExpertAssignmentService {
                 ],
               ].some((value) => value?.toLocaleLowerCase().includes(normalized)),
           );
+        const combined = [
+          ...transferred,
+          ...ordinary.filter((r) => !transferred.some((t) => t.projectId === r.projectId)),
+        ];
+        return combined.filter(
+          (r) =>
+            !normalized ||
+            [
+              r.projectName,
+              r.requesterName,
+              r.currentNodeCode,
+              expertNodeNames[r.currentNodeCode],
+              r.admissionStatus,
+              '通过',
+            ].some((v) => v?.toLocaleLowerCase().includes(normalized)),
+        );
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
   }
-  async detail(assignmentId: number, principal: AuthPrincipal) {
+  async detail(assignmentId: number | undefined, principal: AuthPrincipal, movementId?: number) {
     this.requireExpert(principal);
     return this.db.$transaction(
       async (tx) => {
-        const assignment = await tx.projectExpertAssignment.findFirst({
-          where: { id: assignmentId, project: { deleted: false } },
-        });
+        if ((assignmentId == null) === (movementId == null))
+          throw new AuthError(400, 'VALIDATION_ERROR', 'assignmentId与movementId须二选一');
+        const transferCard =
+          movementId == null
+            ? null
+            : (await queryTransferTasks(tx, {}, principal)).find(
+                (c) => c.movementId === movementId,
+              );
+        const assignment =
+          movementId != null
+            ? transferCard
+              ? {
+                  id: null,
+                  projectId: transferCard.basicInfo.projectId,
+                  subjectType: 'INDIVIDUAL',
+                  expertUserId: principal.userId,
+                  organizationId: null,
+                  status: 'ACCEPTED',
+                  operatorHeadcount: null,
+                  inspectorHeadcount: null,
+                  productionRequirement: null,
+                }
+              : null
+            : await tx.projectExpertAssignment.findFirst({
+                where: { id: assignmentId, project: { deleted: false } },
+              });
         if (!assignment) throw new AuthError(404, 'NOT_FOUND', '执行专家任务不存在');
         if (assignment.subjectType === 'INDIVIDUAL') {
           if (assignment.expertUserId !== principal.userId)
@@ -345,6 +411,7 @@ export class ExpertAssignmentService {
             stages: plan?.stages.map(productionStageData) ?? [],
           },
           assignmentId: assignment.id,
+          movementId: movementId ?? null,
           currentNodeCode: project.currentNodeCode,
           availableOperations: ['VIEW_DETAIL'],
         };
@@ -360,6 +427,18 @@ export async function canReadExpertProjectFile(
   projectId: number,
   userId: string,
 ) {
+  const transferred = await db.projectMember.findMany({
+    where: {
+      projectId,
+      userId,
+      status: { in: ['ACTIVE', 'PENDING_EXIT', 'PENDING_TRANSFER'] },
+      joinedAt: { not: null },
+      leftAt: null,
+      admissionAttempt: { sourceBizType: 'PROJECT_MEMBER_TRANSFER' },
+    },
+    include: memberInclude,
+  });
+  if (transferred.some((m) => qualifiedForEntry(m, true))) return true;
   const rows = await db.$queryRaw<{ allowed: boolean }[]>`SELECT EXISTS(
     SELECT 1 FROM "ProjectExpertAssignment" a
     LEFT JOIN "ProjectProductionPlan" plan ON plan."projectId"=a."projectId"

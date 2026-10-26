@@ -1,3 +1,4 @@
+import { refreshMovementApprovers } from '../personnel/personnel-movement-approvers.js';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { AuthError } from '../auth/auth.error.js';
@@ -141,6 +142,7 @@ export class ProjectManagerService {
             throw new AuthError(409, 'DUPLICATE', '项目流程节点已发生变化，请刷新后重试');
           updatedProject = { ...project, currentNodeCode: 'PRODUCTION_PLAN' };
         }
+        await refreshMovementApprovers(tx, project.id, now);
         const after = await collectManagementTasks(tx, updatedProject);
         await reconcileTaskRounds(
           tx,

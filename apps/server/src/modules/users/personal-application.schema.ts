@@ -21,7 +21,7 @@ export const personalApplicationBody = {
   description: '仅查询登录用户自己发起的申请；不接收申请人ID。',
   properties: {
     businessType: text(
-      '业务类型，省略默认ORG_MEMBER_EXIT=退出组织；null或空白查询全部。ATTENDANCE_LEAVE=请假、ATTENDANCE_CORRECTION=考勤修正；未知类型返回空结果。',
+      '业务类型，省略默认ORG_MEMBER_EXIT=退出组织；null或空白查询全部。ATTENDANCE_LEAVE=请假、ATTENDANCE_CORRECTION=考勤修正、PROJECT_MEMBER_TRANSFER=人员转项；未知类型返回空结果。',
       true,
       64,
     ),
@@ -54,7 +54,7 @@ const fields = {
   flowNo: text('全局唯一审批流水号。'),
   flowVersionNo: integer('流程乐观锁版本号，从0开始。'),
   businessType: text(
-    '业务类型；ORG_MEMBER_EXIT=退出组织；ATTENDANCE_LEAVE=请假、ATTENDANCE_CORRECTION=考勤修正；其他类型按实际业务保存值返回。',
+    '业务类型；ORG_MEMBER_EXIT=退出组织；ATTENDANCE_LEAVE=请假、ATTENDANCE_CORRECTION=考勤修正、PROJECT_MEMBER_TRANSFER=人员转项；其他类型按实际业务保存值返回。',
   ),
   businessId: text('关联业务对象ID，字符串；格式由业务类型决定。'),
   businessNo: text('业务编号，未设置null。', true),
@@ -84,6 +84,38 @@ const fields = {
   plannedLeaveDate: {
     ...text('退出申请计划离开日期，yyyy-MM-dd；缺失或历史快照日期不合法时null。', true),
     format: 'date',
+  },
+  transfer: {
+    type: 'object',
+    nullable: true,
+    additionalProperties: false,
+    description: '真实变动单结构化来源；非转项、缺失或不匹配流程为null，不从表单推断。',
+    required: [
+      'movementId',
+      'memberId',
+      'targetUserId',
+      'targetUserName',
+      'sourceProjectId',
+      'targetProjectId',
+      'targetProjectName',
+      'organizationId',
+      'movementStatus',
+      'plannedEffectiveDate',
+    ],
+    properties: {
+      movementId: integer('转项单ID。', 1),
+      memberId: integer('来源项目成员ID。', 1),
+      targetUserId: { ...text('被调人用户UUID。'), format: 'uuid' },
+      targetUserName: text('被调人当前昵称(姓名)，缺失回退UID。'),
+      sourceProjectId: integer('来源项目ID。', 1),
+      targetProjectId: { ...integer('目标项目ID；历史缺失null。', 1), nullable: true },
+      targetProjectName: text('目标项目当前名称；缺失null。', true),
+      organizationId: { ...text('来源组织UUID；个人null。', true), format: 'uuid' },
+      movementStatus: text(
+        '变动状态：PROCESSING审批中、WAITING_EFFECTIVE待生效、EFFECTIVE已生效、REJECTED驳回、WITHDRAWN撤回、CANCELED取消。',
+      ),
+      plannedEffectiveDate: { ...text('计划生效日期，上海日期yyyy-MM-dd。'), format: 'date' },
+    },
   },
   appliedAt: text('申请时间，yyyy-MM-dd HH:mm:ss，Asia/Shanghai。'),
   finishedAt: text('结束时间，yyyy-MM-dd HH:mm:ss，Asia/Shanghai；未结束null。', true),
@@ -116,6 +148,7 @@ export const personalApplicationExample = {
       targetMemberId: '00000000-0000-4000-8000-000000000002',
       targetMemberName: '小明',
       plannedLeaveDate: '2026-11-01',
+      transfer: null,
       appliedAt: '2026-10-21 12:00:00',
       finishedAt: null,
     },
@@ -143,7 +176,31 @@ export const personalApplicationResponse = {
       },
     },
   },
-  examples: [personalApplicationExample],
+  examples: [
+    personalApplicationExample,
+    {
+      ...personalApplicationExample,
+      records: [
+        {
+          ...personalApplicationExample.records[0],
+          businessType: 'PROJECT_MEMBER_TRANSFER',
+          businessId: '7',
+          transfer: {
+            movementId: 7,
+            memberId: 2,
+            targetUserId: '00000000-0000-4000-8000-000000000004',
+            targetUserName: '小明',
+            sourceProjectId: 3001,
+            targetProjectId: 3002,
+            targetProjectName: '目标项目',
+            organizationId: null,
+            movementStatus: 'PROCESSING',
+            plannedEffectiveDate: '2026-11-01',
+          },
+        },
+      ],
+    },
+  ],
 };
 export const personalApplicationSchema = {
   ...authSchema(

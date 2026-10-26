@@ -1,3 +1,10 @@
+import type { MovementQuery, MovementDetailQuery } from './personnel-movement-query.js';
+import {
+  movementListBody,
+  movementDetailBody,
+  movementListResponse,
+  movementDetailResponse,
+} from './personnel-movement-query.schema.js';
 import {
   PersonnelRecordsService,
   type ProjectAttendanceQuery,
@@ -18,6 +25,19 @@ import type { AuthPrincipal, AuthService } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
 import { validateTransport } from '../auth/security.js';
 import { PersonnelService } from './personnel.service.js';
+import {
+  PersonnelMovementService,
+  type TransferTargetQuery,
+} from './personnel-movement.service.js';
+import type { MovementInput } from './personnel-movement.domain.js';
+import type { MovementProcessInput, MovementWithdrawInput } from './personnel-transfer.js';
+import {
+  movementCreateSchema,
+  transferTargetSchema,
+  movementWithdrawBody,
+  movementProcessBody,
+  movementCommandResponse,
+} from './personnel-movement.schema.js';
 import type { RosterQuery, EntryInput } from './personnel-domain.js';
 import {
   personnelSchema,
@@ -32,6 +52,7 @@ export async function personnelRoutes(
   auth: AuthService,
   config: Config,
   records: PersonnelRecordsService,
+  movements = new PersonnelMovementService(service.db),
 ) {
   await parent.register(async (app) => {
     const identities = new WeakMap<FastifyRequest, AuthPrincipal>();
@@ -60,6 +81,88 @@ export async function personnelRoutes(
       identities.set(req, await auth.authenticate(token, client));
     });
 
+    app.post<{ Body: MovementQuery }>(
+      `${API_PREFIX}/project-personnel/movements/list`,
+      {
+        schema: personnelSchema(
+          'listPersonnelMovements',
+          '查询人员变动记录',
+          movementListBody,
+          movementListResponse,
+        ),
+      },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await movements.list(req.body, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: MovementDetailQuery }>(
+      `${API_PREFIX}/project-personnel/movements/detail`,
+      {
+        schema: personnelSchema(
+          'detailPersonnelMovements',
+          '查询人员变动详情',
+          movementDetailBody,
+          movementDetailResponse,
+        ),
+      },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await movements.detail(req.body, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: MovementProcessInput }>(
+      `${API_PREFIX}/project-personnel/movements/process`,
+      {
+        schema: personnelSchema(
+          'processPersonnelMovement',
+          '处理当前转项人工审批节点',
+          movementProcessBody,
+          movementCommandResponse,
+        ),
+      },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await movements.process(req.body, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: MovementWithdrawInput }>(
+      `${API_PREFIX}/project-personnel/movements/withdraw`,
+      {
+        schema: personnelSchema(
+          'withdrawPersonnelMovement',
+          '撤回人员变动',
+          movementWithdrawBody,
+          movementCommandResponse,
+        ),
+      },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await movements.withdraw(req.body, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: MovementInput }>(
+      `${API_PREFIX}/project-personnel/movements/create`,
+      { schema: movementCreateSchema },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await movements.create(req.body, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: TransferTargetQuery }>(
+      `${API_PREFIX}/project-personnel/movements/target-projects`,
+      { schema: transferTargetSchema },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await movements.targets(req.body, identities.get(req)!),
+      }),
+    );
     app.post<{ Body: ProjectAttendanceQuery }>(
       `${API_PREFIX}/project-personnel/attendance/list`,
       {

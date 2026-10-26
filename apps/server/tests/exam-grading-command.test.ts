@@ -139,6 +139,7 @@ function setup() {
     $queryRaw: vi.fn().mockResolvedValue([]),
     projectEntranceExam: { findFirst: vi.fn().mockResolvedValue({ id: 5001, status: 'CLOSED' }) },
     entranceExamAttempt: {
+      findUnique: vi.fn(async () => attempt),
       findFirst: vi.fn().mockResolvedValue(attempt),
       update: vi.fn(async ({ data }) => ({ ...attempt, ...data })),
     },
@@ -195,6 +196,7 @@ function setup() {
     },
   };
   const db = {
+    ...tx,
     $transaction: vi.fn(async (fn) => fn(tx)),
     $disconnect: vi.fn(),
   } as unknown as PrismaClient;

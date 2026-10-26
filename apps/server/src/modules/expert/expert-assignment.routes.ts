@@ -58,7 +58,7 @@ export async function expertAssignmentRoutes(
           ...expertSchema(
             'respondExpertAssignment',
             '个人、组织主管或成员接单与拒绝',
-            '当前EXPERT会话与分配个人/组织关系鉴权；分配、负责人、成员、考试培训轮次及补招来源/PENDING事件同事务。主体重复409，普通成员同决定幂等；转项尚未接入返回503。',
+            '当前EXPERT会话与分配个人/组织关系鉴权；分配、负责人、成员、考试培训轮次及补招来源/PENDING事件同事务。主体重复409，普通成员同决定幂等；转项支持movementId，旧assignmentId精确匹配本人/目标项目/同组织的唯一待接单转项，同事务推进且始终进入目标考试。',
             respondResponse,
           ),
           body: respondBody,
@@ -121,7 +121,12 @@ export async function expertAssignmentRoutes(
             '按assignmentId定位组织，仅该组织有效主管可查；包含正常账号的在组、退出审批中及待离职成员，支持主管同时管理多个组织。',
             projectOwnerCandidatesResponse,
           ),
-          querystring: assignmentDetailQuery,
+          querystring: {
+            ...assignmentDetailQuery,
+            required: ['assignmentId'],
+            description: '按真实组织分配ID查询负责人候选。',
+            properties: { assignmentId: assignmentDetailQuery.properties.assignmentId },
+          },
         },
       },
       async (req) => ({
@@ -152,7 +157,7 @@ export async function expertAssignmentRoutes(
         data: await service.myProjects(req.query.keyword, identities.get(req)!),
       }),
     );
-    app.get<{ Querystring: { assignmentId: string } }>(
+    app.get<{ Querystring: { assignmentId?: string; movementId?: string } }>(
       `${API_PREFIX}/expert-assignments/detail`,
       {
         schema: {
@@ -166,13 +171,26 @@ export async function expertAssignmentRoutes(
         },
       },
       async (req) => {
-        const id = Number(req.query.assignmentId);
-        if (!Number.isSafeInteger(id) || id > 2147483647)
-          throw new AuthError(400, 'VALIDATION_ERROR', 'assignmentId超出32位正整数范围');
+        const id = Number(req.query.assignmentId ?? req.query.movementId);
+        if (
+          (req.query.assignmentId == null) === (req.query.movementId == null) ||
+          !Number.isSafeInteger(id) ||
+          id < 1 ||
+          id > 2147483647
+        )
+          throw new AuthError(
+            400,
+            'VALIDATION_ERROR',
+            '来源ID须为32位正整数，assignmentId与movementId二选一',
+          );
         return {
           code: 200,
           message: '操作成功',
-          data: await service.detail(id, identities.get(req)!),
+          data: await service.detail(
+            req.query.assignmentId ? id : undefined,
+            identities.get(req)!,
+            req.query.movementId ? id : undefined,
+          ),
         };
       },
     );

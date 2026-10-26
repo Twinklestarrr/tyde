@@ -65,6 +65,7 @@ function setup() {
     project: { findFirst: vi.fn().mockResolvedValue({ id: 3001, status: 'PUBLISHED' }) },
     projectEntranceExam: { findFirst: vi.fn().mockResolvedValue({ id: 5001, status: 'CLOSED' }) },
     entranceExamAttempt: {
+      findUnique: vi.fn(async () => attempt),
       findFirst: vi.fn().mockResolvedValue(attempt),
       update: vi.fn(async ({ data }) => ({ ...attempt, ...data })),
     },
@@ -130,6 +131,7 @@ function setup() {
     },
   };
   const db = {
+    ...tx,
     entranceExamGradingRecord: tx.entranceExamGradingRecord,
     $transaction: vi.fn(async (fn) => fn(tx)),
     $disconnect: vi.fn(),

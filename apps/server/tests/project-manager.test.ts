@@ -107,6 +107,7 @@ function setup() {
         return rounds[index]!;
       }),
     },
+    projectMemberMovement: { findMany: vi.fn(async () => []) },
     projectEventOutbox: {
       create: vi.fn().mockResolvedValue({ id: 'event-id', status: 'PENDING' }),
     },
@@ -450,6 +451,7 @@ test('manager HTTP and generated OpenAPI preserve strict IDs, field descriptions
 
 test('claimed project attachments allow only independently authorized current PM or handler and lose access after replacement', async () => {
   const db = {
+    projectMember: { findMany: vi.fn().mockResolvedValue([]) },
     $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
     uploadedFile: {
       findMany: vi.fn().mockResolvedValue([{ id: principal.userId }, { id: candidate.userId }]),

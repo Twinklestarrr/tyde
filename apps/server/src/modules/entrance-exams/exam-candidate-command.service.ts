@@ -1,3 +1,4 @@
+import { tryConsumeTransferResult } from '../personnel/personnel-transfer-exam.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
@@ -5,7 +6,7 @@ import type { FileRegistryService } from '../files/file-registry.service.js';
 import type { ExamFileInput } from './exam-config.types.js';
 import {
   lockCandidate,
-  requireCandidate,
+  candidateContext,
   validateCandidateProject,
 } from './exam-candidate.service.js';
 import { collectGradingTasks, reviewerIds } from './exam-grading-tasks.js';
@@ -36,7 +37,8 @@ export class ExamCandidateCommandService {
     p: AuthPrincipal,
   ) {
     await lockCandidate(tx, input.projectId, p.userId);
-    const { assignment, relation, project } = await requireCandidate(tx, input.projectId, p.userId);
+    const context = await candidateContext(tx, input.projectId, p.userId);
+    const { relation, project } = context;
     await tx.$queryRaw`SELECT "id" FROM "EntranceExamAttempt" WHERE "id"=${input.attemptId} FOR UPDATE`;
     const attempt = await tx.entranceExamAttempt.findFirst({
       where: {
@@ -46,11 +48,11 @@ export class ExamCandidateCommandService {
       },
     });
     if (!attempt) throw new AuthError(404, 'NOT_FOUND', '应试记录不存在');
-    if (attempt.sourceBizType !== 'EXPERT_ORDER')
-      throw new AuthError(503, 'NOT_IMPLEMENTED', '转项应试来源由12任务接入');
     if (
-      attempt.sourceBizId !== assignment.id ||
-      attempt.organizationId !== assignment.organizationId ||
+      attempt.sourceBizType !== context.sourceBizType ||
+      attempt.sourceBizId !== context.sourceBizId ||
+      (context.movement && context.movement.targetExamAttemptId !== attempt.id) ||
+      attempt.organizationId !== context.organizationId ||
       attempt.userOrgRelId !== (relation?.id ?? null)
     )
       throw new AuthError(403, 'FORBIDDEN', '应试记录绑定的接单身份已失效');
@@ -223,7 +225,7 @@ export class ExamCandidateCommandService {
   }
   async cancel(input: CandidateAttemptInput, p: AuthPrincipal) {
     this.validate(input, p);
-    return this.db.$transaction(
+    const result = await this.db.$transaction(
       async (tx) => {
         const attempt = await this.owned(tx, input, p),
           now = new Date();
@@ -251,6 +253,8 @@ export class ExamCandidateCommandService {
       },
       { timeout: 30000 },
     );
+    await tryConsumeTransferResult(this.db, input.attemptId);
+    return result;
   }
 }
 async function finishCandidateTask(

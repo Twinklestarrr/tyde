@@ -50,6 +50,7 @@ function fixture() {
   };
   const delegate = () => ({ findMany: vi.fn().mockResolvedValue([]) });
   const tx = {
+    projectMemberMovement: { findMany: vi.fn().mockResolvedValue([]) },
     userOrgRel: delegate(),
     projectExpertAssignment: delegate(),
     projectMember: delegate(),

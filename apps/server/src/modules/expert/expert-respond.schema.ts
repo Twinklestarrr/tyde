@@ -3,20 +3,22 @@ export const respondBody = {
   type: 'object',
   additionalProperties: false,
   description:
-    '个人、组织主管或成员响应任务。assignmentId与movementId必须二选一；当前仅招募分配可写，转项由12接入，movementId请求返回503。组织首次接单指定1—20名负责人。',
+    '个人、组织主管或成员响应任务。assignmentId与movementId必须二选一；转项仅被调人本人在MEMBER_CONFIRM阶段可响应，拒绝终止并恢复来源成员；不允许指定负责人。组织首次接单指定1—20名负责人。',
   required: ['decision'],
   properties: {
     assignmentId: {
       ...ownerChangeBody.properties.assignmentId,
       nullable: true,
-      description: '分配记录ID，32位正整数；与movementId二选一。',
+      description:
+        '分配记录ID，32位正整数；与movementId二选一。兼容匹配本人、目标项目及同组织的唯一MEMBER_CONFIRM转项，同事务推进，多个匹配409；不匹配沿普通接单。',
     },
     movementId: {
       type: 'integer',
       minimum: 1,
       maximum: 2147483647,
       nullable: true,
-      description: '转项变动单ID；与assignmentId二选一。12尚未接入，返回503且不写数据。',
+      description:
+        '转项变动单ID；与assignmentId二选一。仅本人在当前接单阶段可响应，重复或已结束返回409。',
     },
     decision: {
       type: 'string',
@@ -67,11 +69,16 @@ export const respondResponse = {
     '处理后的状态及建议动作。实际后续入口仍独立校验；不创建考试应试或调用真实Agent，不推进项目节点/版本。通知人数仅为可见范围人数，不表示已实际投递。',
   required: Object.keys(respondExample),
   properties: {
-    assignmentId: { type: 'integer', description: '本次处理的分配记录ID，32位正整数。' },
+    assignmentId: {
+      type: 'integer',
+      nullable: true,
+      description:
+        '本次处理的分配记录ID，32位正整数；显式movementId响应为null，旧assignmentId兼容响应保留本ID。',
+    },
     movementId: {
       type: 'integer',
       nullable: true,
-      description: '关联转项单ID；本批转项尚未接入，恒为null。',
+      description: '关联转项单ID；招募分配响应为null。',
     },
     status: {
       type: 'string',

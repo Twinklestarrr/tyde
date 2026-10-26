@@ -8,6 +8,7 @@ datasource db {
 }
 
 model User {
+  initiatedMovements ProjectMemberMovement[]
   clockEvents AttendanceClockEvent[]
   id                     String                          @id @default(uuid()) @db.Uuid
   phoneE164              String                          @unique @db.VarChar(16)
@@ -241,6 +242,7 @@ model ApprovalConfig {
 }
 
 model ApprovalFlow {
+  movement ProjectMemberMovement?
   id               String              @id @default(uuid()) @db.Uuid
   flowNo           String              @unique @db.VarChar(64)
   // 旧内置流程processId=0，新UUID模型以null表示内置、不依赖可编辑定义。
@@ -398,6 +400,7 @@ model ProjectCategory {
 }
 
 model Project {
+  incomingMovements ProjectMemberMovement[]
   outputReports         ProjectOutputReport[]
   id                    Int                         @id @default(autoincrement())
   projectNo             String                      @unique @db.VarChar(40)
@@ -615,6 +618,7 @@ model ProjectProductionStage {
 
 // 仅保存实际项目成员真值；注册/组织身份/管理授权不会创建成员。
 model ProjectMember {
+  movements ProjectMemberMovement[]
   outputReports               ProjectOutputReport[]
   subtaskAssignments          ProjectSubtaskAssignee[]
   performances                ProjectMemberPerformance[]
@@ -892,6 +896,7 @@ model ProjectExpertAssignmentMember {
 
 // 应试事实复用；05已准备配置版本/试卷外键，第17迁移待应用；08接考试写入口。
 model EntranceExamAttempt {
+  transferMovement ProjectMemberMovement?
   id                 Int                  @id @default(autoincrement())
   attemptNo          String               @unique @db.VarChar(64)
   examId             Int
@@ -1235,4 +1240,38 @@ model ProjectOutputQuality {
   report            ProjectOutputReport @relation(fields: [outputReportId], references: [id], onDelete: Restrict)
 
   @@index([outputReportId, id])
+}
+
+// 12人员变动；源成员使用复合来源外键，开放变动唯一性由SQL部分索引保证。
+model ProjectMemberMovement {
+  id                   Int           @id @default(autoincrement())
+  movementNo           String        @unique @db.VarChar(64)
+  memberId             Int
+  userId               String        @db.Uuid
+  sourceProjectId      Int
+  targetProjectId      Int?
+  movementType         String        @db.VarChar(16)
+  reason               String        @db.VarChar(500)
+  plannedEffectiveDate DateTime      @db.Date
+  status               String        @db.VarChar(24)
+  initiatedBy          String        @db.Uuid
+  flowId               String?       @unique @db.Uuid
+  versionNo            Int           @default(0)
+  effectiveAt          DateTime?     @db.Timestamptz(3)
+  targetExamAttemptId  Int?          @unique
+  rejectedAt           DateTime?     @db.Timestamptz(3)
+  withdrawnAt          DateTime?     @db.Timestamptz(3)
+  targetExamAttempt    EntranceExamAttempt? @relation(fields: [targetExamAttemptId], references: [id], onDelete: Restrict)
+  createdBy            String        @db.VarChar(36)
+  updatedBy            String?       @db.VarChar(36)
+  createdAt            DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime      @updatedAt @db.Timestamptz(3)
+  member               ProjectMember @relation(fields: [memberId, sourceProjectId, userId], references: [id, projectId, userId], onDelete: Restrict)
+  targetProject        Project?      @relation(fields: [targetProjectId], references: [id], onDelete: Restrict)
+  initiator            User          @relation(fields: [initiatedBy], references: [id], onDelete: Restrict)
+  flow                 ApprovalFlow? @relation(fields: [flowId], references: [id], onDelete: Restrict)
+
+  @@index([sourceProjectId, status, createdAt])
+  @@index([targetProjectId, status])
+  @@index([status, plannedEffectiveDate])
 }

@@ -1,3 +1,4 @@
+import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
 import { Prisma, type PrismaClient, type Project, type ProjectMember } from '@prisma/client';
 import { AuthError } from '../auth/auth.error.js';
 import type { AuthPrincipal } from '../auth/auth.service.js';
@@ -38,6 +39,18 @@ export async function canExpertViewMaterials(
   projectId: number,
   userId: string,
 ) {
+  const transferred = await tx.projectMember.findMany({
+    where: {
+      projectId,
+      userId,
+      status: { in: ['ACTIVE', 'PENDING_EXIT', 'PENDING_TRANSFER'] },
+      joinedAt: { not: null },
+      leftAt: null,
+      admissionAttempt: { sourceBizType: 'PROJECT_MEMBER_TRANSFER' },
+    },
+    include: memberInclude,
+  });
+  if (transferred.some((m) => qualifiedForEntry(m, true))) return true;
   const [row] = await tx.$queryRaw<{ allowed: boolean }[]>(Prisma.sql`
     SELECT EXISTS (
       SELECT 1 FROM "ProjectExpertAssignment" a

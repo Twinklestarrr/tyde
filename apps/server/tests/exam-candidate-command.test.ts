@@ -41,6 +41,10 @@ function fixture() {
     { id: 9, gradingMode: 'AUTO', reviewersJson: [] },
   ];
   const tx = {
+    projectMemberMovement: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     $queryRaw: vi.fn(async () => []),
     user: { findUnique: vi.fn(async () => ({ status: 'ACTIVE' })) },
     project: { findFirst: vi.fn(async () => ({ id: 1, currentNodeCode: 'PERSONNEL_MANAGEMENT' })) },
@@ -51,6 +55,7 @@ function fixture() {
       ]),
     },
     entranceExamAttempt: {
+      findUnique: vi.fn(async () => attempt),
       findFirst: vi.fn(async () => attempt),
       update: vi.fn(async ({ data }) => ({ ...attempt, ...data })),
     },
@@ -78,7 +83,7 @@ function fixture() {
       fileHash: null,
     })),
   };
-  const db = { $transaction: vi.fn(async (fn) => fn(tx)) } as unknown as PrismaClient;
+  const db = { ...tx, $transaction: vi.fn(async (fn) => fn(tx)) } as unknown as PrismaClient;
   return {
     service: new ExamCandidateCommandService(db, files as unknown as FileRegistryService),
     tx,
@@ -234,7 +239,7 @@ test.each([
   ['paperId', null, 400],
   ['sourceBizId', 99, 403],
   ['organizationId', 'other', 403],
-  ['sourceBizType', 'PROJECT_MEMBER_TRANSFER', 503],
+  ['sourceBizType', 'PROJECT_MEMBER_TRANSFER', 403],
 ])('candidate submission rejects terminal or invalid source %s', async (field, value, status) => {
   const f = fixture();
   Object.assign(f.attempt, { [field]: value });

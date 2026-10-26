@@ -105,3 +105,15 @@ pnpm --filter @tyde/server test:integration -t 'expert task cards'
 2026-10-22最新07集成夹具修正：用户18:03:22定向2项，1通过/1失败/190跳过（共192项，总12.58秒）；060来源/多组织权限/身份优先/status筛选已通过，用户本机数据库连接阻塞解除。唯一失败是测试误对未创建的生产计划调用update（P2025），已改为显式创建含全部必填字段的免试计划夹具，业务实现未改。修正后18项定向单测（18:05:03，总2.84秒）及变更ESLint通过；Agent仅复验失败1项仍因自身环境127.0.0.1:5432不可达停在beforeEach，未执行修正后业务断言。仅该1项待用户本机复验，不重复已过1项、064及06；421单测及类型/build前批证据保留。无新迁移、未操作开发/部署库。保持07，复验后065—067及API-008，061—063仍部分迁移，业务Agent继续mock，不开始08。
 
 失败单项复验（tyde目录）：`pnpm --filter @tyde/server test:integration -t 'expert task cards read latest membership progress'`。
+
+## 12第三批转项响应更新
+
+2026-10-26：067的movementId响应现已接入，不再固定503。请求仅movementId、decision及拒绝时rejectReason，禁止assignmentId或负责人字段；仅被调人当前EXPERT且处于MEMBER_CONFIRM可操作。返回assignmentId=null、movementId及ACCEPTED/REJECTED、memberStatus=null、TAKE_ENTRANCE_EXAM/VIEW_RESULT、notifiedMemberCount=0；重复或阶段变化409。接受进入独立目标考试，拒绝终止并恢复仍待转项来源成员。旧assignmentId兼容匹配和061转项卡片仍未接回，因此067保留部分迁移。535单测和59定向通过，新增6项数据库集成均初始化连接失败；完整契约、迁移29及只复验本批命令见[人员变动](PERSONNEL_MOVEMENTS.md#第三批业务入口)。前文503或“转项未开放”为历史。
+
+2026-10-26最新12第三批集成通过：用户14:16:05定向运行personnel transfer progression，本批6项全部通过（249跳过，共255项，总19.89秒，测试7.28秒）。真实接单/独立目标考试及五步推进、取消/拒绝恢复与撤回、并发终态/旧版本冲突、负责人和本人离组失权、outbox整事务回滚及考试结果已提交后消费者失败/显式补偿幂等已验证。原ApprovalNode_status_check的CANCELLED误写冲突已解除；第29迁移所需专用库结构具备，迁移历史未另查，不是全255项复跑，无需当前专用库再次迁移29或重复本批六项、前批创建/候选及11通过项。102/106仍部分迁移，105仍待真实HTTP/部署/完整兼容验收；535项全量及收尾59/9和修复后21项定向/类型/ESLint/build前批证据保留。本轮仅同步用户结果与文档，未重跑测试、修改业务代码或操作数据库。保持12，下次直接103/104查询、已激活待办负责人动态同步、当天审批完成即时生效/未来到期生效，再107/07来源及旧assignmentId转项响应兼容回补；业务Agent继续mock，不得人工跳过等待节点。
+
+2026-10-26任务12第六批回补：061新增真实movementId及sourceBizType/sourceBizId，聚合当前转项本人接单、独立考试、组织人工审批与生效后的培训/生产来源；转项assignmentId=null，不能把movementId当assignmentId。062支持独立个人转入项目，063接受assignmentId/movementId二选一。067旧assignmentId精确匹配同用户/目标项目/组织的唯一待本人确认转项，普通响应和推进同事务，转项固定考试，不创建免试待入项。完整跨域卡片仍部分迁移。556单测与50定向通过；新增四项专用库集成因连接不可达未执行业务断言，命令及范围见[人员变动第六批](PERSONNEL_MOVEMENTS.md#第六批真实来源与兼容)。不重复前批已过测试，不重迁移29，未运行调度或实际投递。
+
+2026-10-26第六批复验更新：用户16:21:49已通过3项，个人转入用例最后确认已读请求误传body导致400；已修正为既有query参数，29定向及ESLint/Prettier通过。仅剩personnel transfer sources: personal effective identity这一项待本机专用库复验，不重复已过3项；无业务/schema/迁移改动，保持12。
+
+2026-10-26最新交接：用户16:32:11剩余个人转入一项通过（267跳过，共268项，总4.70秒，测试1.63秒），结合16:21:49已过3项，第六批4项分批全部通过，12累计26项集成分批通过。确认已读及无普通分配断言已验证，不再复验本批4项、不重迁移29。默认入口已交接13，本轮未开始13；接口部分迁移/环境与完整兼容及调度遗留保留，业务Agent继续mock。本次仅同步结果与文档，未重跑测试或操作数据库。

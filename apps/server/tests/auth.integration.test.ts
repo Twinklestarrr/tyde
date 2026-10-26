@@ -1,5 +1,7 @@
+import { PersonnelMovementService } from '../src/modules/personnel/personnel-movement.service.js';
 import { PersonnelService } from '../src/modules/personnel/personnel.service.js';
 import { ExamCandidateCommandService } from '../src/modules/entrance-exams/exam-candidate-command.service.js';
+import { compensateTransferResults } from '../src/modules/personnel/personnel-transfer-exam.js';
 import { ProjectMaterialsService } from '../src/modules/projects/project-materials.service.js';
 import { ExamAutoService } from '../src/modules/entrance-exams/exam-auto.service.js';
 import {
@@ -11914,4 +11916,1624 @@ test('production quality acceptance: outbox fault rolls back submitted facts, ro
     before.snapshots,
   );
   expect(await db.projectEventOutbox.count()).toBe(before.outbox);
+});
+
+// 12第一批：仅定向 personnel transfer targets，不重复11已通过的16项。
+async function personnelTransferTargetFixture() {
+  const f = await personnelEntryFixture();
+  const entered = await f.save({ memberIds: f.members.map((m) => m.id) });
+  expect(entered.statusCode, entered.body).toBe(200);
+  let sequence = 0;
+  const target = async (organizationIds = [f.organization.id]) => {
+    sequence += 1;
+    const project = await db.project.create({
+      data: {
+        projectNo: `TRANSFER-TARGET-${sequence}`,
+        requesterType: 'INDIVIDUAL',
+        requesterId: f.user.id,
+        requesterName: '旧需求方快照',
+        projectName: `转项目标${sequence}`,
+        status: 'PUBLISHED',
+        currentNodeCode: 'PERSONNEL_MANAGEMENT',
+        publishedAt: new Date(`2026-10-${20 + sequence}T00:00:00Z`),
+        createdBy: f.user.uid,
+        updatedBy: f.user.uid,
+        expertAssignments: {
+          create: organizationIds.map((organizationId) => ({
+            assignmentNo: `TRANSFER-ASSIGNMENT-${sequence}-${organizationId}`,
+            subjectType: 'ORGANIZATION',
+            organizationId,
+            status: 'ACCEPTED',
+            createdBy: f.user.uid,
+          })),
+        },
+      },
+    });
+    return project;
+  };
+  const targets = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/project-personnel/movements/target-projects',
+      { projectId: f.projectId, memberIds: [f.orgMember.id], ...body },
+      headers,
+    );
+  return { ...f, target, targets };
+}
+
+test('personnel transfer targets: intersects organizations, paginates and filters publication, deletion, accepted status and current requester name', async () => {
+  const f = await personnelTransferTargetFixture();
+  const secondOrg = await db.organization.create({
+    data: { name: '第二转项组织', expertiseTags: [] },
+  });
+  const secondRel = await db.userOrgRel.create({
+    data: {
+      orgId: secondOrg.id,
+      userId: f.individual.user.id,
+      uid: f.individual.user.uid,
+      joinStatus: 'ACTIVE',
+    },
+  });
+  const secondMember = await db.projectMember.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.individual.user.id,
+      organizationId: secondOrg.id,
+      userOrgRelId: secondRel.id,
+      status: 'ACTIVE',
+      createdBy: f.user.uid,
+    },
+  });
+  const first = await f.target([f.organization.id, secondOrg.id]);
+  const second = await f.target([f.organization.id, secondOrg.id]);
+  const incomplete = await f.target();
+  const deleted = await f.target([f.organization.id, secondOrg.id]);
+  const rejected = await f.target([f.organization.id, secondOrg.id]);
+  const draft = await f.target([f.organization.id, secondOrg.id]);
+  await db.project.update({ where: { id: deleted.id }, data: { deleted: true } });
+  await db.project.update({ where: { id: draft.id }, data: { status: 'DRAFT' } });
+  await db.projectExpertAssignment.updateMany({
+    where: { projectId: rejected.id, organizationId: secondOrg.id },
+    data: { status: 'REJECTED' },
+  });
+  await db.projectProductionPlan.create({
+    data: {
+      projectId: second.id,
+      operatorHeadcount: 1,
+      operatorCpd: 1,
+      totalExpectedOutput: 1,
+      needWrittenExam: false,
+      confirmedBy: f.user.uid,
+      confirmedAt: new Date(),
+      createdBy: f.user.uid,
+    },
+  });
+  await db.user.update({
+    where: { id: f.user.id },
+    data: { displayName: '当前需求方', realName: '姓名' },
+  });
+  const query = { memberIds: [f.orgMember.id, secondMember.id, f.orgMember.id], size: 1 };
+  const before = {
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    rounds: await db.projectTaskRound.count(),
+    snapshots: await db.projectRoleNodeSnapshot.count(),
+    outbox: await db.projectEventOutbox.count(),
+  };
+  const result = await f.targets(query);
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json().data).toMatchObject({
+    total: 2,
+    pages: 2,
+    records: [{ projectId: second.id, requesterName: '当前需求方(姓名)', examRequired: false }],
+  });
+  expect((await f.targets({ ...query, current: 2 })).json().data.records).toMatchObject([
+    { projectId: first.id, examRequired: true },
+  ]);
+  expect((await f.targets({ ...query, current: 3 })).json().data).toMatchObject({
+    total: 2,
+    records: [],
+  });
+  expect(
+    (await f.targets({ ...query, keyword: ` ${first.projectNo} ` })).json().data,
+  ).toMatchObject({ total: 1, records: [{ projectId: first.id }] });
+  expect((await f.targets({ keyword: incomplete.projectNo })).json().data.total).toBe(1);
+  expect(await db.project.findUnique({ where: { id: f.projectId } })).toEqual(before.project);
+  expect(await db.projectTaskRound.count()).toBe(before.rounds);
+  expect(await db.projectRoleNodeSnapshot.count()).toBe(before.snapshots);
+  expect(await db.projectEventOutbox.count()).toBe(before.outbox);
+});
+
+test('personnel transfer targets: any open target identity excludes a user while closed histories and personal source preserve exact semantics', async () => {
+  const f = await personnelTransferTargetFixture();
+  const project = await f.target();
+  const existing = await db.projectMember.create({
+    data: {
+      projectId: project.id,
+      userId: f.orgMember.userId,
+      status: 'PENDING_CONFIRM',
+      createdBy: f.user.uid,
+    },
+  });
+  for (const status of [
+    'PENDING_CONFIRM',
+    'PENDING_ENTRY',
+    'ACTIVE',
+    'PENDING_EXIT',
+    'PENDING_TRANSFER',
+  ]) {
+    await db.projectMember.update({ where: { id: existing.id }, data: { status } });
+    expect((await f.targets()).json().data.total, status).toBe(0);
+  }
+  for (const status of ['LEFT', 'REMOVED', 'ENTRY_DECLINED']) {
+    await db.projectMember.update({ where: { id: existing.id }, data: { status } });
+    expect((await f.targets()).json().data.total, status).toBe(1);
+  }
+  expect((await f.targets({ memberIds: [f.personalMember.id] })).json().data.total).toBe(0);
+  expect(
+    (await f.targets({ memberIds: [f.personalMember.id, f.orgMember.id] })).json().data.total,
+  ).toBe(0);
+  expect((await f.targets({ memberIds: [existing.id] })).statusCode).toBe(400);
+  await db.projectMember.update({
+    where: { id: f.orgMember.id },
+    data: { status: 'PENDING_TRANSFER' },
+  });
+  expect((await f.targets()).statusCode).toBe(400);
+});
+
+test('personnel transfer targets: exact source organization scope, handler restriction, role switch and lost current membership revoke access', async () => {
+  const f = await personnelTransferTargetFixture();
+  await f.target();
+  expect((await f.targets({}, f.owner.headers)).json().data.total).toBe(1);
+  expect((await f.targets({ memberIds: [f.personalMember.id] }, f.owner.headers)).statusCode).toBe(
+    403,
+  );
+  expect((await f.targets({}, f.individual.headers)).statusCode).toBe(403);
+  const latest = await db.projectManagerRecruitment.findFirstOrThrow({
+    where: { projectId: f.projectId, status: 'ASSIGNED' },
+    orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
+  });
+  await db.projectManagerRecruitment.update({
+    where: { id: latest.id },
+    data: { expertRecruitmentHandlerUserId: f.owner.user.id },
+  });
+  await post('/auth/switch-role', { role: 'PM' }, f.owner.headers);
+  expect((await f.targets({}, f.owner.headers)).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'NAVIGATOR' }, f.manager.headers);
+  expect((await f.targets()).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'EXPERT' }, f.owner.headers);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.targets({}, f.owner.headers)).statusCode).toBe(403);
+});
+
+// 12第二批：仅定向 personnel movement creation，不重复101或11已通过项。
+async function personnelMovementCreateFixture() {
+  const f = await personnelTransferTargetFixture();
+  const target = await f.target();
+  await db.projectExpertAssignment.updateMany({
+    where: { projectId: target.id },
+    data: { projectOwnerUserId: f.owner.user.id },
+  });
+  await db.projectManagerRecruitment.create({
+    data: {
+      recruitmentNo: 'TRANSFER-TARGET-MANAGER',
+      projectId: target.id,
+      candidateUserId: f.manager.user.id,
+      recruitmentType: 'INITIAL',
+      assignedAt: new Date(),
+      createdBy: f.user.uid,
+      updatedBy: f.user.uid,
+    },
+  });
+  const body = {
+    projectId: f.projectId,
+    memberIds: [f.orgMember.id],
+    movementType: 'TRANSFER' as const,
+    targetProjectId: target.id,
+    reason: ' 调整项目 ',
+    plannedEffectiveDate: '2099-01-01',
+  };
+  const create = (extra = {}, headers = f.manager.headers) =>
+    post('/project-personnel/movements/create', { ...body, ...extra }, headers);
+  return { ...f, targetProject: target, body, create };
+}
+test('personnel movement creation: organization five steps and personal business waits persist full snapshots without fabricating response or exam', async () => {
+  const f = await personnelMovementCreateFixture();
+  const beforeProject = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const beforeResponses = await db.projectExpertAssignmentMember.count();
+  const beforeAttempts = await db.entranceExamAttempt.count();
+  const response = await f.create({ memberIds: [f.orgMember.id, f.orgMember.id] });
+  expect(response.statusCode, response.body).toBe(200);
+  expect(response.json().data).toBe(null);
+  const org = await db.projectMemberMovement.findFirstOrThrow({
+    where: { memberId: f.orgMember.id },
+    include: { flow: { include: { nodes: { orderBy: { nodeSeq: 'asc' } }, actions: true } } },
+  });
+  expect(org).toMatchObject({
+    status: 'PROCESSING',
+    reason: '调整项目',
+    sourceProjectId: f.projectId,
+    targetProjectId: f.targetProject.id,
+  });
+  expect(org.flow!.nodes.map((n) => n.nodeCode)).toEqual([
+    'SOURCE_ORG_OWNER',
+    'MEMBER_CONFIRM',
+    'TARGET_ENTRANCE_EXAM',
+    'TARGET_MANAGER',
+    'TARGET_ORG_OWNER',
+  ]);
+  expect(org.flow!.nodes.map((n) => n.nodeStatus)).toEqual([
+    'PENDING',
+    'WAITING',
+    'WAITING',
+    'WAITING',
+    'WAITING',
+  ]);
+  expect(org.flow!.nodes[0]!.approverId).toBe(f.owner.user.id);
+  expect(org.flow!.nodes[1]!.approverId).toBe(f.orgMember.userId);
+  expect(org.flow!.actions).toEqual([
+    expect.objectContaining({ actionType: 'SUBMIT', operatorId: f.manager.user.id }),
+  ]);
+  expect(await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).toMatchObject(
+    { status: 'PENDING_TRANSFER', plannedLeaveDate: null },
+  );
+  expect(
+    await db.projectRoleNodeSnapshot.findFirst({
+      where: {
+        projectId: f.projectId,
+        userId: f.owner.user.id,
+        sourceBizType: 'PROJECT_MEMBER_MOVEMENT',
+      },
+    }),
+  ).toMatchObject({ branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL', sourceBizId: org.id });
+  expect(
+    await db.projectTaskRound.count({
+      where: {
+        projectId: f.projectId,
+        userId: f.owner.user.id,
+        taskType: 'MEMBER_MOVEMENT_APPROVAL',
+        status: 'OPEN',
+      },
+    }),
+  ).toBe(1);
+  expect((await f.create({ memberIds: [f.personalMember.id] })).statusCode).toBe(200);
+  const personal = await db.projectMemberMovement.findFirstOrThrow({
+    where: { memberId: f.personalMember.id },
+    include: { flow: { include: { nodes: { orderBy: { nodeSeq: 'asc' } } } } },
+  });
+  expect(personal.flow!.currentNodeCode).toBe('MEMBER_CONFIRM');
+  expect(personal.flow!.nodes.map((n) => n.nodeCode)).toEqual([
+    'MEMBER_CONFIRM',
+    'TARGET_ENTRANCE_EXAM',
+    'TARGET_MANAGER',
+  ]);
+  expect(personal.flow!.nodes.map((n) => n.nodeStatus)).toEqual(['PENDING', 'WAITING', 'WAITING']);
+  expect(await db.projectExpertAssignmentMember.count()).toBe(beforeResponses);
+  expect(await db.entranceExamAttempt.count()).toBe(beforeAttempts);
+  expect((await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).versionNo).toBe(
+    beforeProject.versionNo,
+  );
+  // 旧组织审批接口不能处理新转项；本人接单和考试等待节点也不在本批伪造推进。
+  const flowBefore = await db.approvalFlow.findUniqueOrThrow({ where: { id: org.flowId! } });
+  const process = await post(
+    '/organizations/approvals/process',
+    {
+      orgId: f.organization.id,
+      flowNo: flowBefore.flowNo,
+      nodeId: org.flow!.nodes[0]!.id,
+      nodeVersionNo: 0,
+      flowVersionNo: flowBefore.versionNo,
+      action: 'APPROVE',
+    },
+    f.owner.headers,
+  );
+  expect(process.statusCode, process.body).toBe(400);
+  expect(await db.approvalFlow.findUniqueOrThrow({ where: { id: org.flowId! } })).toEqual(
+    flowBefore,
+  );
+});
+test('personnel movement creation: concurrent removal is unique, batch deduplicates and remains pending until explicit effective processing', async () => {
+  const f = await personnelMovementCreateFixture();
+  const responses = await Promise.all([
+    f.create({ movementType: 'REMOVAL', targetProjectId: null }),
+    f.create({ movementType: 'REMOVAL', targetProjectId: null }),
+  ]);
+  expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  expect(await db.projectMemberMovement.count()).toBe(1);
+  expect(await db.approvalFlow.count({ where: { businessType: 'PROJECT_MEMBER_TRANSFER' } })).toBe(
+    0,
+  );
+  expect(await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).toMatchObject(
+    { status: 'PENDING_EXIT', plannedLeaveDate: new Date('2099-01-01') },
+  );
+  const personal = await f.create({
+    memberIds: [f.personalMember.id, f.personalMember.id],
+    movementType: 'REMOVAL',
+    targetProjectId: null,
+  });
+  expect(personal.statusCode, personal.body).toBe(200);
+  expect(await db.projectMemberMovement.count({ where: { status: 'WAITING_EFFECTIVE' } })).toBe(2);
+  const row = await db.projectMemberMovement.findFirstOrThrow();
+  await expect(
+    db.projectMemberMovement.create({
+      data: {
+        movementNo: 'BAD-SOURCE',
+        memberId: row.memberId,
+        userId: row.userId,
+        sourceProjectId: f.targetProject.id,
+        movementType: 'REMOVAL',
+        reason: '错误来源',
+        plannedEffectiveDate: row.plannedEffectiveDate,
+        status: 'WAITING_EFFECTIVE',
+        initiatedBy: row.initiatedBy,
+        createdBy: row.createdBy,
+      },
+    }),
+  ).rejects.toBeInstanceOf(Error);
+});
+test('personnel movement creation: PM-only transfer, owner handoff, exact organization and lost membership guard all writes', async () => {
+  const f = await personnelMovementCreateFixture();
+  expect((await f.create({}, f.owner.headers)).statusCode).toBe(403);
+  const ownerMember = f.members.find((m) => m.userId === f.owner.user.id)!;
+  expect((await f.create({ memberIds: [ownerMember.id] })).statusCode).toBe(400);
+  expect(
+    (
+      await f.create(
+        {
+          memberIds: [f.orgMember.id, f.personalMember.id],
+          movementType: 'REMOVAL',
+          targetProjectId: null,
+        },
+        f.owner.headers,
+      )
+    ).statusCode,
+  ).toBe(403);
+  expect(await db.projectMemberMovement.count()).toBe(0);
+  await db.projectExpertAssignment.updateMany({
+    where: { projectId: f.targetProject.id },
+    data: { status: 'REJECTED' },
+  });
+  expect((await f.create()).statusCode).toBe(409);
+  await db.projectExpertAssignment.updateMany({
+    where: { projectId: f.targetProject.id },
+    data: { status: 'ACCEPTED' },
+  });
+  await db.userOrgRel.updateMany({
+    where: { orgId: f.organization.id, userId: f.orgMember.userId },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.create()).statusCode).toBe(409);
+  expect(await db.projectMemberMovement.count()).toBe(0);
+  // 个人来源无需借用已失效组织关系。
+  expect((await f.create({ memberIds: [f.personalMember.id] })).statusCode).toBe(200);
+});
+test('personnel movement creation: bad member batch and outbox failure roll back movements, flow, member, rounds and snapshots together', async () => {
+  const f = await personnelMovementCreateFixture();
+  const state = async () => ({
+    movements: await db.projectMemberMovement.findMany(),
+    flows: await db.approvalFlow.findMany(),
+    nodes: await db.approvalNode.findMany(),
+    actions: await db.approvalActionLog.count(),
+    members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+    snapshots: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.count(),
+  });
+  const before = await state();
+  expect((await f.create({ memberIds: [f.orgMember.id, 2147483647] })).statusCode).toBe(404);
+  expect(await state()).toEqual(before);
+  const failing = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction(
+            (tx) =>
+              fn(
+                new Proxy(tx, {
+                  get(t, k) {
+                    if (k === 'projectEventOutbox')
+                      return {
+                        ...t.projectEventOutbox,
+                        create: async () => {
+                          throw new Error('movement outbox fault');
+                        },
+                      };
+                    return Reflect.get(t, k);
+                  },
+                }),
+              ),
+            { timeout: 30_000 },
+          );
+      return Reflect.get(target, key);
+    },
+  });
+  await expect(
+    new PersonnelMovementService(failing).create(f.body, {
+      userId: f.manager.user.id,
+      uid: f.manager.user.uid,
+      role: 'PM',
+      sessionId: 'test',
+      clientType: 'desktop',
+    }),
+  ).rejects.toThrow('movement outbox fault');
+  expect(await state()).toEqual(before);
+});
+
+// 12第三批：仅定向 personnel transfer progression，不重复创建/候选及11前批通过项。
+async function personnelTransferProgressFixture(personal = false) {
+  const f = await personnelMovementCreateFixture();
+  const created = await f.create(personal ? { memberIds: [f.personalMember.id] } : {});
+  expect(created.statusCode, created.body).toBe(200);
+  const load = () =>
+    db.projectMemberMovement.findFirstOrThrow({
+      where: { memberId: personal ? f.personalMember.id : f.orgMember.id },
+      include: { flow: { include: { nodes: { orderBy: [{ nodeSeq: 'asc' }, { id: 'asc' }] } } } },
+    });
+  const process = async (patch = {}, headers = f.owner.headers) => {
+    const m = await load(),
+      flow = m.flow!;
+    const node = flow.nodes.find(
+      (n) => n.nodeSeq === flow.currentNode && n.nodeStatus === 'PENDING',
+    )!;
+    return post(
+      '/project-personnel/movements/process',
+      {
+        projectId: f.projectId,
+        movementId: m.id,
+        flowNo: flow.flowNo,
+        flowVersionNo: flow.versionNo,
+        nodeId: node.id,
+        nodeVersionNo: node.versionNo,
+        action: 'APPROVE',
+        ...patch,
+      },
+      headers,
+    );
+  };
+  const respond = async (patch = {}, headers = f.individual.headers) =>
+    post(
+      '/expert-assignments/respond',
+      {
+        movementId: (await load()).id,
+        decision: 'ACCEPT',
+        ...patch,
+      },
+      headers,
+    );
+  const withdraw = async (headers = f.manager.headers) =>
+    post(
+      '/project-personnel/movements/withdraw',
+      {
+        projectId: f.projectId,
+        movementId: (await load()).id,
+      },
+      headers,
+    );
+  const exam = await db.projectEntranceExam.create({
+    data: {
+      projectId: f.targetProject.id,
+      examNo: 'transfer-progression',
+      examName: '转项考试',
+      createdBy: f.user.uid,
+    },
+  });
+  const version = await db.entranceExamVersion.create({
+    data: {
+      examId: exam.id,
+      versionNo: 1,
+      examNameSnapshot: '转项考试',
+      durationMinutes: 60,
+      registrationDeadline: new Date('2099-01-01'),
+      fullScore: 10,
+      passScore: 6,
+      publishedBy: f.user.uid,
+      publishedAt: new Date(),
+      createdBy: f.user.uid,
+      papers: {
+        create: {
+          sequenceNo: 1,
+          paperName: '转项卷',
+          totalScore: 10,
+          createdBy: f.user.uid,
+          questions: {
+            create: {
+              sequenceNo: 1,
+              questionContent: '转项题干',
+              referenceAnswer: '转项参考答案保密',
+              score: 10,
+              createdBy: f.user.uid,
+            },
+          },
+        },
+      },
+      gradingRounds: {
+        create: {
+          roundNo: 1,
+          gradingMode: 'MANUAL',
+          reviewersJson: [{ userId: f.manager.user.id }],
+          createdBy: f.user.uid,
+        },
+      },
+    },
+  });
+  await db.projectEntranceExam.update({
+    where: { id: exam.id },
+    data: { currentVersionId: version.id },
+  });
+  const enter = () =>
+    post('/entrance-exams/enter', { projectId: f.targetProject.id }, f.individual.headers);
+  const toExam = async () => {
+    if (!personal) {
+      const source = await process();
+      expect(source.statusCode, source.body).toBe(200);
+    }
+    const accepted = await respond();
+    expect(accepted.statusCode, accepted.body).toBe(200);
+    const entered = await enter();
+    expect(entered.statusCode, entered.body).toBe(200);
+    return entered.json().data as { attemptId: number; questions: { questionId: number }[] };
+  };
+  return { ...f, load, process, respond, withdraw, exam, version, enter, toExam };
+}
+
+test('personnel transfer progression: real confirmation, independent entry and final grading advance five steps without fabricating target acceptance', async () => {
+  const f = await personnelTransferProgressFixture();
+  expect((await f.respond()).statusCode).toBe(409);
+  expect((await f.enter()).statusCode).toBe(409);
+  const paper = await f.toExam();
+  const attempt = await db.entranceExamAttempt.findUniqueOrThrow({
+    where: { id: paper.attemptId },
+  });
+  expect(attempt).toMatchObject({
+    sourceBizType: 'PROJECT_MEMBER_TRANSFER',
+    sourceBizId: (await f.load()).id,
+    organizationId: f.organization.id,
+    userOrgRelId: f.orgMember.userOrgRelId,
+  });
+  expect((await f.load()).targetExamAttemptId).toBe(attempt.id);
+  expect(JSON.stringify(paper)).not.toContain('参考答案');
+  expect((await f.process({}, f.individual.headers)).statusCode).toBe(400);
+  const submitted = await post(
+    '/entrance-exams/submit',
+    {
+      projectId: f.targetProject.id,
+      attemptId: attempt.id,
+      integritySigned: true,
+      answers: [{ questionId: paper.questions[0]!.questionId, answerContent: '真实答案' }],
+    },
+    f.individual.headers,
+  );
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  expect((await f.load()).flow!.currentNodeCode).toBe('TARGET_ENTRANCE_EXAM');
+  const record = await db.entranceExamGradingRecord.findFirstOrThrow({
+    where: { attemptId: attempt.id },
+  });
+  const principal = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.slice(7),
+    'desktop',
+  );
+  const result = await new ExamGradingCommandService(db).manual(
+    {
+      projectId: f.targetProject.id,
+      examId: f.exam.id,
+      attemptId: attempt.id,
+      gradingRecordId: record.id,
+      items: [{ questionId: paper.questions[0]!.questionId, correctness: 'CORRECT' }],
+    },
+    principal,
+  );
+  expect(result.finalResult).toBe('ADMITTED');
+  expect((await f.load()).flow!.currentNodeCode).toBe('TARGET_MANAGER');
+  const manager = await f.process({}, f.manager.headers);
+  expect(manager.statusCode, manager.body).toBe(200);
+  const owner = await f.process();
+  expect(owner.statusCode, owner.body).toBe(200);
+  expect(await f.load()).toMatchObject({
+    status: 'WAITING_EFFECTIVE',
+    flow: { status: 'APPROVED' },
+  });
+  expect(
+    await db.projectMember.count({
+      where: { projectId: f.targetProject.id, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  expect(
+    await db.projectExpertAssignmentMember.count({
+      where: { assignment: { projectId: f.targetProject.id }, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  expect(await compensateTransferResults(db)).toEqual({ completed: 0, skipped: 0, failed: 0 });
+});
+
+test('personnel transfer progression: rejection and cancellation restore pending source, retain audit and consume final facts idempotently', async () => {
+  const f = await personnelTransferProgressFixture();
+  const paper = await f.toExam();
+  const cancelled = await post(
+    '/entrance-exams/cancel',
+    { projectId: f.targetProject.id, attemptId: paper.attemptId },
+    f.individual.headers,
+  );
+  expect(cancelled.statusCode, cancelled.body).toBe(200);
+  expect(await f.load()).toMatchObject({
+    status: 'REJECTED',
+    rejectedAt: expect.any(Date),
+    flow: { status: 'REJECTED' },
+  });
+  expect((await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).status).toBe(
+    'ACTIVE',
+  );
+  expect(
+    await db.approvalActionLog.count({
+      where: { flowId: (await f.load()).flowId!, actionType: 'AUTO_REJECT' },
+    }),
+  ).toBe(1);
+  expect(await compensateTransferResults(db)).toEqual({ completed: 0, skipped: 0, failed: 0 });
+  expect((await f.respond()).statusCode).toBe(409);
+  const next = await f.create();
+  expect(next.statusCode, next.body).toBe(200);
+  const latest = await db.projectMemberMovement.findFirstOrThrow({
+    where: { memberId: f.orgMember.id },
+    orderBy: { id: 'desc' },
+  });
+  const rejected = await post(
+    '/project-personnel/movements/withdraw',
+    { projectId: f.projectId, movementId: latest.id },
+    f.manager.headers,
+  );
+  expect(rejected.statusCode, rejected.body).toBe(200);
+  expect((await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).status).toBe(
+    'ACTIVE',
+  );
+});
+
+test('personnel transfer progression: concurrent approve and withdraw are terminal-safe and optimistic replays conflict', async () => {
+  const f = await personnelTransferProgressFixture();
+  const m = await f.load(),
+    node = m.flow!.nodes[0]!;
+  const payload = {
+    projectId: f.projectId,
+    movementId: m.id,
+    flowNo: m.flow!.flowNo,
+    nodeId: node.id,
+    nodeVersionNo: node.versionNo,
+    flowVersionNo: m.flow!.versionNo,
+    action: 'APPROVE',
+  };
+  const results = await Promise.all([
+    post('/project-personnel/movements/process', payload, f.owner.headers),
+    post('/project-personnel/movements/process', payload, f.owner.headers),
+  ]);
+  expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  const race = await Promise.all([f.respond(), f.withdraw()]);
+  expect(race.map((r) => r.statusCode)).toContain(200);
+  expect(await f.load()).toMatchObject({ status: 'WITHDRAWN', flow: { status: 'WITHDRAWN' } });
+  expect((await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).status).toBe(
+    'ACTIVE',
+  );
+  expect(
+    await db.projectRoleNodeSnapshot.count({
+      where: { sourceBizType: 'PROJECT_MEMBER_MOVEMENT', sourceBizId: m.id },
+    }),
+  ).toBe(0);
+});
+
+test('personnel transfer progression: wrong role and lost concrete owner or member organization reject writes', async () => {
+  const f = await personnelTransferProgressFixture();
+  expect((await f.process({}, f.manager.headers)).statusCode).toBe(403);
+  const pending = await f.load();
+  await db.projectExpertAssignmentOwner.updateMany({
+    where: { assignmentId: f.orgAssignment.id },
+    data: { status: 'REMOVED' },
+  });
+  expect((await f.process()).statusCode).toBe(403);
+  expect((await f.load()).flow!.versionNo).toBe(pending.flow!.versionNo);
+  await db.projectExpertAssignmentOwner.updateMany({
+    where: { assignmentId: f.orgAssignment.id, userId: f.owner.user.id },
+    data: { status: 'ACTIVE' },
+  });
+  const source = await f.process();
+  expect(source.statusCode, source.body).toBe(200);
+  await db.userOrgRel.update({
+    where: { id: f.orgMember.userOrgRelId! },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.respond()).statusCode).toBe(409);
+  expect((await f.load()).flow!.currentNodeCode).toBe('MEMBER_CONFIRM');
+});
+
+test('personnel transfer progression: outbox failure rolls back approval, restoration, logs, rounds and snapshots', async () => {
+  const f = await personnelTransferProgressFixture();
+  const before = await f.load(),
+    count = await db.approvalActionLog.count();
+  const broken = db.$extends({
+    query: {
+      projectEventOutbox: {
+        async create() {
+          throw new Error('transfer outbox failed');
+        },
+      },
+    },
+  });
+  const service = new PersonnelMovementService(broken as unknown as PrismaClient);
+  const p = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.slice(7),
+    'desktop',
+  );
+  await expect(
+    service.withdraw({ projectId: f.projectId, movementId: before.id }, p),
+  ).rejects.toThrow('transfer outbox failed');
+  expect(await f.load()).toEqual(before);
+  expect(await db.approvalActionLog.count()).toBe(count);
+  expect((await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).status).toBe(
+    'PENDING_TRANSFER',
+  );
+  const node = before.flow!.nodes[0]!;
+  const owner = await new AuthService(db, config).authenticate(
+    f.owner.headers.authorization.slice(7),
+    'desktop',
+  );
+  await expect(
+    service.process(
+      {
+        projectId: f.projectId,
+        movementId: before.id,
+        flowNo: before.flow!.flowNo,
+        flowVersionNo: before.flow!.versionNo,
+        nodeId: node.id,
+        nodeVersionNo: node.versionNo,
+        action: 'REJECT',
+        actionComment: '拒绝',
+      },
+      owner,
+    ),
+  ).rejects.toThrow('transfer outbox failed');
+  expect(await f.load()).toEqual(before);
+  expect(await db.approvalActionLog.count()).toBe(count);
+});
+
+test('personnel transfer progression: committed elimination survives consumer outbox failure and explicit compensation restores source exactly once', async () => {
+  const f = await personnelTransferProgressFixture();
+  const paper = await f.toExam();
+  const submitted = await post(
+    '/entrance-exams/submit',
+    {
+      projectId: f.targetProject.id,
+      attemptId: paper.attemptId,
+      integritySigned: true,
+      answers: [{ questionId: paper.questions[0]!.questionId, answerContent: '未通过答案' }],
+    },
+    f.individual.headers,
+  );
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  const record = await db.entranceExamGradingRecord.findFirstOrThrow({
+    where: { attemptId: paper.attemptId },
+  });
+  const broken = db.$extends({
+    query: {
+      projectEventOutbox: {
+        async create({ args, query }) {
+          if (args.data.operation === 'CONSUME_TRANSFER_EXAM')
+            throw new Error('consumer outbox failure');
+          return query(args);
+        },
+      },
+    },
+  });
+  const p = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.slice(7),
+    'desktop',
+  );
+  const result = await new ExamGradingCommandService(broken as unknown as PrismaClient).manual(
+    {
+      projectId: f.targetProject.id,
+      examId: f.exam.id,
+      attemptId: paper.attemptId,
+      gradingRecordId: record.id,
+      items: [{ questionId: paper.questions[0]!.questionId, correctness: 'INCORRECT' }],
+    },
+    p,
+  );
+  expect(result.finalResult).toBe('ELIMINATED');
+  expect((await f.load()).flow!.currentNodeCode).toBe('TARGET_ENTRANCE_EXAM');
+  expect((await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).status).toBe(
+    'PENDING_TRANSFER',
+  );
+  expect(await compensateTransferResults(db)).toEqual({ completed: 1, skipped: 0, failed: 0 });
+  expect((await f.load()).status).toBe('REJECTED');
+  expect((await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).status).toBe(
+    'ACTIVE',
+  );
+  expect(await compensateTransferResults(db)).toEqual({ completed: 0, skipped: 0, failed: 0 });
+  expect(
+    await db.approvalActionLog.count({
+      where: { flowId: (await f.load()).flowId!, actionType: 'AUTO_REJECT' },
+    }),
+  ).toBe(1);
+});
+
+// 12第四批：仅定向 personnel movement reads；不重复前批已通过项。
+test('personnel movement reads: source and target pagination, exact member latest detail, filters and history serialize without private exam data', async () => {
+  const f = await personnelTransferProgressFixture();
+  const m = await f.load();
+  const list = (body = {}, headers = f.manager.headers) =>
+    post('/project-personnel/movements/list', { projectId: f.projectId, ...body }, headers);
+  const result = await list({
+    movementId: m.id,
+    memberId: f.orgMember.id,
+    keyword: f.individual.user.uid,
+    movementTypes: ['TRANSFER'],
+    statuses: ['PROCESSING'],
+    size: 1,
+  });
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json().data).toMatchObject({
+    total: 1,
+    pages: 1,
+    records: [{ movementId: m.id, flowNo: m.flow!.flowNo, allowedActions: ['WITHDRAW'] }],
+  });
+  expect(result.json().data.records[0].approvalSteps).toHaveLength(5);
+  expect(result.body).not.toContain('参考答案');
+  expect(result.body).not.toContain('formData');
+  const detail = await post(
+    '/project-personnel/movements/detail',
+    { projectId: f.projectId, memberId: f.orgMember.id },
+    f.manager.headers,
+  );
+  expect(detail.statusCode, detail.body).toBe(200);
+  expect(detail.json().data).toEqual(result.json().data.records[0]);
+  const target = await list({ projectId: f.targetProject.id });
+  expect(target.json().data.total).toBe(1);
+  expect(
+    (await list({ projectId: f.targetProject.id, memberId: f.orgMember.id })).json().data.total,
+  ).toBe(0);
+  expect((await list({ statuses: ['EFFECTIVE'] })).json().data.total).toBe(0);
+  expect((await list({ current: 2, size: 1 })).json().data).toMatchObject({
+    total: 1,
+    records: [],
+  });
+  expect((await list({ createdStartAt: '2099-01-01 00:00:00' })).json().data.total).toBe(0);
+  expect((await list({ createdStartAt: '2026-02-30 00:00:00' })).statusCode).toBe(400);
+  expect(
+    (
+      await post(
+        '/project-personnel/movements/detail',
+        { projectId: f.targetProject.id, memberId: f.orgMember.id },
+        f.manager.headers,
+      )
+    ).statusCode,
+  ).toBe(404);
+  const withdrawn = await f.withdraw();
+  expect(withdrawn.statusCode, withdrawn.body).toBe(200);
+  expect((await list()).json().data.records[0]).toMatchObject({
+    status: 'WITHDRAWN',
+    allowedActions: [],
+  });
+});
+
+test('personnel movement reads: exact organization and personal visibility, handler read-only and departed approver loses other member history', async () => {
+  const f = await personnelTransferProgressFixture();
+  const list = (headers: Record<string, string>) =>
+    post('/project-personnel/movements/list', { projectId: f.projectId }, headers);
+  const own = await list(f.individual.headers);
+  expect(own.statusCode, own.body).toBe(200);
+  expect(own.json().data.total).toBe(1);
+  expect(own.json().data.records[0].allowedActions).toEqual([]);
+  const owner = await list(f.owner.headers);
+  expect(owner.json().data.records[0].allowedActions).toEqual(['APPROVE', 'REJECT']);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await list(f.owner.headers)).json().data.total).toBe(0);
+  // 相同用户的其他组织不能替代原节点所属组织。
+  const another = await db.organization.create({
+    data: { name: '读取隔离组织', expertiseTags: [] },
+  });
+  await db.userOrgRel.create({
+    data: {
+      orgId: another.id,
+      userId: f.owner.user.id,
+      uid: f.owner.user.uid,
+      joinStatus: 'ACTIVE',
+      position: 'OWNER',
+    },
+  });
+  expect((await list(f.owner.headers)).json().data.total).toBe(0);
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId, status: 'ASSIGNED' },
+    data: { expertRecruitmentHandlerUserId: f.owner.user.id },
+  });
+  const switched = await post('/auth/switch-role', { role: 'PM' }, f.owner.headers);
+  expect(switched.statusCode, switched.body).toBe(200);
+  const handler = await list(f.owner.headers);
+  expect(handler.json().data).toMatchObject({ total: 1, records: [{ allowedActions: [] }] });
+});
+
+test('personnel movement reads: business waits expose only matching real actions and node audit never mutates on reads', async () => {
+  const f = await personnelTransferProgressFixture();
+  expect((await f.process()).statusCode).toBe(200);
+  const read = () =>
+    post(
+      '/project-personnel/movements/detail',
+      { projectId: f.projectId, memberId: f.orgMember.id },
+      f.individual.headers,
+    );
+  let result = await read();
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json().data.allowedActions).toEqual(['ACCEPT_TRANSFER', 'REJECT_TRANSFER']);
+  expect(result.json().data.approvalSteps[0]).toMatchObject({
+    nodeStatus: 'APPROVED',
+    action: 'APPROVE',
+    operatorId: f.owner.user.id,
+    nodeVersionNo: 1,
+  });
+  expect((await f.respond()).statusCode).toBe(200);
+  const before = await f.load();
+  const outbox = await db.projectEventOutbox.count();
+  result = await read();
+  expect(result.json().data.allowedActions).toEqual(['TAKE_TARGET_EXAM']);
+  expect(await f.load()).toEqual(before);
+  expect(await db.projectEventOutbox.count()).toBe(outbox);
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const attemptId = entered.json().data.attemptId;
+  const submitted = await post(
+    '/entrance-exams/submit',
+    {
+      projectId: f.targetProject.id,
+      attemptId,
+      integritySigned: true,
+      answers: [
+        { questionId: entered.json().data.questions[0].questionId, answerContent: '读取验证答案' },
+      ],
+    },
+    f.individual.headers,
+  );
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  result = await read();
+  expect(result.json().data.allowedActions).toEqual([]);
+  expect(result.json().data.examAttemptId).toBe(attemptId);
+});
+
+// 12第五批：仅定向 personnel movement lifecycle，不重复前批16项。
+async function movementLifecycleFixture() {
+  const f = await personnelTransferProgressFixture();
+  const paper = await f.toExam();
+  const submitted = await post(
+    '/entrance-exams/submit',
+    {
+      projectId: f.targetProject.id,
+      attemptId: paper.attemptId,
+      integritySigned: true,
+      answers: [{ questionId: paper.questions[0]!.questionId, answerContent: '完整答案' }],
+    },
+    f.individual.headers,
+  );
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  const record = await db.entranceExamGradingRecord.findFirstOrThrow({
+    where: { attemptId: paper.attemptId },
+  });
+  const principal = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.slice(7),
+    'desktop',
+  );
+  await new ExamGradingCommandService(db).manual(
+    {
+      projectId: f.targetProject.id,
+      examId: f.exam.id,
+      attemptId: paper.attemptId,
+      gradingRecordId: record.id,
+      items: [{ questionId: paper.questions[0]!.questionId, correctness: 'CORRECT' }],
+    },
+    principal,
+  );
+  expect((await f.load()).flow!.currentNodeCode).toBe('TARGET_MANAGER');
+  return { ...f, paper };
+}
+
+test('personnel movement lifecycle: active owner replacement reassigns only pending group with audit, rounds and snapshots atomically', async () => {
+  const f = await personnelTransferProgressFixture();
+  const { replaceProjectOwners } = await import('../src/modules/expert/expert-owner-command.js');
+  const { reconcileMovementApprovers } =
+    await import('../src/modules/personnel/personnel-movement-approvers.js');
+  const assignment = await db.projectExpertAssignment.findFirstOrThrow({
+    where: { projectId: f.projectId, organizationId: f.organization.id },
+  });
+  const old = await f.load();
+  const principal = await new AuthService(db, config).authenticate(
+    f.owner.headers.authorization.slice(7),
+    'desktop',
+  );
+  await replaceProjectOwners(
+    db,
+    { assignmentId: assignment.id, projectOwnerUserIds: [f.individual.user.id] },
+    principal,
+    'TEST_REPLACE',
+  );
+  const m = await f.load();
+  expect(m.flow!.versionNo).toBe(old.flow!.versionNo + 1);
+  expect(
+    m.flow!.nodes.find((n) => n.nodeSeq === 1 && n.approverId === f.owner.user.id)!.nodeStatus,
+  ).toBe('CANCELED');
+  expect(
+    m.flow!.nodes.find((n) => n.nodeSeq === 1 && n.approverId === f.individual.user.id)!.nodeStatus,
+  ).toBe('PENDING');
+  expect(m.flow!.nodes.filter((n) => n.nodeSeq > 1)).toEqual(
+    old.flow!.nodes.filter((n) => n.nodeSeq > 1),
+  );
+  expect((await f.process()).statusCode).toBe(403);
+  expect(
+    await db.projectTaskRound.count({
+      where: {
+        projectId: f.projectId,
+        userId: f.owner.user.id,
+        taskType: 'MEMBER_MOVEMENT_APPROVAL',
+        status: 'OPEN',
+      },
+    }),
+  ).toBe(0);
+  expect(
+    await db.projectTaskRound.count({
+      where: {
+        projectId: f.projectId,
+        userId: f.individual.user.id,
+        taskType: 'MEMBER_MOVEMENT_APPROVAL',
+        status: 'OPEN',
+      },
+    }),
+  ).toBe(1);
+  expect(await reconcileMovementApprovers(db)).toEqual({ refreshed: 0, failed: 0 });
+});
+
+test('personnel movement lifecycle: current manager compensation preserves decided history and stale versions conflict', async () => {
+  const f = await movementLifecycleFixture();
+  const { reconcileMovementApprovers } =
+    await import('../src/modules/personnel/personnel-movement-approvers.js');
+  const before = await f.load();
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.targetProject.id, status: 'ASSIGNED' },
+    data: { candidateUserId: f.owner.user.id },
+  });
+  expect(await reconcileMovementApprovers(db)).toEqual({ refreshed: 1, failed: 0 });
+  const after = await f.load();
+  expect(after.flow!.nodes.filter((n) => n.nodeSeq < 4)).toEqual(
+    before.flow!.nodes.filter((n) => n.nodeSeq < 4),
+  );
+  expect(
+    after.flow!.nodes.find((n) => n.nodeSeq === 4 && n.approverId === f.owner.user.id)!.nodeStatus,
+  ).toBe('PENDING');
+  expect((await f.process({}, f.manager.headers)).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'PM' }, f.owner.headers);
+  expect(
+    (await f.process({ flowVersionNo: before.flow!.versionNo }, f.owner.headers)).statusCode,
+  ).toBe(409);
+  const approved = await f.process({}, f.owner.headers);
+  expect(approved.statusCode, approved.body).toBe(200);
+});
+
+test('personnel movement lifecycle: final same-day approval activates exact target admission and duplicate processors do not create members', async () => {
+  const f = await movementLifecycleFixture();
+  const { todayText } = await import('../src/modules/personnel/personnel-domain.js');
+  const { processDueMovements } =
+    await import('../src/modules/personnel/personnel-movement-effective.js');
+  const manager = await f.process({}, f.manager.headers);
+  expect(manager.statusCode, manager.body).toBe(200);
+  const day = todayText(new Date());
+  await db.projectMemberMovement.update({
+    where: { id: (await f.load()).id },
+    data: { plannedEffectiveDate: new Date(day) },
+  });
+  const sourceProject = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const targetProject = await db.project.findUniqueOrThrow({ where: { id: f.targetProject.id } });
+  const owner = await f.process();
+  expect(owner.statusCode, owner.body).toBe(200);
+  const m = await f.load();
+  expect(m.status).toBe('EFFECTIVE');
+  const effectiveAt = new Date(day + 'T00:00:00+08:00');
+  expect(m.effectiveAt).toEqual(effectiveAt);
+  expect(await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).toMatchObject(
+    { status: 'LEFT', leftAt: effectiveAt },
+  );
+  expect(
+    await db.projectMember.findFirstOrThrow({
+      where: { projectId: f.targetProject.id, userId: f.individual.user.id },
+    }),
+  ).toMatchObject({
+    status: 'ACTIVE',
+    organizationId: f.organization.id,
+    userOrgRelId: f.orgMember.userOrgRelId,
+    admissionAttemptId: f.paper.attemptId,
+    joinedAt: effectiveAt,
+  });
+  expect(await processDueMovements(db)).toEqual({ effective: 0, skipped: 0, failed: 0 });
+  expect((await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).versionNo).toBe(
+    sourceProject.versionNo,
+  );
+  expect(await db.project.findUniqueOrThrow({ where: { id: f.targetProject.id } })).toMatchObject({
+    versionNo: targetProject.versionNo,
+    currentNodeCode: 'PRODUCTION_TASK',
+  });
+  expect(
+    await db.projectExpertAssignmentMember.count({
+      where: { assignment: { projectId: f.targetProject.id }, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+});
+
+test('personnel movement lifecycle: future transfer waits until Shanghai date, rejects lost relation and concurrent due delivery activates once', async () => {
+  const f = await movementLifecycleFixture();
+  const { processDueMovements } =
+    await import('../src/modules/personnel/personnel-movement-effective.js');
+  expect((await f.process({}, f.manager.headers)).statusCode).toBe(200);
+  expect((await f.process()).statusCode).toBe(200);
+  expect((await f.load()).status).toBe('WAITING_EFFECTIVE');
+  expect(await processDueMovements(db, new Date('2098-12-31T15:59:59Z'))).toEqual({
+    effective: 0,
+    skipped: 0,
+    failed: 0,
+  });
+  await db.userOrgRel.update({
+    where: { id: f.orgMember.userOrgRelId! },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect(await processDueMovements(db, new Date('2098-12-31T16:00:00Z'))).toEqual({
+    effective: 0,
+    skipped: 0,
+    failed: 1,
+  });
+  expect((await f.load()).status).toBe('WAITING_EFFECTIVE');
+  expect(
+    await db.projectMember.count({
+      where: { projectId: f.targetProject.id, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  await db.userOrgRel.update({
+    where: { id: f.orgMember.userOrgRelId! },
+    data: { joinStatus: 'ACTIVE' },
+  });
+  const results = await Promise.all([
+    processDueMovements(db, new Date('2099-01-01T00:00:00Z')),
+    processDueMovements(db, new Date('2099-01-01T00:00:00Z')),
+  ]);
+  expect(results.reduce((n, r) => n + r.effective, 0)).toBe(1);
+  expect(results.every((r) => r.failed === 0)).toBe(true);
+  expect(
+    await db.projectMember.count({
+      where: { projectId: f.targetProject.id, userId: f.individual.user.id, status: 'ACTIVE' },
+    }),
+  ).toBe(1);
+});
+
+test('personnel movement lifecycle: due removal and transfer outbox faults rollback all effects and retries remain idempotent', async () => {
+  const f = await movementLifecycleFixture();
+  const { processDueMovements } =
+    await import('../src/modules/personnel/personnel-movement-effective.js');
+  expect((await f.process({}, f.manager.headers)).statusCode).toBe(200);
+  expect((await f.process()).statusCode).toBe(200);
+  const original = await f.load();
+  const proxy = new Proxy(db, {
+    get(target, prop) {
+      if (prop === '$transaction')
+        return async (work: (tx: Prisma.TransactionClient) => Promise<unknown>, options: object) =>
+          target.$transaction(
+            async (tx) =>
+              work(
+                new Proxy(tx, {
+                  get(inner, key) {
+                    if (key === 'projectEventOutbox')
+                      return {
+                        create: async () => {
+                          throw new Error('movement lifecycle outbox fault');
+                        },
+                      };
+                    return Reflect.get(inner, key);
+                  },
+                }),
+              ),
+            options,
+          );
+      return Reflect.get(target, prop);
+    },
+  });
+  expect(await processDueMovements(proxy, new Date('2099-01-01T00:00:00Z'))).toEqual({
+    effective: 0,
+    skipped: 0,
+    failed: 1,
+  });
+  expect(await f.load()).toEqual(original);
+  expect(
+    await db.projectMember.count({
+      where: { projectId: f.targetProject.id, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  expect((await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).status).toBe(
+    'PENDING_TRANSFER',
+  );
+  const removal = await f.create({
+    memberIds: [f.personalMember.id],
+    movementType: 'REMOVAL',
+    targetProjectId: null,
+  });
+  expect(removal.statusCode, removal.body).toBe(200);
+  expect(await processDueMovements(db, new Date('2099-01-01T00:00:00Z'))).toEqual({
+    effective: 2,
+    skipped: 0,
+    failed: 0,
+  });
+  expect(
+    (await db.projectMember.findUniqueOrThrow({ where: { id: f.personalMember.id } })).status,
+  ).toBe('REMOVED');
+  expect(await processDueMovements(db, new Date('2099-01-01T00:00:00Z'))).toEqual({
+    effective: 0,
+    skipped: 0,
+    failed: 0,
+  });
+});
+
+test('personnel movement lifecycle: immediate approval failure rolls back final decision and same-day removal is effective at creation', async () => {
+  const f = await movementLifecycleFixture();
+  const { todayText } = await import('../src/modules/personnel/personnel-domain.js');
+  const { processMovement } = await import('../src/modules/personnel/personnel-transfer.js');
+  expect((await f.process({}, f.manager.headers)).statusCode).toBe(200);
+  await db.projectMemberMovement.update({
+    where: { id: (await f.load()).id },
+    data: { plannedEffectiveDate: new Date(todayText(new Date())) },
+  });
+  const before = await f.load();
+  const node = before.flow!.nodes.find(
+    (n) => n.nodeSeq === before.flow!.currentNode && n.nodeStatus === 'PENDING',
+  )!;
+  const principal = await new AuthService(db, config).authenticate(
+    f.owner.headers.authorization.slice(7),
+    'desktop',
+  );
+  const proxy = new Proxy(db, {
+    get(target, prop) {
+      if (prop === '$transaction')
+        return async (work: (tx: Prisma.TransactionClient) => Promise<unknown>, options: object) =>
+          target.$transaction(
+            async (tx) =>
+              work(
+                new Proxy(tx, {
+                  get(inner, key) {
+                    if (key === 'projectEventOutbox')
+                      return {
+                        create: async () => {
+                          throw new Error('movement lifecycle outbox fault');
+                        },
+                      };
+                    return Reflect.get(inner, key);
+                  },
+                }),
+              ),
+            options,
+          );
+      return Reflect.get(target, prop);
+    },
+  });
+  await expect(
+    processMovement(
+      proxy,
+      {
+        projectId: f.projectId,
+        movementId: before.id,
+        flowNo: before.flow!.flowNo,
+        flowVersionNo: before.flow!.versionNo,
+        nodeId: node.id,
+        nodeVersionNo: node.versionNo,
+        action: 'APPROVE',
+      },
+      principal,
+    ),
+  ).rejects.toThrow('movement lifecycle outbox fault');
+  expect(await f.load()).toEqual(before);
+  expect(
+    await db.projectMember.count({
+      where: { projectId: f.targetProject.id, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  expect((await f.process()).statusCode).toBe(200);
+  const removal = await f.create({
+    memberIds: [f.personalMember.id],
+    movementType: 'REMOVAL',
+    targetProjectId: null,
+    plannedEffectiveDate: todayText(new Date()),
+  });
+  expect(removal.statusCode, removal.body).toBe(200);
+  expect(
+    (await db.projectMember.findUniqueOrThrow({ where: { id: f.personalMember.id } })).status,
+  ).toBe('REMOVED');
+  expect(
+    (await db.projectMemberMovement.findFirstOrThrow({ where: { memberId: f.personalMember.id } }))
+      .status,
+  ).toBe('EFFECTIVE');
+});
+
+// 12第六批：仅定向 personnel transfer sources，不重复前批22项。
+test('personnel transfer sources: applicant structured source and concrete member cards preserve filters, isolation and read-only effects', async () => {
+  const f = await personnelTransferProgressFixture();
+  expect((await f.process()).statusCode).toBe(200);
+  const m = await f.load();
+  const before = {
+    events: await db.projectEventOutbox.count(),
+    rounds: await db.projectTaskRound.count(),
+    snapshots: await db.projectRoleNodeSnapshot.count(),
+  };
+  const applications = await post(
+    '/users/me/applications',
+    { businessType: 'PROJECT_MEMBER_TRANSFER' },
+    f.manager.headers,
+  );
+  expect(applications.statusCode, applications.body).toBe(200);
+  expect(applications.json().data.records).toMatchObject([
+    {
+      applicationId: m.flowId,
+      transfer: {
+        movementId: m.id,
+        targetProjectId: f.targetProject.id,
+        targetUserId: f.individual.user.id,
+      },
+    },
+  ]);
+  expect(
+    (
+      await post(
+        '/users/me/applications',
+        { businessType: 'PROJECT_MEMBER_TRANSFER' },
+        f.individual.headers,
+      )
+    ).json().data.total,
+  ).toBe(0);
+  const cards = await post(
+    '/expert-assignments/my-tasks',
+    { keyword: f.targetProject.projectName },
+    f.individual.headers,
+  );
+  expect(cards.statusCode, cards.body).toBe(200);
+  expect(cards.json().data).toMatchObject([
+    {
+      assignmentId: null,
+      movementId: m.id,
+      sourceBizType: 'PROJECT_MEMBER_TRANSFER',
+      sourceBizId: m.id,
+      acceptanceStatus: 'PENDING_ACCEPTANCE',
+      operations: { canAccept: true, canReject: true },
+    },
+  ]);
+  expect(
+    (
+      await post(
+        '/expert-assignments/my-tasks',
+        { keyword: f.targetProject.projectName, status: 'ACCEPTED' },
+        f.individual.headers,
+      )
+    ).json().data,
+  ).toEqual([]);
+  expect({
+    events: await db.projectEventOutbox.count(),
+    rounds: await db.projectTaskRound.count(),
+    snapshots: await db.projectRoleNodeSnapshot.count(),
+  }).toEqual(before);
+  await db.userOrgRel.update({
+    where: { id: f.orgMember.userOrgRelId! },
+    data: { joinStatus: 'LEFT' },
+  });
+  const lost = await post(
+    '/expert-assignments/my-tasks',
+    { keyword: f.targetProject.projectName },
+    f.individual.headers,
+  );
+  expect(lost.json().data.some((c: { movementId: number }) => c.movementId === m.id)).toBe(false);
+});
+
+test('personnel transfer sources: concurrent legacy assignment responses consume exact organization transfer without exempt target admission', async () => {
+  const f = await personnelTransferProgressFixture();
+  expect((await f.process()).statusCode).toBe(200);
+  const assignment = await db.projectExpertAssignment.findFirstOrThrow({
+    where: { projectId: f.targetProject.id, organizationId: f.organization.id },
+  });
+  const respond = () =>
+    post(
+      '/expert-assignments/respond',
+      { assignmentId: assignment.id, decision: 'ACCEPT' },
+      f.individual.headers,
+    );
+  const responses = await Promise.all([respond(), respond()]);
+  expect(responses.some((r) => r.statusCode === 200)).toBe(true);
+  expect(responses.every((r) => [200, 409].includes(r.statusCode))).toBe(true);
+  const m = await f.load();
+  expect(responses.find((r) => r.statusCode === 200)!.json().data).toMatchObject({
+    assignmentId: assignment.id,
+    movementId: m.id,
+    nextAction: 'TAKE_ENTRANCE_EXAM',
+  });
+  expect(m.flow!.currentNodeCode).toBe('TARGET_ENTRANCE_EXAM');
+  expect(
+    await db.projectMember.count({
+      where: { projectId: f.targetProject.id, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  expect(
+    await db.projectExpertAssignmentMember.count({
+      where: { assignmentId: assignment.id, userId: f.individual.user.id },
+    }),
+  ).toBe(1);
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+});
+
+test('personnel transfer sources: legacy outbox failure rolls back both response and transfer; rejection retry restores source', async () => {
+  const f = await personnelTransferProgressFixture();
+  expect((await f.process()).statusCode).toBe(200);
+  const assignment = await db.projectExpertAssignment.findFirstOrThrow({
+    where: { projectId: f.targetProject.id, organizationId: f.organization.id },
+  });
+  const before = await f.load();
+  const principal = await new AuthService(db, config).authenticate(
+    f.individual.headers.authorization.slice(7),
+    'desktop',
+  );
+  const failing = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          target.$transaction((tx) =>
+            work(
+              new Proxy(tx, {
+                get(inner, prop) {
+                  if (prop === 'projectEventOutbox')
+                    return {
+                      create: async () => {
+                        throw new Error('source outbox fault');
+                      },
+                    };
+                  return Reflect.get(inner, prop);
+                },
+              }),
+            ),
+          );
+      return Reflect.get(target, key);
+    },
+  });
+  const { respondToAssignment } = await import('../src/modules/expert/expert-respond-command.js');
+  await expect(
+    respondToAssignment(failing, { assignmentId: assignment.id, decision: 'ACCEPT' }, principal),
+  ).rejects.toThrow('source outbox fault');
+  expect(await f.load()).toEqual(before);
+  expect(
+    await db.projectExpertAssignmentMember.count({
+      where: { assignmentId: assignment.id, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  const rejected = await post(
+    '/expert-assignments/respond',
+    { assignmentId: assignment.id, decision: 'REJECT', rejectReason: '不转入' },
+    f.individual.headers,
+  );
+  expect(rejected.statusCode, rejected.body).toBe(200);
+  expect(rejected.json().data).toMatchObject({ movementId: before.id, nextAction: 'VIEW_RESULT' });
+  expect((await f.load()).status).toBe('REJECTED');
+  expect((await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).status).toBe(
+    'ACTIVE',
+  );
+});
+
+test('personnel transfer sources: personal effective identity supports projects, detail, materials and production qualification without ordinary assignment', async () => {
+  const f = await personnelTransferProgressFixture(true);
+  const personal = await f.load();
+  expect((await f.respond()).statusCode).toBe(200);
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const paper = entered.json().data;
+  expect(
+    (
+      await post(
+        '/entrance-exams/submit',
+        {
+          projectId: f.targetProject.id,
+          attemptId: paper.attemptId,
+          integritySigned: true,
+          answers: [{ questionId: paper.questions[0].questionId, answerContent: '个人答案' }],
+        },
+        f.individual.headers,
+      )
+    ).statusCode,
+  ).toBe(200);
+  const record = await db.entranceExamGradingRecord.findFirstOrThrow({
+    where: { attemptId: paper.attemptId },
+  });
+  const manager = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.slice(7),
+    'desktop',
+  );
+  await new ExamGradingCommandService(db).manual(
+    {
+      projectId: f.targetProject.id,
+      examId: f.exam.id,
+      attemptId: paper.attemptId,
+      gradingRecordId: record.id,
+      items: [{ questionId: paper.questions[0].questionId, correctness: 'CORRECT' }],
+    },
+    manager,
+  );
+  const { todayText } = await import('../src/modules/personnel/personnel-domain.js');
+  await db.projectMemberMovement.update({
+    where: { id: personal.id },
+    data: { plannedEffectiveDate: new Date(todayText(new Date())) },
+  });
+  const flow = await db.approvalFlow.findUniqueOrThrow({
+    where: { id: personal.flowId! },
+    include: { nodes: true },
+  });
+  const node = flow.nodes.find(
+    (n) => n.nodeSeq === flow.currentNode && n.nodeStatus === 'PENDING',
+  )!;
+  const approved = await post(
+    '/project-personnel/movements/process',
+    {
+      projectId: f.projectId,
+      movementId: personal.id,
+      flowNo: flow.flowNo,
+      flowVersionNo: flow.versionNo,
+      nodeId: node.id,
+      nodeVersionNo: node.versionNo,
+      action: 'APPROVE',
+    },
+    f.manager.headers,
+  );
+  expect(approved.statusCode, approved.body).toBe(200);
+  const { memberInclude, qualifiedForEntry } =
+    await import('../src/modules/personnel/personnel-access.js');
+  const target = await db.projectMember.findFirstOrThrow({
+    where: { projectId: f.targetProject.id, admissionAttemptId: paper.attemptId },
+    include: memberInclude,
+  });
+  expect(target).toMatchObject({
+    status: 'ACTIVE',
+    expertAssignmentId: null,
+    organizationId: null,
+  });
+  expect(qualifiedForEntry(target, true)).toBe(true);
+  const projects = await app.inject({
+    method: 'GET',
+    url: '/api/v1/expert-assignments/my-projects',
+    headers: f.individual.headers,
+  });
+  expect(projects.statusCode, projects.body).toBe(200);
+  expect(projects.json().data).toContainEqual(
+    expect.objectContaining({
+      assignmentId: null,
+      movementId: personal.id,
+      projectId: f.targetProject.id,
+      admissionStatus: 'PASSED',
+    }),
+  );
+  const detail = await app.inject({
+    method: 'GET',
+    url: `/api/v1/expert-assignments/detail?movementId=${personal.id}`,
+    headers: f.individual.headers,
+  });
+  expect(detail.statusCode, detail.body).toBe(200);
+  const materials = await app.inject({
+    method: 'GET',
+    url: `/api/v1/projects/standard-materials/detail?projectId=${f.targetProject.id}`,
+    headers: f.individual.headers,
+  });
+  expect(materials.statusCode, materials.body).toBe(200);
+  const confirmed = await app.inject({
+    method: 'POST',
+    url: `/api/v1/projects/standard-materials/confirm-read?projectId=${f.targetProject.id}`,
+    headers: f.individual.headers,
+  });
+  expect(confirmed.statusCode, confirmed.body).toBe(200);
+  expect(
+    await db.projectExpertAssignment.count({
+      where: {
+        projectId: f.targetProject.id,
+        subjectType: 'INDIVIDUAL',
+        expertUserId: f.individual.user.id,
+      },
+    }),
+  ).toBe(0);
 });

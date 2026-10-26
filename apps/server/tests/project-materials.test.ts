@@ -50,6 +50,7 @@ function setup() {
       update: vi.fn(),
     },
     projectMember: {
+      findMany: vi.fn().mockResolvedValue([]),
       findFirst: vi.fn().mockResolvedValue(null),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },

@@ -1,4 +1,9 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
+import {
+  respondTransfer,
+  respondTransferInTransaction,
+  lockTransfer,
+} from '../personnel/personnel-transfer.js';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
 import { participatingStatuses } from '../organizations/organization.service.js';
@@ -44,8 +49,11 @@ export function validateResponse(input: RespondInput) {
 export async function respondToAssignment(db: PrismaClient, input: RespondInput, p: AuthPrincipal) {
   if (p.role !== 'EXPERT') throw new AuthError(403, 'FORBIDDEN', '仅执行专家可访问');
   validateResponse(input);
-  if (input.movementId != null)
-    throw new AuthError(503, 'NOT_IMPLEMENTED', '转项接单由12任务接入，当前尚未开放');
+  if (input.movementId != null) {
+    if (input.projectOwnerUserId != null || (input.projectOwnerUserIds?.length ?? 0) > 0)
+      throw bad('转项接单不能指定项目负责人');
+    return respondTransfer(db, { ...input, movementId: input.movementId }, p);
+  }
   const assignmentId = input.assignmentId!;
   const requested =
     input.projectOwnerUserId != null || (input.projectOwnerUserIds?.length ?? 0) > 0
@@ -53,6 +61,27 @@ export async function respondToAssignment(db: PrismaClient, input: RespondInput,
       : [];
   return db.$transaction(
     async (tx) => {
+      // Discover both projects before taking locks; transfer commands always lock in the same order.
+      const source = await tx.projectExpertAssignment.findFirst({
+        where: { id: assignmentId, project: { deleted: false } },
+      });
+      const pending =
+        source && (source.subjectType === 'INDIVIDUAL' || source.status === 'ACCEPTED')
+          ? await tx.projectMemberMovement.findMany({
+              where: {
+                userId: p.userId,
+                targetProjectId: source.projectId,
+                movementType: 'TRANSFER',
+                status: 'PROCESSING',
+                flow: { status: 'PENDING', currentNodeCode: 'MEMBER_CONFIRM' },
+                member: { organizationId: source.organizationId },
+              },
+              select: { id: true },
+            })
+          : [];
+      if (pending.length > 1) throw conflict();
+      const movementId = pending[0]?.id;
+      if (movementId) await lockTransfer(tx, movementId, p.userId);
       await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=ANY(ARRAY[${Prisma.join([...new Set([p.userId, ...requested])].sort())}]::uuid[]) ORDER BY "id" FOR SHARE`;
       const initial = await tx.projectExpertAssignment.findFirst({
         where: { id: assignmentId, project: { deleted: false } },
@@ -113,7 +142,7 @@ export async function respondToAssignment(db: PrismaClient, input: RespondInput,
         nextAction = 'MANAGE_PROJECT_MEMBERS';
       const result = (memberStatus: string | null, notifiedMemberCount = 0) => ({
         assignmentId,
-        movementId: null,
+        movementId: movementId ?? null,
         status: memberResponse ? a.status : status,
         memberStatus,
         nextAction,
@@ -126,7 +155,7 @@ export async function respondToAssignment(db: PrismaClient, input: RespondInput,
         });
         if (existing) {
           if (existing.status !== status) throw conflict();
-          return result(existing.status);
+          if (!movementId) return result(existing.status);
         }
       } else if (a.status !== 'PENDING_ACCEPTANCE') throw conflict();
       if (
@@ -139,18 +168,23 @@ export async function respondToAssignment(db: PrismaClient, input: RespondInput,
       const before = await collectRecruitmentTasks(tx, a.project);
       const reason = input.decision === 'REJECT' ? input.rejectReason!.trim() : null;
       if (memberResponse) {
-        await tx.projectExpertAssignmentMember.create({
-          data: {
-            assignmentId,
-            userId: p.userId,
-            userOrgRelId: relation!.id,
-            status,
-            rejectReason: reason,
-            respondedAt: now,
-            createdBy: p.uid,
-            updatedBy: p.uid,
-          },
-        });
+        if (
+          !(await tx.projectExpertAssignmentMember.findUnique({
+            where: { assignmentId_userId: { assignmentId, userId: p.userId } },
+          }))
+        )
+          await tx.projectExpertAssignmentMember.create({
+            data: {
+              assignmentId,
+              userId: p.userId,
+              userOrgRelId: relation!.id,
+              status,
+              rejectReason: reason,
+              respondedAt: now,
+              createdBy: p.uid,
+              updatedBy: p.uid,
+            },
+          });
       } else {
         await tx.projectExpertAssignment.update({
           where: { id: assignmentId },
@@ -165,6 +199,10 @@ export async function respondToAssignment(db: PrismaClient, input: RespondInput,
             updatedBy: p.uid,
           },
         });
+      }
+      if (movementId) {
+        await respondTransferInTransaction(tx, { ...input, movementId }, p);
+        nextAction = input.decision === 'ACCEPT' ? 'TAKE_ENTRANCE_EXAM' : 'VIEW_RESULT';
       }
       const participants =
         input.decision !== 'ACCEPT'
@@ -196,6 +234,7 @@ export async function respondToAssignment(db: PrismaClient, input: RespondInput,
       }
       for (const userId of participants) {
         if (
+          !movementId &&
           !plan?.needWrittenExam &&
           !(await tx.projectMember.findFirst({
             where: { expertAssignmentId: assignmentId, userId },

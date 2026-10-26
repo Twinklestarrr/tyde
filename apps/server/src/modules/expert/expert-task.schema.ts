@@ -101,6 +101,9 @@ const basic = object('项目和当前分配信息；名称展示实时资料，�
 });
 export const expertTaskExample = {
   assignmentId: 1,
+  movementId: null,
+  sourceBizType: 'EXPERT_ASSIGNMENT',
+  sourceBizId: 1,
   basicInfo: {
     projectId: 3001,
     projectName: '示例项目',
@@ -140,21 +143,31 @@ export const expertTaskExample = {
 export const expertTasksResponse = {
   type: 'array',
   description:
-    '本人待办，分配创建时间/ID倒序；无结果空数组。组织有效身份优先个人，结项及拒绝/取消/替换不推送。部分迁移：生产/审批/转项待10—12接回，067已接入待响应个人/组织主管/普通成员接单按钮。',
+    '本人待办，分配创建时间/ID倒序；无结果空数组。组织有效身份优先个人，结项及拒绝/取消/替换不推送。已聚合真实转项接单、考试、当前审批及生效成员；其他生产/跨域卡片仍部分迁移，067已接入待响应个人/组织主管/普通成员接单按钮。',
   items: object('本人一条分配待办。', {
-    assignmentId: id,
+    assignmentId: {
+      ...id,
+      nullable: true,
+      description: '真实分配ID；转项来源为null，响应时使用movementId。',
+    },
+    movementId: { ...id, nullable: true, description: '转项变动单ID；普通分配null。' },
+    sourceBizType: {
+      ...text('真实来源：EXPERT_ASSIGNMENT普通分配、PROJECT_MEMBER_TRANSFER转项。'),
+      enum: ['EXPERT_ASSIGNMENT', 'PROJECT_MEMBER_TRANSFER'],
+    },
+    sourceBizId: { ...id, description: '来源ID；按sourceBizType解释，不跨类型混用。' },
     basicInfo: basic,
     acceptanceStatus: {
       ...status,
       nullable: false,
       enum: ['PENDING_ACCEPTANCE', 'ACCEPTED', 'REJECTED', 'CANCELLED', 'REPLACED'],
     },
-    needWrittenExam: flag('是否要求笔试；无计划false。'),
+    needWrittenExam: flag('是否要求笔试；普通分配沿生产计划，无计划false；转项固定true。'),
     currentNodeCode: text(
       '项目主线；历史null回退RECRUIT_PROJECT_MANAGER=招募策略官，PRODUCTION_PLAN=生产计划、ENTRANCE_EXAM=准入考试、STANDARD_TRAINING=标准培训、RECRUIT_EXECUTION_EXPERT=招募专家、PERSONNEL_MANAGEMENT=人员管理、PRODUCTION_TASK=生产、COMPLETED=结项（不推送）。',
     ),
     branchNodeCode: text(
-      '本人支线：ENTRANCE_EXAM=准入考试、MEMBER_ENTRY_CONFIRM=负责人确认成员入项时间、STANDARD_TRAINING=标准培训、PRODUCTION_TASK=生产任务；无待办null。按实际接单/准入/成员/交卷及负责人考试开放事实重算。',
+      '本人支线：ENTRANCE_EXAM=准入考试、MEMBER_MOVEMENT_APPROVAL=人员转项人工审批、MEMBER_ENTRY_CONFIRM=负责人确认成员入项时间、STANDARD_TRAINING=标准培训、PRODUCTION_TASK=生产任务；无待办null。按实际接单/准入/成员/交卷及负责人考试开放事实重算。',
       true,
     ),
     accessContext: object('当前分配身份；下游接口独立鉴权。', {
@@ -168,5 +181,17 @@ export const expertTasksResponse = {
       canReportOutput: flag('能否报量；11未接入，本批false。'),
     }),
   }),
-  examples: [[expertTaskExample]],
+  examples: [
+    [
+      expertTaskExample,
+      {
+        ...expertTaskExample,
+        assignmentId: null,
+        movementId: 7,
+        sourceBizType: 'PROJECT_MEMBER_TRANSFER',
+        sourceBizId: 7,
+        needWrittenExam: true,
+      },
+    ],
+  ],
 };

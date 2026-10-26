@@ -1,3 +1,7 @@
+import {
+  lockTransfer,
+  respondTransferInTransaction,
+} from '../src/modules/personnel/personnel-transfer.js';
 import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
 import { expect, test, vi } from 'vitest';
 import {
@@ -18,6 +22,11 @@ vi.mock('../src/modules/projects/project-task-rounds.js', () => ({
   reconcileTaskRounds: vi.fn(),
   taskEventFacts: vi.fn().mockReturnValue({}),
 }));
+vi.mock('../src/modules/personnel/personnel-transfer.js', async (original) => ({
+  ...(await original<object>()),
+  lockTransfer: vi.fn(),
+  respondTransferInTransaction: vi.fn(),
+}));
 const userId = '00000000-0000-4000-8000-000000000001';
 const p = { userId, uid: 'u', role: 'EXPERT' } as AuthPrincipal;
 function fixture() {
@@ -33,6 +42,7 @@ function fixture() {
     project: { currentNodeCode: 'PERSONNEL_MANAGEMENT' },
   };
   const tx = {
+    projectMemberMovement: { findMany: vi.fn().mockResolvedValue([]) },
     $queryRaw: vi.fn(),
     projectExpertAssignment: { findFirst: vi.fn().mockResolvedValue(a), update: vi.fn() },
     userOrgRel: { findMany: vi.fn().mockResolvedValue([{ id: 'r', userId, position: 'OWNER' }]) },
@@ -64,11 +74,13 @@ test('response validates exclusive sources, decision, owners and required reject
   ])
     expect(() => validateResponse(input as RespondInput)).toThrow();
 });
-test('response denies wrong session and unsupported movement before transaction', async () => {
+test('response denies wrong session and owner parameters on movement before transaction', async () => {
   const f = fixture();
   await expect(f.call({}, { ...p, role: 'PM' })).rejects.toMatchObject({ status: 403 });
-  await expect(f.call({ assignmentId: null, movementId: 1 })).rejects.toMatchObject({
-    status: 503,
+  await expect(
+    f.call({ assignmentId: null, movementId: 1, projectOwnerUserId: p.userId }),
+  ).rejects.toMatchObject({
+    status: 400,
   });
   expect(f.db.$transaction).not.toHaveBeenCalled();
 });
@@ -162,4 +174,42 @@ test('member rejection preserves organization acceptance and does not create adm
   expect(f.tx.projectExpertAssignmentMember.create).toHaveBeenCalledWith(
     expect.objectContaining({ data: expect.objectContaining({ rejectReason: '不参与' }) }),
   );
+});
+
+test('legacy assignment response matches a unique concrete transfer before locks and skips exempt admission', async () => {
+  const f = fixture();
+  f.tx.projectMemberMovement.findMany.mockResolvedValue([{ id: 8 }]);
+  expect(await f.call()).toMatchObject({
+    assignmentId: 1,
+    movementId: 8,
+    nextAction: 'TAKE_ENTRANCE_EXAM',
+  });
+  expect(lockTransfer).toHaveBeenCalledWith(f.tx, 8, p.userId);
+  expect(respondTransferInTransaction).toHaveBeenCalledWith(
+    f.tx,
+    expect.objectContaining({ movementId: 8 }),
+    p,
+  );
+  expect(f.tx.projectMember.create).not.toHaveBeenCalled();
+  expect(f.tx.projectMemberMovement.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        userId: p.userId,
+        targetProjectId: 2,
+        member: { organizationId: null },
+        flow: { status: 'PENDING', currentNodeCode: 'MEMBER_CONFIRM' },
+      }),
+    }),
+  );
+});
+test('legacy response rejects ambiguous transfer without writes and propagates transfer errors for whole transaction rollback', async () => {
+  const f = fixture();
+  f.tx.projectMemberMovement.findMany.mockResolvedValue([{ id: 8 }, { id: 9 }]);
+  await expect(f.call()).rejects.toMatchObject({ status: 409 });
+  expect(f.tx.projectExpertAssignment.update).not.toHaveBeenCalled();
+  f.tx.projectMemberMovement.findMany.mockResolvedValue([{ id: 8 }]);
+  vi.mocked(respondTransferInTransaction).mockRejectedValueOnce(new Error('transfer failure'));
+  await expect(f.call()).rejects.toThrow('transfer failure');
+  expect(f.tx.projectMember.create).not.toHaveBeenCalled();
+  expect(f.tx.projectEventOutbox.create).not.toHaveBeenCalled();
 });

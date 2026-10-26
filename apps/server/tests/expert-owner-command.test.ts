@@ -56,6 +56,7 @@ function fixture() {
     projectMember: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
     projectTaskRound: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn() },
     projectRoleNodeSnapshot: { deleteMany: vi.fn() },
+    projectMemberMovement: { findMany: vi.fn(async () => []) },
     projectEventOutbox: { create: vi.fn() },
   };
   const db = { $transaction: vi.fn(async (fn) => fn(tx)) };

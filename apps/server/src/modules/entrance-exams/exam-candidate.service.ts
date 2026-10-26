@@ -1,3 +1,4 @@
+import { transferCandidate, lockTransferCandidate } from '../personnel/personnel-transfer-exam.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
@@ -64,11 +65,30 @@ export async function requireCandidate(
   return { assignment: a, user, project, relation: rels.find((r) => r.orgId === a.organizationId) };
 }
 
+export async function candidateContext(
+  tx: Prisma.TransactionClient,
+  projectId: number,
+  userId: string,
+  readOnly = false,
+) {
+  const transfer = await transferCandidate(tx, projectId, userId, readOnly);
+  if (transfer) return transfer;
+  const ordinary = await requireCandidate(tx, projectId, userId);
+  return {
+    ...ordinary,
+    movement: null,
+    sourceBizType: 'EXPERT_ORDER',
+    sourceBizId: ordinary.assignment.id,
+    organizationId: ordinary.assignment.organizationId,
+  };
+}
+
 export async function lockCandidate(
   tx: Prisma.TransactionClient,
   projectId: number,
   userId: string,
 ) {
+  if (await lockTransferCandidate(tx, projectId, userId)) return;
   // 用户→组织→关系→项目，与离组/成员响应保持同序；项目锁串行化首次建档及考试编辑/关闭。
   await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId}::uuid FOR SHARE`;
   const rels = await tx.userOrgRel.findMany({
@@ -88,10 +108,15 @@ export class ExamCandidateService {
     validateCandidateProject(projectId, p);
     return this.db.$transaction(
       async (tx) => {
-        await requireCandidate(tx, projectId, p.userId);
+        const context = await candidateContext(tx, projectId, p.userId, true);
         const attempts = await tx.entranceExamAttempt.findMany({
           where: {
             candidateUserId: p.userId,
+            sourceBizType: context.sourceBizType,
+            sourceBizId: context.sourceBizId,
+            ...(context.movement ? { id: context.movement.targetExamAttemptId ?? -1 } : {}),
+            organizationId: context.organizationId,
+            userOrgRelId: context.relation?.id ?? null,
             exam: { projectId, deleted: false },
           },
         });
@@ -105,14 +130,11 @@ export class ExamCandidateService {
     return this.db.$transaction(
       async (tx) => {
         await lockCandidate(tx, projectId, p.userId);
-        const { assignment, user, project, relation } = await requireCandidate(
-          tx,
-          projectId,
-          p.userId,
-        );
+        const context = await candidateContext(tx, projectId, p.userId);
+        const { user, project, relation, movement } = context;
         if (project.currentNodeCode === 'COMPLETED') throw bad('项目已结项，不可进入考试');
         const plan = await tx.projectProductionPlan.findUnique({ where: { projectId } });
-        if (!plan?.needWrittenExam) throw bad('当前项目无需笔试，不可进入考试');
+        if (!movement && !plan?.needWrittenExam) throw bad('当前项目无需笔试，不可进入考试');
         const exams = await tx.projectEntranceExam.findMany({
           where: { projectId, deleted: false },
           include: { currentVersion: true },
@@ -120,16 +142,20 @@ export class ExamCandidateService {
         });
         if (!exams.length) throw new AuthError(404, 'NOT_FOUND', '当前项目暂无准入考试');
         let attempt = await tx.entranceExamAttempt.findFirst({
-          where: { candidateUserId: p.userId, examId: { in: exams.map((e) => e.id) } },
+          where: {
+            candidateUserId: p.userId,
+            examId: { in: exams.map((e) => e.id) },
+            sourceBizType: context.sourceBizType,
+            ...(movement ? { sourceBizId: movement.id } : {}),
+          },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         });
         const now = new Date();
         if (attempt) {
-          if (attempt.sourceBizType !== 'EXPERT_ORDER')
-            throw new AuthError(503, 'NOT_IMPLEMENTED', '转项应试来源由12任务接入');
           if (
-            (attempt.sourceBizId !== null && attempt.sourceBizId !== assignment.id) ||
-            attempt.organizationId !== assignment.organizationId ||
+            attempt.sourceBizType !== context.sourceBizType ||
+            (attempt.sourceBizId !== null && attempt.sourceBizId !== context.sourceBizId) ||
+            attempt.organizationId !== context.organizationId ||
             attempt.userOrgRelId !== (relation?.id ?? null)
           )
             throw new AuthError(403, 'FORBIDDEN', '应试记录绑定的接单身份已失效');
@@ -140,9 +166,16 @@ export class ExamCandidateService {
             throw bad('答题时间已结束');
         }
         if (!attempt?.enteredAt) {
+          const used = movement
+            ? await tx.entranceExamAttempt.findMany({
+                where: { candidateUserId: p.userId },
+                select: { examId: true },
+              })
+            : [];
           const available = exams.filter(
             (e) =>
               e.status === 'ACTIVE' &&
+              (!movement || attempt?.examId === e.id || !used.some((a) => a.examId === e.id)) &&
               e.currentVersion &&
               e.currentVersion.registrationDeadline > now,
           );
@@ -178,14 +211,21 @@ export class ExamCandidateService {
                   candidateUserId: p.userId,
                   candidateUid: user.uid,
                   candidateName: displayName(user.displayName, user.realName, user.uid),
-                  organizationId: assignment.organizationId,
+                  organizationId: context.organizationId,
                   organizationName: relation?.organization.name ?? null,
                   userOrgRelId: relation?.id ?? null,
-                  sourceBizType: 'EXPERT_ORDER',
-                  sourceBizId: assignment.id,
+                  sourceBizType: context.sourceBizType,
+                  sourceBizId: context.sourceBizId,
                   createdBy: p.uid,
                 },
               });
+        }
+        if (movement && movement.targetExamAttemptId !== attempt.id) {
+          if (movement.targetExamAttemptId !== null) throw bad('转项已关联其他考试');
+          await tx.projectMemberMovement.update({
+            where: { id: movement.id },
+            data: { targetExamAttemptId: attempt.id, updatedBy: p.uid },
+          });
         }
         const version = await tx.entranceExamVersion.findFirst({
           where: { id: attempt.examVersionId!, examId: attempt.examId },

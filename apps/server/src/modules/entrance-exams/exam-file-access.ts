@@ -1,4 +1,4 @@
-import { requireCandidate } from './exam-candidate.service.js';
+import { candidateContext } from './exam-candidate.service.js';
 import { participatingStatuses } from '../organizations/organization.service.js';
 import { AuthError } from '../auth/auth.error.js';
 import type { PrismaClient } from '@prisma/client';
@@ -19,9 +19,9 @@ export async function canReadManagedExamFile(
   if (principal.role === 'EXPERT' && objectKey) {
     return db.$transaction(
       async (tx) => {
-        let candidate: Awaited<ReturnType<typeof requireCandidate>> | undefined;
+        let candidate: Awaited<ReturnType<typeof candidateContext>> | undefined;
         try {
-          candidate = await requireCandidate(tx, exam.projectId, principal.userId);
+          candidate = await candidateContext(tx, exam.projectId, principal.userId, true);
         } catch (error) {
           if (!(error instanceof AuthError) || ![403, 404].includes(error.status)) throw error;
         }
@@ -31,10 +31,11 @@ export async function canReadManagedExamFile(
                 examId,
                 candidateUserId: principal.userId,
                 enteredAt: { not: null },
-                sourceBizType: 'EXPERT_ORDER',
-                organizationId: candidate.assignment.organizationId,
+                sourceBizType: candidate.sourceBizType,
+                organizationId: candidate.organizationId,
                 userOrgRelId: candidate.relation?.id ?? null,
-                sourceBizId: candidate.assignment.id,
+                sourceBizId: candidate.sourceBizId,
+                ...(candidate.movement ? { id: candidate.movement.targetExamAttemptId ?? -1 } : {}),
               },
               select: { id: true, paperId: true },
             })
@@ -93,8 +94,16 @@ export async function canReadManagedExamFile(
                 { id: { in: own.map((a) => a.id) } },
                 ...scopes.map((a) => ({
                   organizationId: a.organizationId,
-                  sourceBizType: 'EXPERT_ORDER',
-                  sourceBizId: a.id,
+                  OR: [
+                    { sourceBizType: 'EXPERT_ORDER', sourceBizId: a.id },
+                    {
+                      sourceBizType: 'PROJECT_MEMBER_TRANSFER',
+                      transferMovement: {
+                        targetProjectId: exam.projectId,
+                        member: { organizationId: a.organizationId },
+                      },
+                    },
+                  ],
                 })),
               ],
             },

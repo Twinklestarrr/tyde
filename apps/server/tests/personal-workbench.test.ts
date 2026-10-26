@@ -531,3 +531,62 @@ test('new routes preserve envelope, schemas/examples, credentials, malformed inp
     await app.close();
   }
 });
+
+test('personal transfer applications join only concrete flows and preserve applicant pagination', async () => {
+  const row = {
+    id: 'flow',
+    businessType: 'PROJECT_MEMBER_TRANSFER',
+    businessId: '7',
+    versionNo: 1,
+    formData: { movementId: 999, targetProjectId: 999 },
+    appliedAt: new Date('2026-10-26T00:00:00Z'),
+    finishedAt: null,
+  };
+  const movements = vi
+    .fn()
+    .mockResolvedValue([
+      {
+        id: 7,
+        flowId: 'flow',
+        memberId: 2,
+        userId: 'target',
+        sourceProjectId: 1,
+        targetProjectId: 3,
+        status: 'PROCESSING',
+        plannedEffectiveDate: new Date('2099-01-01'),
+        member: {
+          organizationId: null,
+          user: { uid: 'target', displayName: '当前昵称', realName: '姓名' },
+        },
+        targetProject: { projectName: '真实目标' },
+      },
+    ]);
+  const service = new PersonalApplicationService({
+    $transaction: async (fn: (tx: unknown) => unknown) =>
+      fn({
+        approvalFlow: {
+          count: vi.fn().mockResolvedValue(1),
+          findMany: vi.fn().mockResolvedValue([row]),
+        },
+        projectMemberMovement: { findMany: movements },
+      }),
+  } as unknown as PrismaClient);
+  expect(
+    (await service.list({ businessType: null }, principal)).records[0]!.transfer,
+  ).toMatchObject({
+    movementId: 7,
+    targetProjectId: 3,
+    targetProjectName: '真实目标',
+    targetUserName: '当前昵称(姓名)',
+  });
+  expect(movements).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: {
+        flowId: { in: ['flow'] },
+        initiatedBy: principal.userId,
+      },
+    }),
+  );
+  row.businessId = '999';
+  expect((await service.list({ businessType: null }, principal)).records[0]!.transfer).toBe(null);
+});

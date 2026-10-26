@@ -17,7 +17,11 @@ const integer = (description: string) => ({
   description,
 });
 const properties = {
-  assignmentId: integer('执行专家分配记录ID。'),
+  assignmentId: {
+    ...integer('执行专家分配记录ID；独立转项生效身份无普通分配，返回null。'),
+    nullable: true,
+  },
+  movementId: { ...integer('真实转项单ID；普通分配为null。'), nullable: true },
   projectId: integer('项目ID。'),
   projectName: text('项目名称；历史未填写null。', true),
   requesterName: text('需求方展示名称，个人取实时昵称(姓名)，组织取项目快照。'),
@@ -34,6 +38,7 @@ const properties = {
 };
 export const myProjectExample = {
   assignmentId: 1,
+  movementId: null,
   projectId: 3001,
   projectName: '示例项目',
   requesterName: '小明(王小明)',
@@ -82,7 +87,8 @@ const detailFields = {
     description: '项目创建第1/2/3步完整信息；不含管理配置，附件内容另行鉴权读取。',
   },
   productionPlan: assignmentProductionPlan,
-  assignmentId: integer('当前分配记录ID，新增辅助字段。'),
+  assignmentId: { ...integer('当前分配记录ID；转项来源null。'), nullable: true },
+  movementId: { ...integer('真实转项单ID；普通分配null。'), nullable: true },
   currentNodeCode: {
     ...projectPublishedDetail.properties.currentNodeCode,
     description: '项目真实主线节点码；未设置null。区别于my-projects返回的本人支线节点。',
@@ -104,6 +110,7 @@ export const assignmentDetailExample = {
     totalExpectedOutput: 100,
   },
   assignmentId: 1,
+  movementId: null,
   currentNodeCode: 'PRODUCTION_PLAN',
   availableOperations: ['VIEW_DETAIL'],
 };
@@ -131,9 +138,12 @@ export const myProjectsQuery = {
 export const assignmentDetailQuery = {
   type: 'object',
   additionalProperties: false,
-  required: ['assignmentId'],
-  description: '分配记录查询参数，不允许指定用户。',
+  description: '分配记录或真实转项查询参数，assignmentId与movementId须二选一，不允许指定用户。',
   properties: {
+    movementId: {
+      ...text('真实转项单ID，1至2147483647的十进制正整数字符串；与assignmentId二选一。'),
+      pattern: '^[1-9]\\d{0,9}$',
+    },
     assignmentId: {
       ...text('执行专家分配ID，1至2147483647的十进制正整数字符串。'),
       pattern: '^[1-9]\\d{0,9}$',
@@ -188,5 +198,5 @@ export const expertSchema = (
   tags: ['ExpertAssignment'],
   description:
     description +
-    ' 当前会话须为EXPERT，另按实际分配/多组织成员关系校验。支持受信Cookie或无浏览器头的Bearer客户端；400参数错误、401失效会话、403无权访问、404分配或已发布项目不存在。负责人集合及招募接单写入口已接入，考试写入口归08、转项响应归12尚未接入。',
+    ' 当前会话须为EXPERT，另按实际分配/多组织成员关系校验。支持受信Cookie或无浏览器头的Bearer客户端；400参数错误、401失效会话、403无权访问、404分配或已发布项目不存在。负责人集合及招募接单写入口已接入，考试写入口归08、转项响应及结构化来源已由12接入；其他跨域卡片仍部分迁移。',
 });

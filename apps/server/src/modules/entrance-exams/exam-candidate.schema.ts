@@ -97,7 +97,7 @@ const candidateFailures = Object.fromEntries(
     409: '答卷已提交，或文件已认领/凭证过期。',
     413: '请求体超过服务端大小限制。',
     500: '绑定试卷、版本或轮次异常，或内部处理失败。',
-    503: '转项来源未接入或数据库/文件存储暂不可用。',
+    503: '数据库或文件存储暂不可用。',
   }).map(([status, description]) => [
     status,
     {
@@ -113,7 +113,7 @@ export function candidateSchema(enter: boolean): FastifySchema {
     summary: enter ? '进入准入考试' : '查询当前执行专家的准入考试通过状态',
     operationId: enter ? 'entranceExamCandidateEnter' : 'entranceExamCandidateCurrent',
     description:
-      '仅当前EXPERT及真实有效接单资格；有效组织身份优先，单纯主管、待响应和离组成员无应试资格。首次入场需笔试计划及未截止ACTIVE考试；已入场可在关闭或编辑后按原卷恢复，个人截止时间仍有效。转项来源由12任务接入。',
+      '仅当前EXPERT及真实有效接单资格；有效组织身份优先，单纯主管、待响应和离组成员无应试资格。首次入场需笔试计划及未截止ACTIVE考试；已入场可在关闭或编辑后按原卷恢复，个人截止时间仍有效。转项在目标考试阶段使用来源成员精确组织身份及独立考试记录，不借用其他接单身份，转项即使目标免试仍须考试。',
     security: [{ desktopSession: [] }, { webSession: [] }],
     ...(enter
       ? {
@@ -183,7 +183,7 @@ export function candidateCommandSchema(submit: boolean): FastifySchema {
     summary: submit ? '提交准入考试答卷' : '取消准入考试并离场',
     operationId: submit ? 'entranceExamCandidateSubmit' : 'entranceExamCandidateCancel',
     description:
-      '仅当前EXPERT及有效原绑定接单身份；不允许换绑、重考或重复操作。交卷使用入场绑定历史版本，关闭或编辑不影响已入场交卷；个人答题截止后拒绝交卷但允许取消。交卷一次保存全卷，必答题须有文字或附件；所有轮次预建，首轮PENDING、后续WAITING。AUTO仅mock派发，实际投递归14，转项来源归12。取消不保存临时答案，不创建阅卷或入项成员。',
+      '仅当前EXPERT及有效原绑定接单身份；不允许换绑、重考或重复操作。交卷使用入场绑定历史版本，关闭或编辑不影响已入场交卷；个人答题截止后拒绝交卷但允许取消。交卷一次保存全卷，必答题须有文字或附件；所有轮次预建，首轮PENDING、后续WAITING。AUTO仅mock派发，实际投递归14，转项采用独立来源记录，最终结果提交后推进转项审批，失败可显式补偿。取消不保存临时答案，不创建阅卷或入项成员。',
     security: [{ desktopSession: [] }, { webSession: [] }],
     body: {
       type: 'object',

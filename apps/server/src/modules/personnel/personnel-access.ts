@@ -66,11 +66,52 @@ export const memberInclude = {
       memberResponses: true,
     },
   },
-  admissionAttempt: { include: { exam: { select: { projectId: true } } } },
+  admissionAttempt: {
+    include: {
+      exam: { select: { projectId: true } },
+      transferMovement: { include: { flow: true } },
+    },
+  },
 } satisfies Prisma.ProjectMemberInclude;
 export type PersonnelMember = Prisma.ProjectMemberGetPayload<{ include: typeof memberInclude }>;
 export function qualifiedForEntry(member: PersonnelMember, needWrittenExam: boolean) {
   const a = member.expertAssignment;
+  const attempt = member.admissionAttempt;
+  const movement = attempt?.transferMovement;
+  if (attempt?.sourceBizType === 'PROJECT_MEMBER_TRANSFER') {
+    if (
+      !movement ||
+      movement.id !== attempt.sourceBizId ||
+      movement.status !== 'EFFECTIVE' ||
+      movement.flow?.status !== 'APPROVED' ||
+      movement.userId !== member.userId ||
+      movement.targetProjectId !== member.projectId ||
+      movement.targetExamAttemptId !== attempt.id ||
+      attempt.candidateUserId !== member.userId ||
+      attempt.organizationId !== member.organizationId ||
+      attempt.userOrgRelId !== member.userOrgRelId ||
+      attempt.exam.projectId !== member.projectId ||
+      attempt.finalResult !== 'ADMITTED' ||
+      attempt.cancelledAt ||
+      member.user.status !== 'ACTIVE' ||
+      !member.admittedAt
+    )
+      return false;
+    if (!member.organizationId) return !member.userOrgRelId && !member.expertAssignmentId;
+    const rel = member.organizationMembership;
+    return !!(
+      a &&
+      a.status === 'ACCEPTED' &&
+      a.subjectType === 'ORGANIZATION' &&
+      a.projectId === member.projectId &&
+      a.organizationId === member.organizationId &&
+      !member.organization?.deleted &&
+      rel &&
+      rel.userId === member.userId &&
+      rel.orgId === member.organizationId &&
+      participatingStatuses.includes(rel.joinStatus)
+    );
+  }
   if (
     !a ||
     a.status !== 'ACCEPTED' ||
@@ -104,7 +145,6 @@ export function qualifiedForEntry(member: PersonnelMember, needWrittenExam: bool
     member.userOrgRelId
   )
     return false;
-  const attempt = member.admissionAttempt;
   return (
     !needWrittenExam ||
     !!(

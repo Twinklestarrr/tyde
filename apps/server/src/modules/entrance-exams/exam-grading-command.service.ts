@@ -1,3 +1,4 @@
+import { tryConsumeTransferResult } from '../personnel/personnel-transfer-exam.js';
 import { createHash } from 'node:crypto';
 import type { AutoCallbackInput, AutoCompensateInput } from './exam-auto.types.js';
 import { Prisma, type PrismaClient, type EntranceExamAttempt } from '@prisma/client';
@@ -87,7 +88,7 @@ export class ExamGradingCommandService {
     if (!auto?.callback && (!principal || !['NAVIGATOR', 'PM', 'EXPERT'].includes(principal.role)))
       throw new AuthError(403, 'FORBIDDEN', '当前角色不允许提交阅卷');
     try {
-      return await this.db.$transaction(
+      const result = await this.db.$transaction(
         async (tx) => {
           // 与配置、任职和待办写入统一项目锁；再锁应试、执行记录，避免跨轮提交遗漏裁决。
           await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id" = ${input.projectId} AND "deleted" = false FOR UPDATE`;
@@ -404,6 +405,8 @@ export class ExamGradingCommandService {
         },
         { timeout: 30000 },
       );
+      await tryConsumeTransferResult(this.db, input.attemptId);
+      return result;
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
