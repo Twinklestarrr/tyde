@@ -269,14 +269,14 @@ async function confirm(page: Page, replacement = false) {
     .click();
   return dialog;
 }
-async function screenshot(page: Page, name: string) {
-  await mkdir('artifacts/project-manager-audit', { recursive: true });
+async function screenshot(page: Page, name: string, directory = 'artifacts/project-manager-audit') {
+  await mkdir(directory, { recursive: true });
   await expect(page.getByRole('listbox', { includeHidden: true })).toHaveCount(0);
   await expect(page.getByRole('dialog', { includeHidden: true })).toHaveCount(0);
   await page.evaluate(() => window.scrollTo(0, 0));
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await page.screenshot({
-    path: `artifacts/project-manager-audit/${name}.png`,
+    path: `${directory}/${name}.png`,
     fullPage: true,
     animations: 'disabled',
   });
@@ -289,12 +289,28 @@ for (const [mode, desktop] of [
   test(`${mode} 首次招募单写、服务端搜索保留当前摘要、更换可取消且保留项目节点`, async ({
     page,
   }) => {
-    const { state, calls, releaseWrite } = await backend(page, desktop);
+    const { state, requests, calls, releaseWrite } = await backend(page, desktop);
     await page.goto(`${origin}/#/`);
     await page.getByRole('link', { name: '招募策略官', exact: true }).click();
     const section = page.getByRole('region', { name: '招募策略官', exact: true });
     await expect(section.getByText('尚未指定策略官', { exact: true })).toBeVisible();
-    if (!desktop) await screenshot(page, 'manager-first');
+    const workflow = page.getByRole('region', { name: '项目主流程', exact: true });
+    const tabs = workflow.getByRole('tablist', { name: '领航员项目模块', exact: true });
+    await expect(tabs.getByRole('tab')).toHaveCount(4);
+    await expect(
+      tabs.getByRole('tab', { name: /^(生产计划|招募执行专家|人员管理|结项)$/ }),
+    ).toHaveCount(0);
+    const beforeTabs = requests.length;
+    for (const name of ['准入考试', '标准与培训', '生产任务']) {
+      await tabs.getByRole('tab', { name, exact: true }).click();
+      await expect(page.getByRole('tabpanel', { name, exact: true })).toContainText('入口暂未开放');
+      await expect(section).toHaveCount(0);
+    }
+    expect(requests).toHaveLength(beforeTabs);
+    expect(calls('manager-recruitments')).toHaveLength(0);
+    await tabs.getByRole('tab', { name: '招募策略官', exact: true }).click();
+    await expect(section.getByRole('radio', { name: /策略官甲/ })).toBeEnabled();
+    if (!desktop) await screenshot(page, 'manager-first', 'artifacts/project-tabs-audit');
     await section.getByRole('radio', { name: /策略官甲/ }).check();
     state.holdWrite = true;
     await section.getByRole('button', { name: '指定策略官', exact: true }).click();
@@ -310,11 +326,12 @@ for (const [mode, desktop] of [
     state.holdWrite = false;
     const current = section.getByRole('region', { name: '当前策略官', exact: true });
     await expect(current).toContainText('策略官甲');
-    await expect(
-      page
-        .getByRole('region', { name: '项目主流程', exact: true })
-        .locator('[aria-current="step"]'),
-    ).toContainText('生产计划');
+    await expect(workflow.getByText('当前阶段：生产计划', { exact: true })).toBeVisible();
+    await expect(tabs.locator('[aria-current="step"]')).toHaveCount(0);
+    await expect(tabs.getByRole('tab', { name: '招募策略官', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     await section.getByRole('button', { name: '更换策略官', exact: true }).click();
     await expect(section.getByRole('radio', { name: /策略官甲/ })).toBeDisabled();
     await section.getByLabel('搜索策略官', { exact: true }).fill('策略官乙');
@@ -340,17 +357,21 @@ for (const [mode, desktop] of [
     await section.getByRole('button', { name: '重置', exact: true }).click();
     await section.getByRole('radio', { name: /策略官乙/ }).check();
     state.node = 'ENTRANCE_EXAM';
-    if (!desktop) await screenshot(page, 'replacement-selected');
+    if (!desktop) await screenshot(page, 'replacement-selected', 'artifacts/project-tabs-audit');
     await section.getByRole('button', { name: '确认更换', exact: true }).click();
     await confirm(page, true);
     await expect(current).toContainText('策略官乙');
     expect(calls('manager-recruitments')).toHaveLength(2);
     expect(state.node).toBe('ENTRANCE_EXAM');
-    await expect(
-      page
-        .getByRole('region', { name: '项目主流程', exact: true })
-        .locator('[aria-current="step"]'),
-    ).toContainText('准入考试');
+    await expect(workflow.getByText('当前阶段：准入考试', { exact: true })).toBeVisible();
+    await expect(tabs.getByRole('tab', { name: '准入考试', exact: true })).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
+    await expect(tabs.getByRole('tab', { name: '招募策略官', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(calls('manager-recruitments')[1]?.body).toEqual({
       projectId: detail.id,
       candidateUserId: uuid(3),
@@ -363,7 +384,6 @@ for (const [mode, desktop] of [
           !call.headers['idempotency-key'],
       ),
     ).toBe(true);
-    if (!desktop) await screenshot(page, 'replacement');
   });
 }
 
@@ -418,9 +438,9 @@ test('指派成功后候选和详情回读失败，只重读且不重放成功�
   expect(calls('manager-recruitments')).toHaveLength(1);
   if (await page.getByText('项目详情暂时不可用', { exact: true }).count())
     await page.getByRole('button', { name: '刷新详情', exact: true }).click();
-  await expect(
-    page.getByRole('region', { name: '项目主流程', exact: true }).locator('[aria-current="step"]'),
-  ).toContainText('生产计划');
+  const workflow = page.getByRole('region', { name: '项目主流程', exact: true });
+  await expect(workflow.getByText('当前阶段：生产计划', { exact: true })).toBeVisible();
+  await expect(workflow.locator('[aria-current="step"]')).toHaveCount(0);
 });
 
 test('候选403隐藏选择与指派操作，非领航员直访不读取招募接口', async ({ page }) => {

@@ -5,7 +5,7 @@ import type { AuthUser, WorkbenchProjectDetail } from '@tyde/shared';
 import { api } from '@/services/api';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
-import { ProjectWorkflow } from './ProjectWorkflow';
+import { NavigatorProjectWorkflow } from './ProjectWorkflow';
 import { ProjectManagerPanel } from './ProjectManagerPanel';
 
 const difficulty = { EASY: '简单', MEDIUM: '中等', HARD: '困难' };
@@ -89,13 +89,17 @@ export function ProjectDetailPage({ user, projectId }: { user: AuthUser; project
               {project.projectDescription || '暂无项目描述'}
             </p>
           </header>
-          <ProjectWorkflow currentNodeCode={project.currentNodeCode} />
-          <ProjectManagerPanel
-            user={user}
-            projectId={projectId}
-            refreshProject={async () => {
-              await detail.refetch({ throwOnError: true });
-            }}
+          <NavigatorProjectWorkflow
+            currentNodeCode={project.currentNodeCode}
+            recruitment={
+              <ProjectManagerPanel
+                user={user}
+                projectId={projectId}
+                refreshProject={async () => {
+                  await detail.refetch({ throwOnError: true });
+                }}
+              />
+            }
           />
           <section
             className="rounded-[16px] border bg-card p-5 sm:p-6"

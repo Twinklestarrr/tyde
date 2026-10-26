@@ -196,6 +196,17 @@ async function backend(page: Page, desktop = false) {
         state.draftStatus,
         '草稿读取暂不可用',
       );
+    if (path === '/api/v1/projects/manager-candidates')
+      return reply([
+        {
+          status: 'RECOMMENDED',
+          userId,
+          uid: user.uid,
+          name: user.nickname,
+          avatarUrl: null,
+          currentProjectCount: 0,
+        },
+      ]);
     if (path === '/api/v1/project-categories')
       return reply(
         [
@@ -308,8 +319,11 @@ async function chooseRole(page: Page, role: '领航员' | '策略官' | '执行�
   await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(role);
 }
 
-async function screenshot(page: Page, name: string) {
-  const directory = 'artifacts/navigator-projects-audit';
+async function screenshot(
+  page: Page,
+  name: string,
+  directory = 'artifacts/navigator-projects-audit',
+) {
   await mkdir(directory, { recursive: true });
   await expect(page.getByRole('listbox', { includeHidden: true })).toHaveCount(0);
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -332,21 +346,35 @@ for (const [mode, desktop] of [
     await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '待办项目甲', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: '继续完善', exact: true })).toBeVisible();
-    if (!desktop) await screenshot(page, 'workbench');
+    if (!desktop) await screenshot(page, 'workbench', 'artifacts/project-tabs-audit');
     await page.getByLabel('筛选当前待办', { exact: true }).fill('没有该项目');
     await expect(page.getByText('没有匹配的待办项目', { exact: true })).toBeVisible();
     await page.getByLabel('筛选当前待办', { exact: true }).fill('PROJECT-501');
     await page.getByRole('link', { name: '查看项目', exact: true }).click();
     await expect(page.getByRole('heading', { name: '待办项目甲', exact: true })).toBeVisible();
+    const workflow = page.getByRole('region', { name: '项目主流程', exact: true });
+    const tabs = workflow.getByRole('tablist', { name: '领航员项目模块', exact: true });
+    await expect(tabs.getByRole('tab')).toHaveCount(4);
+    for (const name of ['招募策略官', '准入考试', '标准与培训', '生产任务'])
+      await expect(tabs.getByRole('tab', { name, exact: true })).toBeVisible();
     await expect(
-      page.getByRole('region', { name: '项目主流程', exact: true }).getByRole('listitem'),
-    ).toHaveCount(8);
-    await expect(
-      page
-        .getByRole('region', { name: '项目主流程', exact: true })
-        .locator('[aria-current="step"]'),
-    ).toHaveText('1招募策略官');
-    if (!desktop) await screenshot(page, 'project-detail');
+      tabs.getByRole('tab', { name: /^(生产计划|招募执行专家|人员管理|结项)$/ }),
+    ).toHaveCount(0);
+    await expect(workflow.getByText('当前阶段：招募策略官', { exact: true })).toBeVisible();
+    await expect(tabs.getByRole('tab', { name: '招募策略官', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await tabs.getByRole('tab', { name: '准入考试', exact: true }).click();
+    await expect(page.getByRole('tabpanel', { name: '准入考试', exact: true })).toContainText(
+      '入口暂未开放',
+    );
+    await tabs.getByRole('tab', { name: '招募策略官', exact: true }).click();
+    await expect(tabs.getByRole('tab', { name: '招募策略官', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    if (!desktop) await screenshot(page, 'project-detail', 'artifacts/project-tabs-audit');
     const downloaded = page.waitForEvent('download');
     await page.getByRole('button', { name: '下载', exact: true }).click();
     expect((await downloaded).suggestedFilename()).toBe('作业标准.txt');
