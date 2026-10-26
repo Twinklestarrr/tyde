@@ -185,9 +185,11 @@ Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:te
 
 Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:test:memory` 显式开启，每 10 秒记录进程指标与主进程内存到 userData，最多保留两份各 1 MiB 日志。普通开发默认关闭，安装包不启用。原 20 GB 报告尚未现场复现，短时验证不能视为泄漏修复；详见 [排查记录](docs/ELECTRON_MEMORY_INVESTIGATION.md)。
 
-领航员项目首批：`modules/projects/NavigatorProjectsPage.tsx` 承接真实 NAVIGATOR 首页及 `/projects`，本人待办和唯一草稿分别读取；`GET /projects/list` 仅返回本人当前待办，不代表全部创建历史，关键词只筛选本次返回的待办。`ProjectCreatePage.tsx` 在 `/projects/create` 提供基础信息、人员画像、标准配置三步向导，通过现有 `POST /projects/create` 保存唯一草稿或发布，完整快照携带草稿版本；失败保留表单，409 显式重读，写成功与后续回读失败分别提示，不自动重放不确定写结果。附件沿用 PROJECT_ATTACHMENT 上传台账与鉴权代理，新凭证只留表单内存，草稿保存后回读归一为已有附件 ID。`ProjectDetailPage.tsx` 在 `/projects/$projectId` 展示授权只读详情、附件及八段主流程的当前位置。不提供已发布编辑、删除；后续主模块逐项经用户确认迁移，不扩全局顶栏。Web/Electron 共用当前组件与 HTTP 适配，仅改前端及客户端 DTO，不改后端/Prisma/依赖或执行迁移。
+领航员项目首批：`modules/projects/NavigatorProjectsPage.tsx` 承接真实 NAVIGATOR 首页及 `/projects`，本人待办和唯一草稿分别读取；`GET /projects/list` 仅返回本人当前待办，不代表全部创建历史，关键词只筛选本次返回的待办。`ProjectCreatePage.tsx` 在 `/projects/create` 提供基础信息、人员画像、标准配置三步向导，通过现有 `POST /projects/create` 保存唯一草稿或发布，完整快照携带草稿版本；失败保留表单，409 显式重读，写成功与后续回读失败分别提示，不自动重放不确定写结果。附件沿用 PROJECT_ATTACHMENT 上传台账与鉴权代理，新凭证只留表单内存，草稿保存后回读归一为已有附件 ID。`ProjectDetailPage.tsx` 在 `/projects/$projectId` 展示授权只读详情、附件与领航员流程 Tab。不提供已发布编辑、删除；后续主模块逐项经用户确认迁移，不扩全局顶栏。Web/Electron 共用当前组件与 HTTP 适配，仅改前端及客户端 DTO，不改后端/Prisma/依赖或执行迁移。
 
 领航员项目第二批：用户确认“招募策略官”，`ProjectManagerPanel.tsx` 在项目详情主流程下接入现有 `GET /projects/manager-candidates` 与 `POST /projects/manager-recruitments`；待办卡片提供直达入口。无关键词读取独立维护当前任职，搜索仅按姓名/昵称，按后端顺序展示真实候选和任职数量。选择、确认、首次指定、更换和取消沿用公共样式；当前任职不可再次提交。首次指定后端推进生产计划，更换保留阶段，不自动进入未迁移模块。写成功后回读候选与详情、失效本人待办；409、网络未知及5xx锁定写入至显式核实，成功后回读失败保留已确认任职并仅重试GET。账户/角色/项目/关键词隔离缓存，使用Web/Electron同一Cookie HTTP适配，不添加旧服务、依赖、后端接口或数据库操作。生产计划仍待用户下一步确认。
+
+角色流程展示修正：`ProjectWorkflow.tsx` 的完整八阶段仅作为节点名称字典；当前详情使用 `NavigatorProjectWorkflow`，仅渲染领航员四个真实 Tab（招募策略官、准入考试、标准与培训、生产任务）。招募面板只在对应 Tab 挂载，其他三个提供未开放提示，不读取或模拟业务。当前阶段文字与选中 Tab 分离，真实节点是生产计划时没有领航员当前 Tab 标记。参考角色边界：策略官六个 Tab；执行专家按项目 receiverRole 的主管/项目负责人给五个，普通成员/个人给三个，不能按组织管理员身份扩大。其他角色处理页仍待逐项迁移，免试/看板等门禁需结合真实项目接口字段，不提前伪造权限。
 
 ## 模块边界与入口
 
