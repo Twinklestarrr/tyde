@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -64,7 +64,7 @@ function developmentConfig() {
   try {
     config = parseEnv(readFileSync(envFile, 'utf8'));
   } catch {
-    throw new Error('请先在 apps/server/.env 配置远程开发数据库和后端环境变量。');
+    throw new Error('请先在 apps/server/.env 配置开发数据库和后端环境变量。');
   }
   try {
     const database = new URL(config.DATABASE_URL);
@@ -124,11 +124,50 @@ async function requireFreePort(port) {
   });
 }
 
+async function startLocalDatabase(env) {
+  const database = new URL(env.DATABASE_URL);
+  if (
+    !['127.0.0.1', 'localhost'].includes(database.hostname) ||
+    (database.port && database.port !== '5432')
+  )
+    return;
+  const listening = await new Promise((accept) => {
+    const socket = createConnection({
+      host: database.hostname,
+      port: 5432,
+    });
+    const finish = (connected) => {
+      socket.destroy();
+      accept(connected);
+    };
+    socket.setTimeout(1500, () => finish(false));
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+  if (listening || stopping) return;
+  console.info('[本地启动] 启动已有 PostgreSQL 实例，不初始化或迁移数据库。');
+  await new Promise((accept, reject) => {
+    const child = start(
+      process.execPath,
+      ['scripts/postgres-local.mjs', 'start', '--existing-only'],
+      env,
+    );
+    if (!child) return accept();
+    child.once('error', () => reject(new Error('本地 PostgreSQL 启动失败，请检查安装与 PG_BIN。')));
+    child.once('exit', (code) =>
+      code === 0 || stopping
+        ? accept()
+        : reject(new Error('本地 PostgreSQL 启动失败，请检查上方日志；未启动应用。')),
+    );
+  });
+}
+
 try {
   // .env 覆盖父进程的旧数据库配置；一键启动只管理本机开发进程。
   const env = developmentConfig();
   const api = `http://127.0.0.1:${env.PORT}`;
   await requireFreePort(Number(env.PORT));
+  await startLocalDatabase(env);
   console.info(`[本地启动] 使用 apps/server/.env 的数据库配置，启动后端 ${api}`);
   start('npm', ['--prefix', 'apps/server', 'run', 'dev'], env, 'server');
   const deadline = Date.now() + 90_000;

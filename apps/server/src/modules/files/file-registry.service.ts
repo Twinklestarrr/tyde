@@ -130,6 +130,68 @@ export class FileRegistryService {
       ownerUid,
     );
   }
+  /** 调用方已锁组织并校验主管；图片认领、资料保存及旧图片释放共享同一事务。 */
+  async syncOrganizationLogo(
+    tx: Tx,
+    organizationId: string,
+    ownerUid: string,
+    value: string,
+    token?: string | null,
+  ) {
+    let key: string | null = value.startsWith('org-logo/') ? validObjectKey(value) : null;
+    if (!key && /^https?:\/\//i.test(value)) {
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        throw new AuthError(400, 'BAD_REQUEST', 'Logo图片地址格式不正确');
+      }
+      const candidate = url.pathname.replace(/^\/(?:tyde\/)?/, '');
+      if (candidate.startsWith('org-logo/')) {
+        const normalized = validObjectKey(candidate);
+        const expected = new URL(this.storage.accessUrl(normalized, 2147483647));
+        if (url.origin === expected.origin && url.pathname === expected.pathname) key = normalized;
+      }
+    }
+    if (key) {
+      const record = await this.locked(tx, key);
+      // 组织已认领的图片可重复保存，主管交接不改变图片归属。
+      if (
+        record?.status !== 'CLAIMED' ||
+        record.bizType !== 'ORG_LOGO' ||
+        record.claimedBizType !== 'ORGANIZATION_LOGO' ||
+        record.claimedBizId !== organizationId
+      ) {
+        const upload = this.validateClaim(record, 'ORG_LOGO', token ?? '', ownerUid);
+        await this.verifyObject(upload);
+        await tx.uploadedFile.update({
+          where: { id: upload.id },
+          data: {
+            status: 'CLAIMED',
+            claimedBizType: 'ORGANIZATION_LOGO',
+            claimedBizId: organizationId,
+            claimedAt: new Date(),
+            expiresAt: null,
+          },
+        });
+      }
+    } else if (token != null) {
+      throw new AuthError(400, 'BAD_REQUEST', 'Logo上传凭证必须与ORG_LOGO图片objectKey一起提交');
+    }
+    await tx.uploadedFile.updateMany({
+      where: {
+        status: 'CLAIMED',
+        claimedBizType: 'ORGANIZATION_LOGO',
+        claimedBizId: organizationId,
+        ...(key ? { objectKey: { not: key } } : {}),
+      },
+      data: {
+        status: 'RELEASED',
+        expiresAt: new Date(Date.now() + this.config.releasedExpireSeconds * 1000),
+      },
+    });
+    return key ? this.storage.accessUrl(key, 2147483647) : value;
+  }
   /** 调用方持有本人认证锁；认领、资料写入与旧头像释放必须在同一事务。 */
   async syncAvatar(tx: Tx, userId: string, ownerUid: string, value: string, token?: string | null) {
     let key: string | null = value.startsWith('avatar/') ? validObjectKey(value) : null;

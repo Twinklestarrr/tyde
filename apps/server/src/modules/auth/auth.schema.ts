@@ -314,7 +314,7 @@ const operationDescriptions: Record<string, string> = {
   switchRole:
     '只修改当前有效会话的selectedRole，不重新签发令牌，不影响其他会话；刷新令牌保留角色。',
   createOrganization:
-    '须有效登录且当前角色EXPERT。组织、本人ACTIVE/OWNER关系及可选营业执照认领同事务；创建即ACTIVE/APPROVED，无人工审核；允许多组织。名称或信用代码重复409，失败全部回滚；重复同名提交不会重复创建。',
+    '须有效登录且当前角色EXPERT。组织、本人ACTIVE/OWNER关系及可选营业执照/Logo认领同事务；Logo使用本人登录上传的ORG_LOGO图片，以logoUrl=objectKey及logoUploadToken提交。创建即ACTIVE/APPROVED，无人工审核；允许多组织。名称或信用代码重复409，失败全部回滚；重复同名提交不会重复创建。',
   logout:
     '撤销当前访问令牌对应的会话及其刷新令牌，Web/Electron 页面同时清除登录 Cookie；不影响其他客户端会话。没有会话也成功，data 为 null。',
 };

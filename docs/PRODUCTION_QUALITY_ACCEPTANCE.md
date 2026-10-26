@@ -12,14 +12,14 @@
 
 所有入口保留旧POST方法、字段名、Result包络及会话/来源校验，响应带`Cache-Control: no-store`。Swagger登记中文字段说明、枚举、空值/默认规则及完整可校验示例。
 
-| POST路径（前缀/api/v1） | 请求与行为 |
-| --- | --- |
-| `/project-personnel/production/list` | projectId，reportDateStart/End（分别默认上海当天，首尾含当天，最多31天），keyword、accountTypes、organizationIds（UUID）、dataSources、current/size。按成员及日期分页，日期倒序、成员ID升序。 |
-| `/project-personnel/production/quality/context` | projectId、memberId、reportDate；报量ID升序、质量ID倒序，平铺全部历史。无质量的报量保留一条质量字段为null的明细，无报量返回空items。 |
-| `/project-personnel/production/quality/save` | projectId、memberId、reportDate、1—100条items（outputReportId、inspectedQuantity、qualifiedQuantity、unqualifiedReason）。每次均追加，可在一批中多次填写同一报量；整批成功或全部回滚。请求上限512KiB，超限413。 |
-| `/production-tasks/acceptance/context` | projectId、subtaskId；仅当前主策略官或招募协作可读，协作canSubmit固定false，EXPERT及NAV无弹窗读取权限。 |
-| `/production-tasks/acceptance/submit` | projectId、subtaskId、actualQuantity、actualDeliveryDate、quantityAdjustmentRemark；仅当前主策略官提交。 |
-| `/production-tasks/acceptance/review` | projectId、subtaskId、decision（ACCEPT/REJECT）、rejectReason；仅本人创建项目的NAVIGATOR审核，不向PM或EXPERT开放。 |
+| POST路径（前缀/api/v1）                         | 请求与行为                                                                                                                                                                                                      |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/project-personnel/production/list`            | projectId，reportDateStart/End（分别默认上海当天，首尾含当天，最多31天），keyword、accountTypes、organizationIds（UUID）、dataSources、current/size。按成员及日期分页，日期倒序、成员ID升序。                   |
+| `/project-personnel/production/quality/context` | projectId、memberId、reportDate；报量ID升序、质量ID倒序，平铺全部历史。无质量的报量保留一条质量字段为null的明细，无报量返回空items。                                                                            |
+| `/project-personnel/production/quality/save`    | projectId、memberId、reportDate、1—100条items（outputReportId、inspectedQuantity、qualifiedQuantity、unqualifiedReason）。每次均追加，可在一批中多次填写同一报量；整批成功或全部回滚。请求上限512KiB，超限413。 |
+| `/production-tasks/acceptance/context`          | projectId、subtaskId；仅当前主策略官或招募协作可读，协作canSubmit固定false，EXPERT及NAV无弹窗读取权限。                                                                                                         |
+| `/production-tasks/acceptance/submit`           | projectId、subtaskId、actualQuantity、actualDeliveryDate、quantityAdjustmentRemark；仅当前主策略官提交。                                                                                                        |
+| `/production-tasks/acceptance/review`           | projectId、subtaskId、decision（ACCEPT/REJECT）、rejectReason；仅本人创建项目的NAVIGATOR审核，不向PM或EXPERT开放。                                                                                              |
 
 日生产/质量读取：当前主策略官全项目，招募协作负责人只读；EXPERT须为当前有效组织主管或该接单项目负责人，仅限职责组织。普通成员不能用本人报量权限取得人员管理或质检权限。个人来源与组织来源按成员来源隔离；筛选组织与权限组织取交集。离组、职责撤销后重新请求立即失权。
 

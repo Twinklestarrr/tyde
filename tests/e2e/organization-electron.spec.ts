@@ -308,7 +308,14 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
     ).toBeVisible();
     await page.getByRole('button', { name: '批量导入成员', exact: true }).click();
     const importing = page.getByRole('dialog', { name: '批量导入成员', exact: true });
-    await importing.getByLabel(/^成员清单\s*\*?\s*$/).fill('桌面导入成员,13800000002,全职,成员');
+    await importing.getByLabel('第 1 行 姓名', { exact: true }).fill('桌面导入成员');
+    await importing.getByLabel('第 1 行 手机号', { exact: true }).fill('13800000002');
+    await importing.getByLabel('第 1 行 人员属性', { exact: true }).click();
+    await importing.getByRole('option', { name: '全职', exact: true }).click();
+    await importing.getByLabel('第 1 行 组织角色', { exact: true }).click();
+    await importing.getByRole('option', { name: '管理员', exact: true }).click();
+    await importing.getByLabel('第 1 行 组织角色', { exact: true }).click();
+    await importing.getByRole('option', { name: '成员', exact: true }).click();
     await importing.getByRole('button', { name: '确认导入', exact: true }).click();
     await expect(importing.getByText(/已成功导入 1 位成员/)).toBeVisible();
     await importing.getByRole('button', { name: '关闭', exact: true }).click();

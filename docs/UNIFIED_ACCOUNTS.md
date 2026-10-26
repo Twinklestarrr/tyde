@@ -27,7 +27,7 @@ API-124：`POST /api/v1/organizations`，有效登录且当前EXPERT。Cookie/�
 }
 ```
 
-资料和校验沿原组织注册：name必填、trim后非空且唯一；信用代码、营业执照、简介、Logo、标签均选填。营业执照仍使用`businessLicense:{objectKey,uploadToken}`，先通过`POST /files/upload`上传BUSINESS_LICENSE，不能提交敏感公开URL。上传凭证默认24小时有效，可匿名预上传；持有正确凭证才能一次性认领。无新认证审核要求。
+资料和校验沿原组织注册：name必填、trim后非空且唯一；信用代码、营业执照、简介、Logo、标签均选填。营业执照仍使用`businessLicense:{objectKey,uploadToken}`，先通过`POST /files/upload`上传BUSINESS_LICENSE，不能提交敏感公开URL。营业执照凭证默认24小时有效，可匿名预上传；持有正确凭证才能一次性认领。Logo本地图片使用登录后的`ORG_LOGO`上传，在创建时提交`logoUrl=objectKey`和`logoUploadToken`；校验本人上传及凭证，认领与组织/主管关系创建同事务，返回可展示URL。Logo也兼容外部HTTPS地址。无新认证审核要求。
 
 组织写为ACTIVE、verifyStatus=APPROVED（创建即生效，不代表人工认证）；创建人的关系固定ACTIVE/OWNER，不能由客户端指定管理员或创建人。组织、关系及营业执照认领同事务，失败全部回滚；已有账号和注册凭证不属于该事务。成功返回组织完整资料，结构与GET /organizations的data相同，含id/name/position/status/verifyStatus等中文Swagger字段。
 

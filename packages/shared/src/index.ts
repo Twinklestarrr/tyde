@@ -76,9 +76,12 @@ export interface OrganizationDetail {
 export const AVATAR_MAX_BYTES = 10 * 1024 * 1024;
 export const AVATAR_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] as const;
 export const AVATAR_ACCEPT = AVATAR_EXTENSIONS.map((extension) => `.${extension}`).join(',');
-export interface AvatarUploadResult {
+/** 组织 Logo 与头像使用同一图片策略。 */
+export const ORG_LOGO_MAX_BYTES = AVATAR_MAX_BYTES;
+export const ORG_LOGO_ACCEPT = AVATAR_ACCEPT;
+export interface ImageUploadResult {
   objectKey: string;
-  /** 一次性认领凭证，仅内存保留，保存时传 avatarUploadToken。 */
+  /** 一次性认领凭证，仅内存保留，随对应资料保存请求提交。 */
   uploadToken: string;
   url: string | null;
   sensitive: false;
@@ -88,6 +91,8 @@ export interface AvatarUploadResult {
   contentType: string;
   fileHash: string;
 }
+export type AvatarUploadResult = ImageUploadResult;
+export type OrganizationLogoUploadResult = ImageUploadResult;
 export interface AuthApi extends OrganizationApi, WorkbenchApi {
   health(): Promise<{ status: string }>;
   sendCode(input: SmsSendInput): Promise<string>;
@@ -98,6 +103,7 @@ export interface AuthApi extends OrganizationApi, WorkbenchApi {
   switchRole(role: BusinessRole): Promise<{ selectedRole: BusinessRole; roles: BusinessRole[] }>;
   updateProfile(input: UserProfileUpdateInput): Promise<AuthUser>;
   uploadAvatar(file: File): Promise<AvatarUploadResult>;
+  uploadOrganizationLogo(file: File): Promise<OrganizationLogoUploadResult>;
   uploadBusinessLicense(file: File): Promise<BusinessLicenseUploadResult>;
   /** 成功会撤销全部会话，调用方须返回登录页。 */
   changePassword(newPassword: string, confirmNewPassword: string): Promise<void>;

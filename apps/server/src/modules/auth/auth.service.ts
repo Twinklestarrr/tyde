@@ -606,6 +606,8 @@ export class AuthService {
       throw new AuthError(403, 'FORBIDDEN', '请切换到执行专家角色创建组织');
     const name = input.name.trim();
     if (!name) throw invalid('组织名称不能为空');
+    if (input.logoUploadToken != null && input.logoUrl == null)
+      throw invalid('logoUploadToken必须与logoUrl一起提交');
     try {
       return await this.db.$transaction(async (tx) => {
         await lock(tx, session.user.phoneE164);
@@ -646,6 +648,17 @@ export class AuthService {
             where: { id: org.id },
             data: { businessLicenseKey: file.objectKey },
           });
+        }
+        if (input.logoUrl != null) {
+          org.logoUrl =
+            (await this.files.syncOrganizationLogo(
+              tx,
+              org.id,
+              session.user.uid,
+              input.logoUrl.trim(),
+              input.logoUploadToken,
+            )) || null;
+          await tx.organization.update({ where: { id: org.id }, data: { logoUrl: org.logoUrl } });
         }
         await tx.userOrgRel.create({
           data: {

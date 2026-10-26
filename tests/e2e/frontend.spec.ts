@@ -392,7 +392,9 @@ for (const [mode, origin] of [
         { name: 'fixture_session', value: 'active', url: origin, httpOnly: true, sameSite: 'Lax' },
       ]);
     await sessionRead(page, () => page.goto(origin + '/'));
-    await expect(page.getByText('会话服务暂不可用', { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toHaveCount(0);
     expect(requests).toHaveLength(1);
     await sessionRead(page, () => page.getByRole('button', { name: '重试', exact: true }).click());
@@ -404,7 +406,9 @@ for (const [mode, origin] of [
       () => page.getByRole('button', { name: '重试', exact: true }).click(),
       true,
     );
-    await expect(page.getByText('连接服务失败，请检查网络后重试', { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
+    ).toBeVisible();
     expect(requests).toHaveLength(3);
     state.currentNetworkFailure = false;
     state.currentStatus = 200;
@@ -425,14 +429,18 @@ for (const [mode, origin] of [
         { name: 'fixture_session', value: 'active', url: origin, httpOnly: true, sameSite: 'Lax' },
       ]);
     await sessionRead(page, () => page.goto(origin + '/'), true);
-    await expect(page.getByText('连接服务失败，请检查网络后重试', { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
     expect(requests).toHaveLength(1);
 
     state.currentNetworkFailure = false;
     state.currentStatus = 503;
     await sessionRead(page, () => page.clock.runFor(3_000));
-    await expect(page.getByText('会话服务暂不可用', { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toHaveCount(0);
     expect(requests).toHaveLength(2);
 
@@ -450,7 +458,9 @@ for (const [mode, origin] of [
     await pauseClock(page);
     state.currentStatus = 503;
     await sessionRead(page, () => page.goto(origin + '/'));
-    await expect(page.getByText('会话服务暂不可用', { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
+    ).toBeVisible();
     expect(requests).toHaveLength(1);
     state.currentStatus = 401;
     await sessionRead(page, () => page.clock.runFor(3_000));
@@ -472,9 +482,7 @@ for (const [mode, origin] of [
       state.currentInvalidResponse = invalidResponse;
       await sessionRead(page, () => page.goto(origin + '/'));
       await expect(
-        page.getByText(invalidResponse ? '服务响应格式异常，请稍后重试' : '会话服务暂不可用', {
-          exact: true,
-        }),
+        page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
       ).toBeVisible();
       await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
       expect(requests).toHaveLength(1);
@@ -803,7 +811,9 @@ test('Electron DEV 会话503自动恢复为401，进入登录页后停止轮询'
       env,
     });
     const page = await app.firstWindow();
-    await expect(page.getByText('会话服务暂不可用', { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
+    ).toBeVisible();
     expect(backend.requests).toHaveLength(1);
     backend.state.currentStatus = 200;
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
@@ -849,13 +859,17 @@ test('Electron DEV 已登录会话503自动恢复为200，成功后停止轮询�
     backend.state.currentStatus = 503;
     const beforeRecovery = backend.requests.length;
     await page.reload();
-    await expect(page.getByText('会话服务暂不可用', { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
     expect(backend.requests.slice(beforeRecovery)).toHaveLength(1);
     backend.state.currentStatus = 200;
     await expectWelcome(page);
+    await expect(page).toHaveURL(/#\/$/);
     expect(backend.requests.slice(beforeRecovery)).toHaveLength(2);
     await page.waitForTimeout(3500);
+    await expect(page).toHaveURL(/#\/$/);
     const recoveryRequests = backend.requests.slice(beforeRecovery);
     expect(recoveryRequests).toHaveLength(2);
     expectSessionReads(recoveryRequests);
@@ -981,4 +995,137 @@ test('Electron macOS 真实重复启动重开或恢复窗口，激活事件不�
       await rm(profile, { recursive: true, force: true });
     }
   }
+});
+
+const internalRenderFailure = 'INTERNAL_RENDER_FIXTURE 当前角色必须在登录后的工作台中使用';
+
+/** 只修改隔离 DEV 页面的模块响应，触发真正的 React/路由错误边界。 */
+async function interceptRenderFailure(page: Page, sourcePath: string, functionStart: string) {
+  let failing = true;
+  await page.route(`**/src/${sourcePath}*`, async (route) => {
+    const response = await route.fetch();
+    if (!failing) return route.fulfill({ response });
+    const source = await response.text();
+    const injected = source.replace(
+      functionStart,
+      `${functionStart}\nthrow new Error(${JSON.stringify(internalRenderFailure)});`,
+    );
+    expect(injected).not.toBe(source);
+    await route.fulfill({ response, body: injected });
+  });
+  return () => {
+    failing = false;
+  };
+}
+
+for (const [mode, width, action] of [
+  ['桌面', 1280, '返回首页'],
+  ['手机', 375, '重试'],
+] as const) {
+  test(`页面错误恢复 DEV ${mode} 业务渲染异常隐藏内部错误并支持${action}`, async ({ page }) => {
+    const origin = 'http://127.0.0.1:5177';
+    const { state, requests } = await webBackend(page);
+    state.signedIn = true;
+    await page
+      .context()
+      .addCookies([
+        { name: 'fixture_session', value: 'active', url: origin, httpOnly: true, sameSite: 'Lax' },
+      ]);
+    const recover = await interceptRenderFailure(
+      page,
+      'modules/profile/ProfilePage.tsx',
+      'export function ProfilePage({ user }) {',
+    );
+    if (width === 375)
+      await page.route('**/src/app/App.tsx*', async (route) => {
+        const response = await route.fetch();
+        const source = await response.text();
+        // 只在隔离响应延迟认证匹配，覆盖旧工作台页面尚未卸载的导航窗口。
+        const delayed = source.replace(
+          'path: "/auth",',
+          'path: "/auth", beforeLoad: () => new Promise((resolve) => setTimeout(resolve, 1500)),',
+        );
+        expect(delayed).not.toBe(source);
+        await route.fulfill({ response, body: delayed });
+      });
+    await page.setViewportSize({ width, height: 812 });
+    await page.goto(origin + '/index.html?context=recovery#/profile');
+    await expect(
+      page.getByRole('heading', { name: '页面暂时无法显示', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: '账户菜单', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '返回首页', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '重试', exact: true })).toBeVisible();
+    await expect(page.locator('body')).not.toContainText(internalRenderFailure);
+    await expect(page.locator('body')).not.toContainText('当前角色必须在登录后的工作台中使用');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+      true,
+    );
+    if (width === 375)
+      await page.screenshot({ path: 'artifacts/page-recovery-profile-mobile.png' });
+    recover();
+    const loaded = page.waitForEvent('domcontentloaded');
+    await page.getByRole('button', { name: action, exact: true }).click();
+    await loaded;
+    if (action === '返回首页') {
+      await expect(page).toHaveURL(/#\/$/);
+      await expectWelcome(page);
+    } else {
+      await expect(page).toHaveURL(/#\/profile$/);
+      await expect(page.getByRole('tablist', { name: '个人中心设置', exact: true })).toBeVisible();
+      await page.evaluate(() => {
+        window.location.hash = '/auth';
+      });
+      await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
+      await page.goBack();
+      await expect(page.getByRole('tablist', { name: '个人中心设置', exact: true })).toBeVisible();
+    }
+    expect(new URL(page.url()).pathname).toBe('/index.html');
+    expect(new URL(page.url()).searchParams.get('context')).toBe('recovery');
+    expect(state.signedIn).toBe(true);
+    expect(
+      (await page.context().cookies(origin)).some(
+        (cookie) => cookie.name === 'fixture_session' && cookie.value === 'active',
+      ),
+    ).toBe(true);
+    expect(
+      requests.filter(({ path }) => ['/api/v1/auth/logout', '/api/v1/auth/login'].includes(path)),
+    ).toHaveLength(0);
+    await expect(page.getByRole('heading', { name: '页面暂时无法显示', exact: true })).toHaveCount(
+      0,
+    );
+  });
+}
+
+test('页面错误恢复 DEV 工作台角色上下文异常展示独立恢复页，返回首页保留会话', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5177';
+  const { state, requests } = await webBackend(page);
+  state.signedIn = true;
+  await page
+    .context()
+    .addCookies([
+      { name: 'fixture_session', value: 'active', url: origin, httpOnly: true, sameSite: 'Lax' },
+    ]);
+  const recover = await interceptRenderFailure(
+    page,
+    'layouts/WorkspaceView.tsx',
+    'export function useWorkspaceView() {',
+  );
+  await page.setViewportSize({ width: 1280, height: 812 });
+  await page.goto(origin + '/#/profile');
+  await expect(page.getByRole('heading', { name: '页面暂时无法显示', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '账户菜单', exact: true })).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText(internalRenderFailure);
+  await expect(page.locator('body')).not.toContainText('当前角色必须在登录后的工作台中使用');
+  await page.screenshot({ path: 'artifacts/page-recovery-workspace-desktop.png' });
+  recover();
+  const loaded = page.waitForEvent('domcontentloaded');
+  await page.getByRole('button', { name: '返回首页', exact: true }).click();
+  await loaded;
+  await expect(page).toHaveURL(/#\/$/);
+  await expectWelcome(page);
+  expect(state.signedIn).toBe(true);
+  expect(
+    requests.filter(({ path }) => ['/api/v1/auth/logout', '/api/v1/auth/login'].includes(path)),
+  ).toHaveLength(0);
 });

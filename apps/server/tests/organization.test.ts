@@ -5,6 +5,7 @@ import { readConfig } from '../src/config/index.js';
 import { AuthService, type AuthPrincipal } from '../src/modules/auth/auth.service.js';
 import { AuthError } from '../src/modules/auth/auth.error.js';
 import { OrganizationService } from '../src/modules/organizations/organization.service.js';
+import type { FileRegistryService } from '../src/modules/files/file-registry.service.js';
 import {
   organizationQuery,
   organizationUpdateBody,
@@ -50,7 +51,15 @@ function setup(position = 'OWNER', joinStatus = 'ACTIVE', exists = true) {
     $transaction: async (fn: (value: typeof tx) => unknown) => fn(tx),
     $disconnect: vi.fn(),
   } as unknown as PrismaClient;
-  return { db, tx, service: new OrganizationService(db) };
+  const files = {
+    syncOrganizationLogo: vi.fn(async (_tx, _organizationId, _ownerUid, value: string) => value),
+  };
+  return {
+    db,
+    tx,
+    files,
+    service: new OrganizationService(db, files as unknown as FileRegistryService),
+  };
 }
 test.each(['OWNER', 'ADMIN'])(
   'organization detail permits %s in each participating state',
@@ -124,6 +133,38 @@ test('organization partial updates preserve null/omitted fields, trim, clear and
   await service.update({ orgId, description: '  简介  ' }, identity);
   expect(tx.organization.update.mock.calls[1]![0].data).toMatchObject({ description: '简介' });
   expect(tx.organization.update.mock.calls[1]![0].data).not.toHaveProperty('logoUrl');
+});
+test('organization logo claim follows owner checks and rejects an unattached upload token', async () => {
+  const { service, tx, files } = setup();
+  await expect(service.update({ orgId, logoUploadToken: 'token' }, identity)).rejects.toMatchObject(
+    { status: 400 },
+  );
+  expect(files.syncOrganizationLogo).not.toHaveBeenCalled();
+  files.syncOrganizationLogo.mockResolvedValue('https://storage.example/org-logo/test.png');
+  await service.update({ orgId, logoUrl: 'org-logo/test.png', logoUploadToken: 'token' }, identity);
+  expect(files.syncOrganizationLogo).toHaveBeenCalledWith(
+    tx,
+    orgId,
+    identity.uid,
+    'org-logo/test.png',
+    'token',
+  );
+  expect(tx.organization.update.mock.calls[0]![0].data.logoUrl).toBe(
+    'https://storage.example/org-logo/test.png',
+  );
+  const forbidden = setup('ADMIN');
+  await expect(
+    forbidden.service.update(
+      { orgId, logoUrl: 'org-logo/test.png', logoUploadToken: 'token' },
+      identity,
+    ),
+  ).rejects.toMatchObject({ status: 403 });
+  expect(forbidden.files.syncOrganizationLogo).not.toHaveBeenCalled();
+  files.syncOrganizationLogo.mockRejectedValue(new AuthError(409, 'DUPLICATE', '图片已过期'));
+  await expect(
+    service.update({ orgId, logoUrl: 'org-logo/expired.png', logoUploadToken: 'token' }, identity),
+  ).rejects.toMatchObject({ status: 409 });
+  expect(tx.organization.update).toHaveBeenCalledOnce();
 });
 test('organization HTTP enforces Bearer/cookie isolation, validation and Result serialization', async () => {
   const { service, db } = setup();

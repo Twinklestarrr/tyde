@@ -185,7 +185,7 @@ pnpm test:integration
 
 GET `/organizations?orgId=<UUID>`、POST `/organizations/update` 沿用旧路径、方法、字段名和Result。查询允许指定组织的OWNER/ADMIN，关系须为ACTIVE、EXIT_APPROVING或PENDING_LEAVE；编辑只允许ACTIVE的OWNER。权限读取`UserOrgRel`，不使用EXPERT登录身份或用户单组织兼容字段。无关系403；有合格关系但组织不存在/已逻辑删除404。
 
-编辑请求 `{ "orgId": "00000000-0000-4000-8000-000000000002", "description": "新简介", "logoUrl": "logos/example.png" }`。description最多1000字符、logoUrl最多500字符；未传/null保持原值，trim后空串清空，额外字段400。角色检查与资料更新同事务锁组织行并记uid审计。Logo只存地址，不做文件认领或归属校验。响应保留旧组织资料字段，营业执照返回objectKey；认证/运行状态读数据库真实值。完整示例和所有字段说明见Swagger。
+编辑请求 `{ "orgId": "00000000-0000-4000-8000-000000000002", "description": "新简介", "logoUrl": "https://example.com/logo.png" }`。description最多1000字符、logoUrl最多500字符；未传/null保持原值，trim后空串清空，额外字段400。角色检查与资料更新同事务锁组织行并记uid审计。Logo支持登录后以`bizType=ORG_LOGO`上传图片，创建或更新组织时提交`logoUrl=objectKey`与`logoUploadToken=uploadToken`；验证当前账号上传、凭证、类型和对象后认领，保存并返回可展示URL。组织已认领的图片可重复保存，包括主管交接后的新主管；替换/清空时释放旧图并设置回收时间，认领/释放与组织写入同事务。外部HTTPS地址兼容保留；不远程抓取。响应保留旧组织资料字段，营业执照返回objectKey；认证/运行状态读数据库真实值。完整示例和所有字段说明见Swagger。
 
 新迁移`20261019020000_organization_memberships`已由用户应用专用测试库；155项单测通过，2026-10-19 13:23:17用户本机45项集成全部通过，缺列/缺表阻塞已解除。开发/部署库尚未应用本次迁移，真实运行后端HTTP联调待完成。UUID/ISO UTC时间仍与旧数值ID/本地日期格式不同，待兼容验收。后续成员管理及多组织回补见下节；该段为组织资料批次记录，审批/导入后续已接入，完整进度以[03任务](../../backend-migration/03-organizations/todoTask.md)为准。
 

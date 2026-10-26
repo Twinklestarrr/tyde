@@ -22,6 +22,21 @@ const licenseReceipt = {
   fileHash: createHash('sha256').update(picture).digest('hex'),
 };
 
+const logoBytes = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJ0lEQVR4nGNQXLr9PyWYYXAZQCwYxAbgM4zkQBw1YDAYQFZSHhADAOlp0x+yOzC+AAAAAElFTkSuQmCC',
+  'base64',
+);
+const logoReceipt = {
+  ...licenseReceipt,
+  size: logoBytes.length,
+  fileHash: createHash('sha256').update(logoBytes).digest('hex'),
+  objectKey: 'org-logo/2026/10/23/0123456789abcdef0123456789abcdef.png',
+  uploadToken: 'l'.repeat(43),
+  url: 'https://logos.example.test/new-organization-logo.png',
+  sensitive: false,
+  fileName: 'organization-logo.png',
+};
+
 const initialUser: AuthUser = {
   id: '00000000-0000-4000-8000-000000000001',
   uid: 'CREATE10001',
@@ -79,6 +94,9 @@ async function createBackend(
   };
   const requests: RequestLog[] = [];
   const pendingUpload: { release?: () => Promise<void> } = {};
+  await page.route('https://logos.example.test/**', (route) =>
+    route.fulfill({ contentType: 'image/png', body: picture }),
+  );
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -115,11 +133,12 @@ async function createBackend(
       return reply({ selectedRole: 'EXPERT', roles: [...roles] });
     }
     if (path === '/api/v1/files/upload' && request.method() === 'POST') {
-      if (!holdUpload) return reply(licenseReceipt);
+      const receipt = entry.form.bizType === 'ORG_LOGO' ? logoReceipt : licenseReceipt;
+      if (!holdUpload) return reply(receipt);
       return new Promise<void>((resolve, reject) => {
         pendingUpload.release = async () => {
           try {
-            await reply(licenseReceipt);
+            await reply(receipt);
             resolve();
           } catch (error) {
             reject(error);
@@ -137,13 +156,20 @@ async function createBackend(
         unifiedCreditCode: body?.unifiedCreditCode ? String(body.unifiedCreditCode) : null,
         description: body?.description ? String(body.description) : null,
         businessLicenseUrl: body?.businessLicense ? licenseReceipt.objectKey : null,
-        logoUrl: body?.logoUrl ? String(body.logoUrl) : null,
+        logoUrl:
+          body?.logoUrl === logoReceipt.objectKey
+            ? logoReceipt.url
+            : body?.logoUrl
+              ? String(body.logoUrl)
+              : null,
         expertiseTags: Array.isArray(body?.expertiseTags) ? body.expertiseTags.map(String) : [],
         verifyStatus: 'APPROVED',
         status: 'ACTIVE',
         position: 'OWNER',
         createdAt: timestamp,
       };
+      if (body?.logoUrl === logoReceipt.objectKey)
+        expect(body.logoUploadToken).toBe(logoReceipt.uploadToken);
       state.user.organization = { ...state.organization, joinStatus: 'ACTIVE' };
       state.user.organizations = [
         {
@@ -261,7 +287,7 @@ test('营业执照只上传一次，创建冲突后手动重试复用认领凭�
   state.createStatus = 409;
   await openCreate(page);
   await page.getByLabel('组织名称').fill('带营业执照的组织');
-  await page.locator('input[type=file]').setInputFiles({
+  await page.locator('#create-org-license').setInputFiles({
     name: licenseReceipt.fileName,
     mimeType: 'image/png',
     buffer: picture,
@@ -290,7 +316,7 @@ test('营业执照上传等待期间离开页面，返回上传结果后不再�
   const { requests, releaseUpload } = await createBackend(page, false, 'EXPERT', true);
   await openCreate(page);
   await page.getByLabel('组织名称').fill('离开页面后不应创建');
-  await page.locator('input[type=file]').setInputFiles({
+  await page.locator('#create-org-license').setInputFiles({
     name: licenseReceipt.fileName,
     mimeType: 'image/png',
     buffer: picture,
@@ -311,7 +337,7 @@ test('错误格式的营业执照可清除，随后只凭组织名称创建', as
   const { requests } = await createBackend(page);
   await openCreate(page);
   await page.getByLabel('组织名称').fill('清除无效文件后的组织');
-  await page.locator('input[type=file]').setInputFiles({
+  await page.locator('#create-org-license').setInputFiles({
     name: 'invalid.svg',
     mimeType: 'image/svg+xml',
     buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
@@ -343,4 +369,98 @@ test('窄屏创建页控件可见且无横向溢出', async ({ page }) => {
     document: document.documentElement.scrollWidth,
   }));
   expect(width.document).toBeLessThanOrEqual(width.viewport);
+});
+
+test('创建组织 Logo 与证照分别上传认领，冲突后重试复用两份凭证', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const { state, requests } = await createBackend(page);
+  state.createStatus = 409;
+  await openCreate(page);
+  await page.getByLabel('组织名称').fill('本地 Logo 与证照的组织');
+  const logo = page.getByRole('region', { name: '组织 Logo', exact: true });
+  await expect(logo.getByRole('button', { name: '使用图片链接', exact: true })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  await logo
+    .getByLabel('选择组织 Logo 图片', { exact: true })
+    .setInputFiles({ name: logoReceipt.fileName, mimeType: 'image/png', buffer: logoBytes });
+  await page
+    .getByLabel('营业执照（选填）', { exact: true })
+    .setInputFiles({ name: licenseReceipt.fileName, mimeType: 'image/png', buffer: picture });
+  await expect(logo.getByRole('img', { name: '组织 Logo 预览', exact: true })).toHaveAttribute(
+    'src',
+    /^blob:/,
+  );
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(0);
+  await logo.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: 'artifacts/organization-logo-create-upload-mobile.png',
+    fullPage: false,
+  });
+  const save = page.locator('form').getByRole('button', { name: '创建组织', exact: true });
+  await save.click();
+  await expect(page.getByText('组织名称或统一社会信用代码已被占用', { exact: true })).toBeVisible();
+  expect(
+    calls(requests, '/api/v1/files/upload')
+      .map((request) => request.form.bizType)
+      .sort(),
+  ).toEqual(['BUSINESS_LICENSE', 'ORG_LOGO']);
+  expect(calls(requests, '/api/v1/organizations')[0]?.body).toEqual({
+    name: '本地 Logo 与证照的组织',
+    logoUrl: logoReceipt.objectKey,
+    logoUploadToken: logoReceipt.uploadToken,
+    businessLicense: {
+      objectKey: licenseReceipt.objectKey,
+      uploadToken: licenseReceipt.uploadToken,
+    },
+  });
+  state.createStatus = 200;
+  await save.click();
+  await expect(page).toHaveURL(/#\/organization$/);
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(2);
+  expect(calls(requests, '/api/v1/organizations')).toHaveLength(2);
+  expect(calls(requests, '/api/v1/organizations')[1]?.body).toEqual(
+    calls(requests, '/api/v1/organizations')[0]?.body,
+  );
+  expect(state.organization?.logoUrl).toBe(logoReceipt.url);
+});
+
+test('创建组织 Logo 拦截非法图片，清除后仍可使用收起的 HTTPS 备选地址', async ({ page }) => {
+  const { requests } = await createBackend(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openCreate(page);
+  await page.getByLabel('组织名称').fill('HTTPS Logo 组织');
+  const logo = page.getByRole('region', { name: '组织 Logo', exact: true });
+  await logo.getByLabel('选择组织 Logo 图片', { exact: true }).setInputFiles({
+    name: 'invalid.svg',
+    mimeType: 'image/svg+xml',
+    buffer: Buffer.from('<svg/>'),
+  });
+  await expect(
+    logo.getByText('请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片', { exact: true }),
+  ).toBeVisible();
+  await page.locator('form').getByRole('button', { name: '创建组织', exact: true }).click();
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(0);
+  expect(calls(requests, '/api/v1/organizations')).toHaveLength(0);
+  await logo.getByRole('button', { name: '清除图片', exact: true }).click();
+  await expect(
+    page.getByText('请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片', { exact: true }),
+  ).toHaveCount(0);
+  await expect(logo.getByLabel('Logo 地址', { exact: true })).not.toBeVisible();
+  await logo.getByRole('button', { name: '使用图片链接', exact: true }).click();
+  await logo
+    .getByLabel('Logo 地址', { exact: true })
+    .fill('https://logos.example.test/existing.png');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+    true,
+  );
+  await page.screenshot({ path: 'artifacts/organization-logo-create-mobile.png', fullPage: true });
+  await page.locator('form').getByRole('button', { name: '创建组织', exact: true }).click();
+  await expect(page).toHaveURL(/#\/organization$/);
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(0);
+  expect(calls(requests, '/api/v1/organizations')[0]?.body).toEqual({
+    name: 'HTTPS Logo 组织',
+    logoUrl: 'https://logos.example.test/existing.png',
+  });
 });

@@ -33,6 +33,7 @@ import { readConfig } from '../src/config/index.js';
 import { digest } from '../src/modules/auth/security.js';
 import { ProjectManagerService } from '../src/modules/projects/project-manager.service.js';
 import { ProjectCreationService } from '../src/modules/projects/project-creation.service.js';
+import { OrganizationService } from '../src/modules/organizations/organization.service.js';
 const testEnv = parseEnv(readFileSync(new URL('../.env.test', import.meta.url), 'utf8'));
 const autoTestSecret = 'auto-integration-dedicated-secret-32';
 const config = readConfig({ ...testEnv, AUTO_GRADING_HMAC_SECRET: autoTestSecret });
@@ -85,6 +86,171 @@ const registration = {
   realName: '小明',
   email: 'test@example.com',
 };
+async function organizationLogoUpload(headers: Record<string, string>) {
+  const response = await uploadHttp(
+    [imagePart(), { name: 'bizType', content: 'ORG_LOGO' }],
+    headers,
+  );
+  expect(response.statusCode, response.body).toBe(200);
+  return response.json().data as { objectKey: string; uploadToken: string; url: string };
+}
+test('organization logo create and update preserve claimed images through retries, ownership transfer and replacement', async () => {
+  const f = await memberFixture();
+  const member = await f.add();
+  const first = await organizationLogoUpload(f.headers);
+  const created = await post(
+    '/organizations',
+    { name: '图片创建组织', logoUrl: first.objectKey, logoUploadToken: first.uploadToken },
+    f.headers,
+  );
+  expect(created.statusCode, created.body).toBe(200);
+  const orgId: string = created.json().data.id;
+  expect(created.json().data.logoUrl).toBe(first.url);
+  expect(
+    await db.uploadedFile.findUniqueOrThrow({ where: { objectKey: first.objectKey } }),
+  ).toMatchObject({
+    status: 'CLAIMED',
+    claimedBizType: 'ORGANIZATION_LOGO',
+    claimedBizId: orgId,
+    expiresAt: null,
+  });
+  const second = await organizationLogoUpload(member.headers);
+  expect(
+    (
+      await post(
+        '/organizations/update',
+        { orgId, logoUrl: second.objectKey, logoUploadToken: second.uploadToken },
+        f.headers,
+      )
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await post(
+        '/organizations/update',
+        { orgId, logoUrl: first.objectKey, logoUploadToken: first.uploadToken },
+        f.headers,
+      )
+    ).statusCode,
+  ).toBe(200);
+  await db.$transaction(async (tx) => {
+    await tx.userOrgRel.update({
+      where: { userId_orgId: { userId: f.owner.id, orgId } },
+      data: { position: 'MEMBER' },
+    });
+    await tx.userOrgRel.create({
+      data: {
+        userId: member.user.id,
+        uid: member.user.uid,
+        orgId,
+        position: 'OWNER',
+        joinStatus: 'ACTIVE',
+      },
+    });
+  });
+  expect(
+    (await post('/organizations/update', { orgId, logoUrl: first.url }, member.headers)).statusCode,
+  ).toBe(200);
+  expect(
+    (
+      await post(
+        '/organizations/update',
+        { orgId, logoUrl: second.objectKey, logoUploadToken: second.uploadToken },
+        member.headers,
+      )
+    ).statusCode,
+  ).toBe(200);
+  expect(
+    await db.uploadedFile.findUniqueOrThrow({ where: { objectKey: first.objectKey } }),
+  ).toMatchObject({ status: 'RELEASED', expiresAt: expect.any(Date) });
+  expect(
+    (
+      await app.inject({ url: `/api/v1/organizations?orgId=${orgId}`, headers: member.headers })
+    ).json().data.logoUrl,
+  ).toBe(second.url);
+  expect(
+    (await post('/organizations/update', { orgId, logoUrl: '' }, member.headers)).statusCode,
+  ).toBe(200);
+  expect(
+    await db.uploadedFile.findUniqueOrThrow({ where: { objectKey: second.objectKey } }),
+  ).toMatchObject({ status: 'RELEASED', expiresAt: expect.any(Date) });
+});
+test('organization logo claims and releases roll back when organization update or creation fails', async () => {
+  const f = await memberFixture();
+  const first = await organizationLogoUpload(f.headers);
+  expect(
+    (
+      await post(
+        '/organizations/update',
+        { orgId: f.orgId, logoUrl: first.objectKey, logoUploadToken: first.uploadToken },
+        f.headers,
+      )
+    ).statusCode,
+  ).toBe(200);
+  const second = await organizationLogoUpload(f.headers);
+  const failing = (delegate: 'organization' | 'userOrgRel', method: 'update' | 'create') =>
+    new Proxy(db, {
+      get(target, property) {
+        if (property === '$transaction')
+          return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+            db.$transaction((tx) =>
+              callback(
+                new Proxy(tx, {
+                  get(transaction, key) {
+                    if (key === delegate)
+                      return new Proxy(transaction[delegate], {
+                        get(model, operation) {
+                          if (operation === method)
+                            return async () => {
+                              throw new Error('injected organization logo persistence failure');
+                            };
+                          const value = Reflect.get(model, operation);
+                          return typeof value === 'function' ? value.bind(model) : value;
+                        },
+                      });
+                    return Reflect.get(transaction, key);
+                  },
+                }),
+              ),
+            );
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  const auth = new AuthService(db, config, undefined, registry);
+  const accessToken = f.headers.authorization!.slice('Bearer '.length);
+  await expect(
+    new OrganizationService(failing('organization', 'update'), registry).update(
+      { orgId: f.orgId, logoUrl: second.objectKey, logoUploadToken: second.uploadToken },
+      await auth.authenticate(accessToken, 'desktop'),
+    ),
+  ).rejects.toThrow('injected organization logo persistence failure');
+  expect(await db.organization.findUniqueOrThrow({ where: { id: f.orgId } })).toMatchObject({
+    logoUrl: first.url,
+  });
+  expect(
+    await db.uploadedFile.findUniqueOrThrow({ where: { objectKey: first.objectKey } }),
+  ).toMatchObject({ status: 'CLAIMED', expiresAt: null });
+  expect(
+    await db.uploadedFile.findUniqueOrThrow({ where: { objectKey: second.objectKey } }),
+  ).toMatchObject({ status: 'UPLOADED' });
+  await expect(
+    new AuthService(
+      failing('userOrgRel', 'create'),
+      config,
+      undefined,
+      registry,
+    ).createOrganization(accessToken, 'desktop', {
+      name: '图片回滚组织',
+      logoUrl: second.objectKey,
+      logoUploadToken: second.uploadToken,
+    }),
+  ).rejects.toThrow('injected organization logo persistence failure');
+  expect(await db.organization.count({ where: { name: '图片回滚组织' } })).toBe(0);
+  expect(
+    await db.uploadedFile.findUniqueOrThrow({ where: { objectKey: second.objectKey } }),
+  ).toMatchObject({ status: 'UPLOADED' });
+});
 async function post(path: string, payload?: unknown, headers: Record<string, string> = web) {
   return app.inject({ method: 'POST', url: `/api/v1${path}`, payload, headers });
 }

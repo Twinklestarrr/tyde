@@ -28,7 +28,10 @@ import {
   type WorkbenchAttendanceDay,
   type WorkbenchAttendanceMonth,
   type WorkbenchHolidayMonth,
-  type AvatarUploadResult,
+  type WorkbenchAttendanceApplicationResult,
+  type WorkbenchScheduleResult,
+  type WorkbenchAttendanceUpdateResult,
+  type ImageUploadResult,
   type BusinessLicenseUploadResult,
   type BusinessRole,
   type UserProfileUpdateInput,
@@ -625,6 +628,7 @@ export function createHttpAuth(
       !integer(value.flowVersionNo) ||
       !(value.currentNode === null || integer(value.currentNode, 1)) ||
       !inEnum(value.status, flows) ||
+      !(value.canWithdraw === undefined || typeof value.canWithdraw === 'boolean') ||
       !(value.formData === null || record(value.formData))
     )
       invalidResponse();
@@ -755,6 +759,59 @@ export function createHttpAuth(
       invalidResponse();
     return value as unknown as WorkbenchHolidayMonth;
   }
+  const uuid = (value: unknown) =>
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  const attendanceVersion = (value: unknown) => integer(value) && Number(value) <= 2147483647;
+  const attendanceDate = (value: unknown): value is string => {
+    if (
+      typeof value !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+      Number(value.slice(0, 4)) < 1900
+    )
+      return false;
+    const date = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  };
+  const attendanceTime = (value: unknown): value is string =>
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2} ([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(value) &&
+    attendanceDate(value.slice(0, 10));
+  const onlyKeys = (value: Record<string, unknown>, keys: string[]) =>
+    Object.keys(value).every((key) => keys.includes(key));
+  function invalidAttendanceInput(): never {
+    throw new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: '排班或考勤参数不完整，请检查日期、时段和版本后重试',
+    });
+  }
+  function workbenchAttendanceApplication(value: unknown): WorkbenchAttendanceApplicationResult {
+    if (
+      !record(value) ||
+      !uuid(value.applicationId) ||
+      !strings(value, ['flowNo', 'appliedAt']) ||
+      !strings(value, ['finishedAt', 'leaveStartAt', 'leaveEndAt'], true) ||
+      !attendanceVersion(value.flowVersionNo) ||
+      !(value.versionNo === null || attendanceVersion(value.versionNo)) ||
+      !(value.dailyId === null || integer(value.dailyId, 1)) ||
+      (value.versionNo === null) !== (value.dailyId === null) ||
+      !attendanceDate(value.attendanceDate) ||
+      !inEnum(value.status, flows) ||
+      !inEnum(value.applicationType, ['LEAVE', 'CORRECTION']) ||
+      value.businessType !== `ATTENDANCE_${value.applicationType}` ||
+      !inEnum(value.finalStatus, attendanceManualStatuses) ||
+      (value.applicationType === 'LEAVE'
+        ? value.finalStatus !== 'LEAVE' ||
+          !attendanceTime(value.leaveStartAt) ||
+          !attendanceTime(value.leaveEndAt) ||
+          !value.leaveStartAt.startsWith(`${value.attendanceDate} `) ||
+          !value.leaveEndAt.startsWith(`${value.attendanceDate} `) ||
+          value.leaveStartAt >= value.leaveEndAt
+        : value.finalStatus === 'LEAVE' || value.leaveStartAt !== null || value.leaveEndAt !== null)
+    )
+      invalidResponse();
+    return value as unknown as WorkbenchAttendanceApplicationResult;
+  }
   const avatarMime: Record<string, string> = {
     jpg: 'image/jpeg',
     jpeg: 'image/jpeg',
@@ -763,7 +820,12 @@ export function createHttpAuth(
     bmp: 'image/bmp',
     webp: 'image/webp',
   };
-  function avatarUploaded(value: unknown, file: File, extension: string): AvatarUploadResult {
+  function imageUploaded(
+    value: unknown,
+    file: File,
+    extension: string,
+    directory: 'avatar' | 'org-logo',
+  ): ImageUploadResult {
     if (
       !record(value) ||
       !strings(value, [
@@ -779,7 +841,8 @@ export function createHttpAuth(
       value.extension !== extension ||
       value.size !== file.size ||
       value.contentType !== avatarMime[extension] ||
-      !/^avatar\/\d{4}\/\d{2}\/\d{2}\/[a-f0-9]{32}\.(jpg|jpeg|png|gif|bmp|webp)$/.test(
+      !(value.objectKey as string).startsWith(`${directory}/`) ||
+      !/^(avatar|org-logo)\/\d{4}\/\d{2}\/\d{2}\/[a-f0-9]{32}\.(jpg|jpeg|png|gif|bmp|webp)$/.test(
         value.objectKey as string,
       ) ||
       !(value.objectKey as string).endsWith(`.${extension}`) ||
@@ -787,7 +850,41 @@ export function createHttpAuth(
       !/^[a-f0-9]{64}$/.test(value.fileHash as string)
     )
       invalidResponse();
-    return value as unknown as AvatarUploadResult;
+    return value as unknown as ImageUploadResult;
+  }
+  async function uploadPublicImage(
+    file: File,
+    bizType: 'AVATAR' | 'ORG_LOGO',
+  ): Promise<ImageUploadResult> {
+    const fileName = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
+    const extension = fileName.includes('.') ? fileName.split('.').at(-1)!.toLowerCase() : '';
+    if (!(AVATAR_EXTENSIONS as readonly string[]).includes(extension) || !file.size)
+      throw new ApiError(400, {
+        code: 'VALIDATION_ERROR',
+        message: '请选择 JPG、JPEG、PNG、GIF、BMP 或 WebP 图片',
+      });
+    if (file.size > AVATAR_MAX_BYTES)
+      throw new ApiError(413, {
+        code: 'PAYLOAD_TOO_LARGE',
+        message: `${bizType === 'AVATAR' ? '头像' : 'Logo'}图片最大 10 MiB`,
+      });
+    const declaredType = file.type.split(';')[0]?.trim().toLowerCase();
+    if (
+      declaredType &&
+      declaredType !== 'application/octet-stream' &&
+      declaredType !== avatarMime[extension]
+    )
+      throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '图片类型与扩展名不匹配' });
+    const body = new FormData();
+    body.append('bizType', bizType);
+    body.append('category', 'IMAGE');
+    body.append('file', file);
+    return imageUploaded(
+      await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+      file,
+      extension,
+      bizType === 'AVATAR' ? 'avatar' : 'org-logo',
+    );
   }
   function businessLicenseUploaded(
     value: unknown,
@@ -1036,33 +1133,178 @@ export function createHttpAuth(
         ),
         input.month,
       ),
-    uploadAvatar: async (file) => {
-      const fileName = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
-      const extension = fileName.includes('.') ? fileName.split('.').at(-1)!.toLowerCase() : '';
-      if (!(AVATAR_EXTENSIONS as readonly string[]).includes(extension) || !file.size)
-        throw new ApiError(400, {
-          code: 'VALIDATION_ERROR',
-          message: '请选择 JPG、JPEG、PNG、GIF、BMP 或 WebP 图片',
-        });
-      if (file.size > AVATAR_MAX_BYTES)
-        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '头像图片最大 10 MiB' });
-      const declaredType = file.type.split(';')[0]?.trim().toLowerCase();
+    batchMySchedules: async (input) => {
       if (
-        declaredType &&
-        declaredType !== 'application/octet-stream' &&
-        declaredType !== avatarMime[extension]
+        !record(input) ||
+        !onlyKeys(input, ['schedules', 'overwrite', 'timezone', 'idempotencyKey']) ||
+        typeof input.idempotencyKey !== 'string' ||
+        !input.idempotencyKey.trim() ||
+        input.idempotencyKey.length > 128 ||
+        typeof input.overwrite !== 'boolean' ||
+        !(
+          input.timezone == null ||
+          (typeof input.timezone === 'string' && input.timezone.length <= 64)
+        ) ||
+        !Array.isArray(input.schedules) ||
+        !input.schedules.length ||
+        input.schedules.length > 366
       )
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '图片类型与扩展名不匹配' });
-      const body = new FormData();
-      body.append('bizType', 'AVATAR');
-      body.append('category', 'IMAGE');
-      body.append('file', file);
-      return avatarUploaded(
-        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
-        file,
-        extension,
-      );
+        invalidAttendanceInput();
+      try {
+        new Intl.DateTimeFormat('en', { timeZone: input.timezone?.trim() || 'Asia/Shanghai' });
+      } catch {
+        invalidAttendanceInput();
+      }
+      const dates = new Set<string>();
+      const shiftTime = (value: unknown): value is string =>
+        typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value);
+      for (const day of input.schedules) {
+        if (
+          !record(day) ||
+          !onlyKeys(day, ['scheduleDate', 'dayType', 'startTime', 'endTime']) ||
+          !attendanceDate(day.scheduleDate) ||
+          dates.has(day.scheduleDate) ||
+          !inEnum(day.dayType, ['WORK', 'REST']) ||
+          (day.dayType === 'REST'
+            ? day.startTime != null || day.endTime != null
+            : !shiftTime(day.startTime) ||
+              !shiftTime(day.endTime) ||
+              `${day.startTime}:00`.slice(0, 8) >= `${day.endTime}:00`.slice(0, 8))
+        )
+          invalidAttendanceInput();
+        dates.add(day.scheduleDate);
+      }
+      const { idempotencyKey, ...body } = input;
+      const data = await request('/users/me/schedules/batch', body, 'PUT', true, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+      if (
+        !record(data) ||
+        !strings(data, ['batchNo']) ||
+        !integers(data, ['createdCount', 'updatedCount', 'skippedCount']) ||
+        !Array.isArray(data.conflicts) ||
+        data.skippedCount !== data.conflicts.length ||
+        Number(data.createdCount) + Number(data.updatedCount) + Number(data.skippedCount) !==
+          dates.size ||
+        (input.overwrite && data.skippedCount !== 0)
+      )
+        invalidResponse();
+      const conflicts = new Set<string>();
+      for (const conflict of data.conflicts) {
+        if (
+          !record(conflict) ||
+          !attendanceDate(conflict.scheduleDate) ||
+          !dates.has(conflict.scheduleDate) ||
+          conflicts.has(conflict.scheduleDate) ||
+          !integer(conflict.scheduleId, 1) ||
+          !attendanceVersion(conflict.versionNo)
+        )
+          invalidResponse();
+        conflicts.add(conflict.scheduleDate);
+      }
+      return data as unknown as WorkbenchScheduleResult;
     },
+    applyMyAttendance: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, [
+          'orgId',
+          'attendanceDate',
+          'applicationType',
+          'finalStatus',
+          'reason',
+          'versionNo',
+          'dailyId',
+          'leaveStartAt',
+          'leaveEndAt',
+        ]) ||
+        !uuid(input.orgId) ||
+        !attendanceDate(input.attendanceDate) ||
+        !inEnum(input.applicationType, ['LEAVE', 'CORRECTION']) ||
+        !inEnum(input.finalStatus, attendanceManualStatuses) ||
+        typeof input.reason !== 'string' ||
+        !input.reason.trim() ||
+        input.reason.trim().length > 1000 ||
+        !(input.versionNo === null || attendanceVersion(input.versionNo)) ||
+        !(input.dailyId == null || integer(input.dailyId, 1)) ||
+        (input.applicationType === 'LEAVE'
+          ? input.finalStatus !== 'LEAVE' ||
+            !attendanceTime(input.leaveStartAt) ||
+            !attendanceTime(input.leaveEndAt) ||
+            !input.leaveStartAt.startsWith(`${input.attendanceDate} `) ||
+            !input.leaveEndAt.startsWith(`${input.attendanceDate} `) ||
+            input.leaveStartAt >= input.leaveEndAt
+          : input.finalStatus === 'LEAVE' || input.leaveStartAt != null || input.leaveEndAt != null)
+      )
+        invalidAttendanceInput();
+      const data = workbenchAttendanceApplication(
+        await request('/organizations/attendance/apply', input, 'POST', true),
+      );
+      if (
+        data.status !== 'PENDING' ||
+        data.finishedAt !== null ||
+        data.attendanceDate !== input.attendanceDate ||
+        data.applicationType !== input.applicationType ||
+        data.finalStatus !== input.finalStatus ||
+        data.versionNo !== input.versionNo ||
+        (input.dailyId != null && data.dailyId !== input.dailyId) ||
+        data.leaveStartAt !== (input.leaveStartAt ?? null) ||
+        data.leaveEndAt !== (input.leaveEndAt ?? null)
+      )
+        invalidResponse();
+      return data;
+    },
+    withdrawMyAttendance: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['applicationId', 'flowVersionNo']) ||
+        !uuid(input.applicationId) ||
+        !attendanceVersion(input.flowVersionNo)
+      )
+        invalidAttendanceInput();
+      const data = workbenchAttendanceApplication(
+        await request('/organizations/attendance/withdraw', input, 'POST', true),
+      );
+      if (
+        data.applicationId !== input.applicationId ||
+        data.status !== 'WITHDRAWN' ||
+        data.finishedAt === null ||
+        data.flowVersionNo !== input.flowVersionNo + 1
+      )
+        invalidResponse();
+      return data;
+    },
+    updateMyAttendance: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['orgId', 'dailyId', 'finalStatus', 'manualRemark', 'versionNo']) ||
+        !uuid(input.orgId) ||
+        !integer(input.dailyId, 1) ||
+        !attendanceVersion(input.versionNo) ||
+        !inEnum(input.finalStatus, attendanceManualStatuses) ||
+        !(
+          input.manualRemark == null ||
+          (typeof input.manualRemark === 'string' && input.manualRemark.length <= 1000)
+        )
+      )
+        invalidAttendanceInput();
+      const data = await request('/organizations/attendance/update', input, 'POST', true);
+      if (
+        !record(data) ||
+        data.id !== input.dailyId ||
+        data.versionNo !== input.versionNo + 1 ||
+        data.finalStatus !== input.finalStatus ||
+        !inEnum(data.beforeStatus, attendanceStatuses, true) ||
+        data.manualOverride !== true ||
+        data.manualRemark !== (input.manualRemark?.trim() || null) ||
+        !strings(data, ['correctedBy', 'correctedAt']) ||
+        !integer(data.adjustmentId, 1)
+      )
+        invalidResponse();
+      return data as unknown as WorkbenchAttendanceUpdateResult;
+    },
+    uploadAvatar: (file) => uploadPublicImage(file, 'AVATAR'),
+    uploadOrganizationLogo: (file) => uploadPublicImage(file, 'ORG_LOGO'),
     uploadBusinessLicense: async (file) => {
       const fileName = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
       const extension = fileName.includes('.') ? fileName.split('.').at(-1)!.toLowerCase() : '';

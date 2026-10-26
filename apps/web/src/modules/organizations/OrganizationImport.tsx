@@ -6,15 +6,22 @@ import {
   type AuthUser,
   type OrganizationImportInput,
   type OrganizationImportResult,
+  type OrganizationImportRowError,
 } from '@tyde/shared';
-import { Download, Upload, UsersRound } from 'lucide-react';
+import { Download, FileSpreadsheet, Upload, UsersRound } from 'lucide-react';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import { FileUploadField } from '@/components/ui/shared/FileUploadField';
 import { FormField } from '@/components/ui/shared/FormField';
 import { SegmentedControl } from '@/components/ui/shared/SegmentedControl';
 import { api } from '@/services/api';
+import { OrganizationImportTable } from './OrganizationImportTable';
+import {
+  emptyRow,
+  serializeRows,
+  validateMemberRows,
+  type MemberImportRow,
+} from './member-import-table';
 import {
   OrganizationDialog,
   employmentLabels,
@@ -38,10 +45,10 @@ export function OrganizationImport(props: OrganizationImportProps) {
 function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
   const [open, setOpen] = useState(false);
   const [source, setSource] = useState<'text' | 'file'>('text');
-  const [memberText, setMemberText] = useState('');
+  const [rows, setRows] = useState<MemberImportRow[]>([emptyRow()]);
   const [file, setFile] = useState<File | null>(null);
-  const [fileRevision, setFileRevision] = useState(0);
   const [fieldError, setFieldError] = useState('');
+  const [draftErrors, setDraftErrors] = useState<OrganizationImportRowError[]>([]);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState('');
   const [result, setResult] = useState<OrganizationImportResult | null>(null);
@@ -70,6 +77,7 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
   function changedDraft() {
     idempotencyKey.current = crypto.randomUUID();
     setFieldError('');
+    setDraftErrors([]);
     setError(null);
     setNotice('');
     setResult(null);
@@ -85,7 +93,6 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
         nextFile.size > 50 * 1024 * 1024)
     ) {
       setFile(null);
-      setFileRevision((value) => value + 1);
       setFieldError('请选择非空 CSV、XLS 或 XLSX 文件，文件最大 50 MiB');
       return;
     }
@@ -123,10 +130,26 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
   async function submitImport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitted.current) return;
-    const text = memberText.trim();
+    let text = '';
+    try {
+      if (source === 'text') text = serializeRows(rows);
+    } catch (failure) {
+      setFieldError(failure instanceof Error ? failure.message : '请检查成员表格内容');
+      return;
+    }
     if ((source === 'text' && !text) || (source === 'file' && !file)) {
       setFieldError(source === 'text' ? '请填写至少一位成员的信息' : '请选择成员表格');
       return;
+    }
+    if (source === 'text') {
+      const errors = validateMemberRows(rows);
+      setDraftErrors(errors);
+      if (errors.length) {
+        setError(null);
+        setResult(null);
+        setFieldError('请修正表格中的标记项后再导入');
+        return;
+      }
     }
     submitted.current = true;
     setBusy(true);
@@ -141,9 +164,8 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
       });
       if (mounted.current) {
         setResult(imported);
-        setMemberText('');
+        setRows([emptyRow()]);
         setFile(null);
-        setFileRevision((value) => value + 1);
         idempotencyKey.current = crypto.randomUUID();
         setNotice(
           `已成功导入 ${imported.createdCount} 位成员。新建账号首次成功登录后激活，不生成默认密码。`,
@@ -176,13 +198,13 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
       {open && (
         <OrganizationDialog
           title="批量导入成员"
+          wide
           busy={busy || template.isPending}
           onClose={() => setOpen(false)}
         >
           <form className="space-y-[16px]" onSubmit={(event) => void submitImport(event)}>
-            <p className="text-[var(--color-text-secondary)]">
-              每批最多 500
-              人，任一成员校验失败时整批不导入。新账号没有默认密码，首次成功登录后激活。
+            <p className="text-[13px] leading-[22px] text-[var(--color-text-secondary)]">
+              可直接粘贴成员名单，或按模板上传表格。每批最多 500 人，校验通过后整批导入。
             </p>
             <div className="flex flex-wrap gap-[8px]">
               <Button
@@ -212,7 +234,7 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
               value={source}
               disabled={busy}
               options={[
-                { value: 'text', label: '填写成员清单' },
+                { value: 'text', label: '粘贴或填写' },
                 { value: 'file', label: '上传表格' },
               ]}
               onValueChange={(value) => {
@@ -221,54 +243,89 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
               }}
             />
             {source === 'text' ? (
-              <FormField
-                controlId="organization-import-text"
-                label="成员清单"
-                required
-                error={fieldError}
-                description="每行依次填写：姓名、手机号、人员属性、组织角色、入组日期；姓名、手机号及人员属性必填。支持中文/英文逗号，角色留空默认成员，日期留空默认上海当天。"
-              >
-                {({ invalid, describedBy }) => (
-                  <Textarea
-                    id="organization-import-text"
-                    className="min-h-[160px] font-mono"
-                    value={memberText}
-                    disabled={busy}
-                    placeholder="示例成员,13800000001,全职,成员"
-                    aria-invalid={invalid || undefined}
-                    aria-describedby={describedBy}
-                    onChange={(event) => {
-                      changedDraft();
-                      setMemberText(event.target.value);
-                    }}
-                  />
+              <div className="space-y-[8px]">
+                <OrganizationImportTable
+                  rows={rows}
+                  disabled={busy}
+                  rowErrors={draftErrors.length ? draftErrors : (result?.rowErrors ?? [])}
+                  onError={setFieldError}
+                  onChange={(next) => {
+                    changedDraft();
+                    setRows(next);
+                  }}
+                />
+                {fieldError && (
+                  <p role="alert" className="text-[12px] text-destructive">
+                    {fieldError}
+                  </p>
                 )}
-              </FormField>
+              </div>
             ) : (
               <FormField
                 controlId="organization-import-file"
                 label="成员表格"
                 required
                 error={fieldError}
-                description="支持 CSV、XLS、XLSX，文件最大 50 MiB。请按模板格式填写；文件内容由服务端校验。"
+                description="请使用上方模板填写成员信息；支持 CSV、XLS、XLSX，单个文件最大 50 MiB。"
               >
-                {({ invalid, describedBy }) => (
-                  <Input
-                    size="profile"
-                    key={fileRevision}
-                    id="organization-import-file"
-                    type="file"
-                    accept=".csv,.xls,.xlsx"
-                    disabled={busy}
-                    aria-invalid={invalid || undefined}
-                    aria-describedby={describedBy}
-                    onChange={(event) => chooseFile(event.target.files?.[0] ?? null)}
-                  />
-                )}
+                {({ invalid, describedBy }) =>
+                  file ? (
+                    <div className="flex flex-wrap items-center gap-[12px] rounded-[12px] border border-border bg-[var(--color-surface-muted)] p-[16px]">
+                      <FileSpreadsheet className="size-[32px] shrink-0 text-primary" aria-hidden />
+                      <div className="min-w-0 flex-1 basis-[140px]">
+                        <p className="break-all text-[13px] font-medium">{file.name}</p>
+                        <p className="mt-[3px] text-[12px] text-muted-foreground">
+                          {file.size < 1024 * 1024
+                            ? `${Math.max(1, Math.ceil(file.size / 1024))} KiB`
+                            : `${(file.size / (1024 * 1024)).toFixed(1)} MiB`}{' '}
+                          · 待导入
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-[8px]">
+                        <FileUploadField
+                          id="organization-import-file"
+                          accept=".csv,.xls,.xlsx"
+                          disabled={busy}
+                          aria-invalid={invalid || undefined}
+                          aria-describedby={describedBy}
+                          onFilesSelected={(files) => chooseFile(files[0] ?? null)}
+                          contentClassName="rounded-[12px]"
+                        >
+                          <Button asChild size="mobileTouch" variant="outline">
+                            <span>更换表格</span>
+                          </Button>
+                        </FileUploadField>
+                        <Button
+                          size="mobileTouch"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => chooseFile(null)}
+                        >
+                          移除表格
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <FileUploadField
+                      id="organization-import-file"
+                      accept=".csv,.xls,.xlsx"
+                      disabled={busy}
+                      aria-invalid={invalid || undefined}
+                      aria-describedby={describedBy}
+                      onFilesSelected={(files) => chooseFile(files[0] ?? null)}
+                      contentClassName="min-h-[180px] flex-col items-center justify-center gap-[12px] rounded-[12px] border-2 border-dashed border-[var(--color-border)] bg-[var(--color-surface-muted)] px-[20px] py-[28px] text-center transition-colors hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-soft)]"
+                    >
+                      <span className="flex size-[48px] items-center justify-center rounded-[12px] bg-card text-primary">
+                        <Upload className="size-[24px]" aria-hidden />
+                      </span>
+                      <span className="text-[14px] font-medium">点击选择表格，或拖拽到这里</span>
+                      <span className="text-[12px] text-muted-foreground">
+                        CSV / XLS / XLSX · 最大 50 MiB
+                      </span>
+                    </FileUploadField>
+                  )
+                }
               </FormField>
-            )}
-            {file && source === 'file' && (
-              <p className="break-all text-[var(--color-text-secondary)]">已选择：{file.name}</p>
             )}
             {notice && (
               <p role="status" className="rounded-[8px] bg-[var(--color-primary-soft)] p-[12px]">
@@ -277,7 +334,10 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
             )}
             {error != null && <ErrorNotice error={error} />}
             {result && <ImportResult result={result} />}
-            <div className="flex flex-wrap justify-end gap-[8px]">
+            <p className="text-[12px] text-muted-foreground">
+              新账号首次成功登录后激活，无需设置默认密码。
+            </p>
+            <div className="flex flex-wrap justify-end gap-[8px] border-t pt-[16px]">
               <Button
                 size="mobileTouch"
                 variant="ghost"
@@ -300,6 +360,17 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
 
 /** 完整展示服务器返回的批次统计、字段错误及成功成员，不生成前端成功记录。 */
 function ImportResult({ result }: { result: OrganizationImportResult }) {
+  const fieldLabels: Record<string, string> = {
+    realName: '姓名',
+    phone: '手机号',
+    employmentType: '人员属性',
+    position: '组织角色',
+    joinedAt: '入组日期',
+    row: '成员信息',
+    members: '成员清单',
+    file: '表格文件',
+    memberText: '成员清单',
+  };
   return (
     <section
       className="space-y-[12px] rounded-[12px] border border-[var(--color-border)] p-[14px]"
@@ -331,7 +402,8 @@ function ImportResult({ result }: { result: OrganizationImportResult }) {
               key={`${row.rowNo}:${row.field}:${index}`}
               className="break-words text-[var(--color-danger)]"
             >
-              {row.rowNo ? `第 ${row.rowNo} 行` : '整批'} · {row.field}：{row.message}
+              {row.rowNo ? `第 ${row.rowNo} 行` : '整批'} · {fieldLabels[row.field] ?? '成员信息'}：
+              {row.message}
               {row.value !== null && row.value !== '' ? `（${row.value}）` : ''}
             </p>
           ))}

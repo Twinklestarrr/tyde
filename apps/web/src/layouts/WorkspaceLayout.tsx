@@ -70,7 +70,9 @@ export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: Au
   }, [open, logout.isPending]);
 
   return (
-    <div className="min-h-svh bg-muted [&_*]:box-border">
+    <div
+      className={`min-h-svh [&_*]:box-border ${pathname === '/profile' ? 'bg-background' : 'bg-muted'}`}
+    >
       <a
         href="#workspace-main"
         className="sr-only z-50 focus:not-sr-only focus:fixed focus:top-[12px] focus:left-[12px] focus:rounded-[8px] focus:bg-card focus:p-[12px]"

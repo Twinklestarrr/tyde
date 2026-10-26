@@ -10,7 +10,6 @@
 
 下方退回修复及本机复验命令为历史证据，已完成，不需再执行。
 
-
 ## 2026-10-26退回修复（历史）
 
 2026-10-26最新11报量退回修复：用户10:26:42定向6项为5通过/1失败/230跳过（共236项，总9.92秒，测试6.48秒），原本机数据库初始化阻塞解除。唯一失败为首次RETURN写卡片时将OUTPUT_REPORT_CORRECTION轮次码误作branchNodeCode，违反既有ProjectRoleNodeSnapshot_valid节点约束；已映射到旧PRODUCTION_TASK(10)，核查恢复OUTPUT_DATA_REVIEW(70)，清理仅限OUTPUT_REPORT来源，保留其他领域同节点及更高优先级快照。无schema/迁移变更。修复后12项生产/报量/OpenAPI定向通过（10:29:26，总3.25秒），类型/变更ESLint/后端build通过。Agent仅复验失败1项仍在beforeEach因127.0.0.1:5432不可达（235跳过，共236项，10:29:33，总3.49秒），修复后业务断言待本机复验。第26迁移所需专用库结构已具备，迁移历史未另查；无需当前专用库再次迁移26或重复已过5项/第一批4项/10/09。保持11，仅复验return, own correction这1项，通过后095—100及088验收回补。515单测前批证据保留，本次新增1条快照约束回归已含12定向；业务Agent继续mock，未操作开发/部署库，不开始12。
@@ -25,21 +24,20 @@ OUTPUT_REPORT_CORRECTION仅作为轮次类型，卡片使用PRODUCTION_TASK（10
 
 以下记录为第二批初次实现历史，迁移及六项全量复验命令现已被上述续做入口替代。
 
-
 2026-10-26：API-089—094已接入，保留已实现待验收；088补齐本人已报量来源、退回修正范围、人数及已接入动作，验收事实/动作仍留095—100之后补齐，088继续部分迁移。业务Agent保持mock，未连接真实业务Agent。
 
 ## 接口契约
 
 全部为`POST /api/v1/production-tasks/`，沿旧方法/路径和字段名，保持统一Result及原会话/来源隔离，`Cache-Control: no-store`。请求、完整嵌套响应、中文说明、枚举及可校验示例已登记Swagger。
 
-| 后缀 | 行为 |
-| --- | --- |
-| `reportable-list` | projectId；仅EXPERT本人有效、实际入项且原准入成立的成员来源，返回IN_PROGRESS任务池及本人被指定任务；没有有效成员返回空数组。 |
-| `member-list` | projectId、subtaskId、keyword、current、size；校验当前主策略官/协作、本人创建项目的NAV或EXPERT本人指定/认领及职责组织范围，分页展开实际指定或认领人员；空池不虚构人员。 |
-| `reports` | projectId、可空subtaskId、reviewStatuses、keyword、reportDateStart/End、current/size；空subtaskId仅查询项目级，不包含子任务级。按同条件计算全量totalReportCount、totalQuantity、pendingCount、returnedCount及page。按日期、ID倒序。 |
-| `report/save` | projectId及1—100条reports；每条沿用subtaskId、memberId、reportDate、quantity、remark。同批全部成功或回滚；整请求上限512KiB，超限413。 |
-| `report/correct` | projectId、reportId、quantity、remark；仅EXPERT，定位原RETURNED记录修正，不允许替换成员、日期或层级。 |
-| `report/review` | projectId、可空subtaskId、action、reportIds、reason；VERIFY指定ID须全部PENDING，省略/null/空数组只核准当前层级、当前职责内全部PENDING；RETURN须恰好1条和非空原因。 |
+| 后缀              | 行为                                                                                                                                                                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reportable-list` | projectId；仅EXPERT本人有效、实际入项且原准入成立的成员来源，返回IN_PROGRESS任务池及本人被指定任务；没有有效成员返回空数组。                                                                                                        |
+| `member-list`     | projectId、subtaskId、keyword、current、size；校验当前主策略官/协作、本人创建项目的NAV或EXPERT本人指定/认领及职责组织范围，分页展开实际指定或认领人员；空池不虚构人员。                                                             |
+| `reports`         | projectId、可空subtaskId、reviewStatuses、keyword、reportDateStart/End、current/size；空subtaskId仅查询项目级，不包含子任务级。按同条件计算全量totalReportCount、totalQuantity、pendingCount、returnedCount及page。按日期、ID倒序。 |
+| `report/save`     | projectId及1—100条reports；每条沿用subtaskId、memberId、reportDate、quantity、remark。同批全部成功或回滚；整请求上限512KiB，超限413。                                                                                               |
+| `report/correct`  | projectId、reportId、quantity、remark；仅EXPERT，定位原RETURNED记录修正，不允许替换成员、日期或层级。                                                                                                                               |
+| `report/review`   | projectId、可空subtaskId、action、reportIds、reason；VERIFY指定ID须全部PENDING，省略/null/空数组只核准当前层级、当前职责内全部PENDING；RETURN须恰好1条和非空原因。                                                                  |
 
 - 报量查询：当前主策略官全项目；招募协作负责人只读；有效组织主管和具体接单项目负责人按组织职责范围；普通专家仅本人当前有效成员来源。NAV不参与报量查询/核查。组织关系失效立即撤销组织权限，不借用其他组织职责。
 - 保存仅EXPERT本人或具体接单来源的有效项目负责人代报。组织主管身份本身不授予代报权限。memberId省略时须唯一定位本人有效成员；存在多来源时返回400，须明确memberId，不猜选组织身份。

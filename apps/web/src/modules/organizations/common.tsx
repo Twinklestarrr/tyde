@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 export const orgControlClass =
   'h-[40px] w-full min-w-0 rounded-[8px] border border-input bg-card px-[12px] text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 max-[640px]:h-[44px]';
@@ -21,11 +22,13 @@ export function OrganizationDialog({
   title,
   onClose,
   busy = false,
+  wide = false,
   children,
 }: {
   title: string;
   onClose: () => void;
   busy?: boolean;
+  wide?: boolean;
   children: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -43,7 +46,10 @@ export function OrganizationDialog({
         event.preventDefault();
         if (!busy) onClose();
       }}
-      className="fixed inset-0 m-auto max-h-[calc(100svh-32px)] w-[calc(100%-32px)] max-w-[680px] overflow-y-auto rounded-[12px] border bg-card p-[20px] text-foreground shadow-xl backdrop:bg-black/40 sm:p-[24px]"
+      className={cn(
+        'fixed inset-0 m-auto max-h-[calc(100svh-32px)] w-[calc(100%-32px)] overflow-y-auto rounded-[12px] border bg-card p-[20px] text-foreground shadow-xl backdrop:bg-black/40 sm:p-[24px]',
+        wide ? 'max-w-[960px]' : 'max-w-[680px]',
+      )}
     >
       <header className="mb-[20px] flex items-center justify-between gap-[16px]">
         <h2 id={titleId} className="m-0 text-[18px] leading-[26px] font-semibold">

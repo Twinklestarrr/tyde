@@ -1,6 +1,6 @@
 import type { OrganizationFlowStatus, OrganizationPage } from './organizations.js';
 
-/** 当前后端本人只读接口；前端工作台视图不作为这些接口的授权依据。 */
+/** 当前后端本人接口；前端工作台视图不作为这些接口的授权依据。 */
 export type WorkbenchPage<T> = OrganizationPage<T>;
 export interface WorkbenchProject {
   assignmentId: number;
@@ -128,6 +128,8 @@ export interface WorkbenchApplication {
   /** 上海墙钟时间，保留服务端格式。 */
   appliedAt: string;
   finishedAt: string | null;
+  /** 兼容服务端可选权限提示；缺省时仍须按业务类型、状态及写接口鉴权判断。 */
+  canWithdraw?: boolean;
 }
 export type WorkbenchAttendanceStatus =
   | 'PRESENT'
@@ -140,6 +142,80 @@ export type WorkbenchAttendanceStatus =
   | 'UNSCHEDULED'
   | 'REVIEW_REQUIRED';
 export type WorkbenchAttendanceCalendarStatus = WorkbenchAttendanceStatus | 'PENDING_ATTENDANCE';
+export type WorkbenchAttendanceManualStatus = Exclude<
+  WorkbenchAttendanceStatus,
+  'UNSCHEDULED' | 'REVIEW_REQUIRED'
+>;
+export interface WorkbenchScheduleRequest {
+  schedules: {
+    scheduleDate: string;
+    dayType: 'WORK' | 'REST';
+    startTime?: string | null;
+    endTime?: string | null;
+  }[];
+  overwrite: boolean;
+  timezone?: string | null;
+  /** 同一草稿重试复用；修改内容后使用新键。 */
+  idempotencyKey: string;
+}
+export interface WorkbenchScheduleResult {
+  batchNo: string;
+  createdCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  conflicts: { scheduleDate: string; scheduleId: number; versionNo: number }[];
+}
+export interface WorkbenchAttendanceApplyInput {
+  orgId: string;
+  attendanceDate: string;
+  applicationType: 'LEAVE' | 'CORRECTION';
+  finalStatus: WorkbenchAttendanceManualStatus;
+  reason: string;
+  /** 月历 dailyVersionNo；无日考勤显式传 null，不使用排班版本。 */
+  versionNo: number | null;
+  dailyId?: number | null;
+  /** 排班时区下 yyyy-MM-dd HH:mm:ss；请假必填，修正省略或 null。 */
+  leaveStartAt?: string | null;
+  leaveEndAt?: string | null;
+}
+export interface WorkbenchAttendanceWithdrawInput {
+  applicationId: string;
+  flowVersionNo: number;
+}
+export interface WorkbenchAttendanceApplicationResult {
+  applicationId: string;
+  flowNo: string;
+  flowVersionNo: number;
+  businessType: 'ATTENDANCE_LEAVE' | 'ATTENDANCE_CORRECTION';
+  applicationType: 'LEAVE' | 'CORRECTION';
+  attendanceDate: string;
+  finalStatus: WorkbenchAttendanceManualStatus;
+  status: OrganizationFlowStatus;
+  versionNo: number | null;
+  dailyId: number | null;
+  leaveStartAt: string | null;
+  leaveEndAt: string | null;
+  appliedAt: string;
+  finishedAt: string | null;
+}
+export interface WorkbenchAttendanceUpdateInput {
+  orgId: string;
+  dailyId: number;
+  finalStatus: WorkbenchAttendanceManualStatus;
+  manualRemark?: string | null;
+  versionNo: number;
+}
+export interface WorkbenchAttendanceUpdateResult {
+  id: number;
+  beforeStatus: WorkbenchAttendanceStatus | null;
+  finalStatus: WorkbenchAttendanceManualStatus;
+  manualOverride: true;
+  manualRemark: string | null;
+  correctedBy: string;
+  correctedAt: string;
+  versionNo: number;
+  adjustmentId: number;
+}
 export interface WorkbenchAttendanceQuery {
   month: string;
   /** 有有效组织时必传；省略仅用于无组织本人作用域。 */
@@ -177,7 +253,7 @@ export interface WorkbenchAttendanceDay {
     finalStatus: Exclude<WorkbenchAttendanceStatus, 'UNSCHEDULED' | 'REVIEW_REQUIRED'>;
     canWithdraw: boolean;
   } | null;
-  /** 如实保留服务端权限提示，本批客户端不提供考勤写操作。 */
+  /** 如实保留服务端权限提示，写入时服务端仍重新校验。 */
   permissions: {
     canApplyLeave: boolean;
     canApplyCorrection: boolean;
@@ -227,4 +303,14 @@ export interface WorkbenchApi {
   ): Promise<WorkbenchPage<WorkbenchApplication>>;
   getMyAttendance(input: WorkbenchAttendanceQuery): Promise<WorkbenchAttendanceMonth>;
   getAttendanceHolidays(input: WorkbenchAttendanceQuery): Promise<WorkbenchHolidayMonth>;
+  batchMySchedules(input: WorkbenchScheduleRequest): Promise<WorkbenchScheduleResult>;
+  applyMyAttendance(
+    input: WorkbenchAttendanceApplyInput,
+  ): Promise<WorkbenchAttendanceApplicationResult>;
+  withdrawMyAttendance(
+    input: WorkbenchAttendanceWithdrawInput,
+  ): Promise<WorkbenchAttendanceApplicationResult>;
+  updateMyAttendance(
+    input: WorkbenchAttendanceUpdateInput,
+  ): Promise<WorkbenchAttendanceUpdateResult>;
 }

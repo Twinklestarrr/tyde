@@ -35,7 +35,7 @@ export const uploadResponse = {
       uploadExample.objectKey,
     ),
     uploadToken: text(
-      '256 位随机一次性认领凭证，仅本次返回；默认 24 小时有效，可由服务端配置。组织创建使用 BUSINESS_LICENSE；头像使用AVATAR，保存资料时以avatarUrl=objectKey及avatarUploadToken=uploadToken关联；业务附件由对应业务认领；不能代替登录或作为查看凭据。',
+      '256 位随机一次性认领凭证，仅本次返回；默认 24 小时有效，可由服务端配置。营业执照使用BUSINESS_LICENSE；组织Logo使用ORG_LOGO，以logoUrl=objectKey及logoUploadToken=uploadToken创建或更新组织时认领。头像使用AVATAR，以avatarUrl=objectKey及avatarUploadToken=uploadToken保存资料时认领；业务附件由对应业务认领；不能代替登录或作为查看凭据。',
       uploadExample.uploadToken,
     ),
     url: {
@@ -88,7 +88,7 @@ export function uploadBody(batch: boolean) {
         : file,
       bizType: {
         ...text(
-          '业务类型，大小写不敏感；省略或空白为 COMMON。BUSINESS_LICENSE=营业执照、ID_CARD=身份证、ORG_LOGO=组织标志、AVATAR=头像、IMAGE=图片、VIDEO=视频、DOCUMENT=文档、EXCEL=表格、JSON=JSON数据、PROJECT_ATTACHMENT=项目附件、ENTRANCE_EXAM_ATTACHMENT=准入考试附件、COMMON=通用文件。除 COMMON 外大类固定，不能用 category 放宽；头像与两种业务附件须登录，关联头像需将objectKey及uploadToken作为avatarUrl和avatarUploadToken提交/users/me/update。',
+          '业务类型，大小写不敏感；省略或空白为 COMMON。BUSINESS_LICENSE=营业执照、ID_CARD=身份证、ORG_LOGO=组织标志、AVATAR=头像、IMAGE=图片、VIDEO=视频、DOCUMENT=文档、EXCEL=表格、JSON=JSON数据、PROJECT_ATTACHMENT=项目附件、ENTRANCE_EXAM_ATTACHMENT=准入考试附件、COMMON=通用文件。除 COMMON 外大类固定，不能用 category 放宽；头像、组织Logo与两种业务附件须登录。Logo以objectKey及uploadToken作为logoUrl和logoUploadToken提交组织创建/更新；头像以avatarUrl和avatarUploadToken提交/users/me/update。',
           'BUSINESS_LICENSE',
         ),
         enum: Object.keys(businesses),

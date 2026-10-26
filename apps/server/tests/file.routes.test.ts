@@ -230,6 +230,25 @@ test('anonymous attachments and foreign origins are denied', async () => {
     await app.close();
   }
 });
+test('organization logo upload requires login and records the uploader with an image preview URL', async () => {
+  const { app, upload, records, storage } = await setup();
+  try {
+    const parts = [image(), { name: 'bizType', content: 'ORG_LOGO' }];
+    expect((await upload(parts)).statusCode).toBe(401);
+    expect(storage.put).not.toHaveBeenCalled();
+    const response = await upload(parts, false, bearer);
+    expect(response.statusCode, response.body).toBe(200);
+    const data = response.json().data;
+    expect(data.url).toContain(`https://storage.example/${data.objectKey}`);
+    expect(records.get(data.objectKey)).toMatchObject({
+      ownerUid: 'owner',
+      bizType: 'ORG_LOGO',
+      status: 'UPLOADED',
+    });
+  } finally {
+    await app.close();
+  }
+});
 test('authenticated owner can proxy own sensitive object, foreign owner is denied; sensitive URL never issued', async () => {
   const { app, upload, records, storage } = await setup();
   try {

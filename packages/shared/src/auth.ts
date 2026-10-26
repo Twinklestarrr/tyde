@@ -384,8 +384,18 @@ export const organizationCreateSchema = Type.Object(
     logoUrl: Type.Optional(
       Type.String({
         maxLength: 512,
-        description: '组织 Logo 地址，选填；该字段不用于营业执照等敏感文件。',
+        description:
+          '组织 Logo 图片地址或 ORG_LOGO objectKey，选填。新上传图片提交objectKey及logoUploadToken，服务端校验本人上传并在创建事务中认领，保存可展示URL；旧外部HTTPS地址兼容保留。该字段不用于营业执照等敏感文件。',
         examples: ['https://example.com/logo.png'],
+      }),
+    ),
+    logoUploadToken: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          '新上传组织Logo的一次性凭证，与logoUrl=objectKey一起提交；来自登录后bizType=ORG_LOGO的图片上传。仅在内存保存，不用于图片查看；错误或他人凭证403，过期或已被其他组织认领409。',
+        examples: ['example-upload-token'],
       }),
     ),
     expertiseTags: Type.Optional(
@@ -415,6 +425,11 @@ export const organizationCreateSchema = Type.Object(
         description: '提供数据标注服务。',
         logoUrl: 'https://example.com/logo.png',
         expertiseTags: ['图像标注'],
+      },
+      {
+        name: '图片示例团队',
+        logoUrl: 'org-logo/2026/10/23/example.png',
+        logoUploadToken: 'example-upload-token',
       },
     ],
   },

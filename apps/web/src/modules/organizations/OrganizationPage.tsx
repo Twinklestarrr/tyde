@@ -23,6 +23,7 @@ import { OrganizationMembers } from './OrganizationMembers';
 import { OrganizationApprovals } from './OrganizationApprovals';
 import { OrganizationImport } from './OrganizationImport';
 import { OrganizationPageHeader } from './OrganizationPageHeader';
+import { OrganizationLogoField, useOrganizationLogo } from './OrganizationLogoField';
 import { OrganizationDialog, joinStatusLabels, positionLabels, shanghaiToday } from './common';
 
 const participating = ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE'];
@@ -349,7 +350,7 @@ function OrganizationCard({
   );
 }
 
-function OrganizationEdit({
+export function OrganizationEdit({
   orgId,
   detail,
   onClose,
@@ -361,9 +362,8 @@ function OrganizationEdit({
   onSuccess: (result: OrganizationUpdateResult) => Promise<void>;
 }) {
   const [description, setDescription] = useState(detail.description ?? '');
-  const [logoUrl, setLogoUrl] = useState(detail.logoUrl ?? '');
   const [error, setError] = useState<unknown>();
-  const [fieldError, setFieldError] = useState('');
+  const logo = useOrganizationLogo(detail.logoUrl ?? '', 500, () => setError(undefined));
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
   return (
@@ -373,30 +373,18 @@ function OrganizationEdit({
         onSubmit={async (event) => {
           event.preventDefault();
           if (inFlight.current) return;
-          const logo = logoUrl.trim();
-          setFieldError('');
-          if (logo && logo !== detail.logoUrl) {
-            try {
-              const parsed = new URL(logo);
-              if (parsed.protocol !== 'https:' || parsed.username || parsed.password)
-                throw new Error();
-            } catch {
-              setFieldError('请输入不含用户名和密码的 HTTPS 图片地址');
-              return;
-            }
-          }
           const input: OrganizationUpdateInput = { orgId };
           if (description.trim() !== (detail.description ?? ''))
             input.description = description.trim();
-          if (logo !== (detail.logoUrl ?? '')) input.logoUrl = logo;
-          if (Object.keys(input).length === 1) {
-            onClose();
-            return;
-          }
           inFlight.current = true;
           setBusy(true);
           setError(undefined);
           try {
+            Object.assign(input, await logo.prepare());
+            if (Object.keys(input).length === 1) {
+              onClose();
+              return;
+            }
             const result = await api.updateOrganization(input);
             await onSuccess(result);
             onClose();
@@ -409,7 +397,7 @@ function OrganizationEdit({
         }}
       >
         <p className="text-[13px] text-[var(--color-neutral-strong)]">
-          组织名称和信用代码由后端维护，当前仅支持简介与 Logo 地址。
+          可以修改组织简介和 Logo；组织名称与信用代码暂不可修改。
         </p>
         <fieldset disabled={busy} className="space-y-[20px]">
           <FormField
@@ -426,27 +414,7 @@ function OrganizationEdit({
               className="text-[13px]"
             />
           </FormField>
-          <FormField
-            controlId="org-logo"
-            label="Logo 地址"
-            error={fieldError}
-            description="仅支持 HTTPS 图片地址；留空可清除。暂不支持本地图片上传。"
-          >
-            {({ invalid, describedBy }) => (
-              <Input
-                id="org-logo"
-                size="profile"
-                maxLength={500}
-                value={logoUrl}
-                aria-invalid={invalid || undefined}
-                aria-describedby={describedBy}
-                onChange={(event) => {
-                  setLogoUrl(event.target.value);
-                  setFieldError('');
-                }}
-              />
-            )}
-          </FormField>
+          <OrganizationLogoField logo={logo} disabled={busy} />
         </fieldset>
         <ErrorNotice error={error} />
         <div className="flex justify-end gap-[8px]">
@@ -462,7 +430,7 @@ function OrganizationEdit({
   );
 }
 
-function SelfDeparture({
+export function SelfDeparture({
   orgId,
   requestKeys,
   onClose,

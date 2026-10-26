@@ -23,8 +23,9 @@ import { AuthFlowProvider, useAuthFlow } from '../modules/auth/AuthFlow';
 import { useSession } from '../hooks/useSession';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { Button } from '../components/ui/button';
+import { PageRecovery } from '../components/PageRecovery';
 
-/** 统一认证布局；离开资料页后销毁一次性注册凭证。 */
+/** 离开注册资料页后销毁一次性凭证；布局由匹配路由决定。 */
 function RootLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { clearRegistration } = useAuthFlow();
@@ -32,12 +33,13 @@ function RootLayout() {
   useEffect(() => {
     if (!registration) clearRegistration();
   }, [registration, clearRegistration]);
-  if (pathname !== '/auth' && !registration)
-    return (
-      <SessionBoundary>
-        <Workspace />
-      </SessionBoundary>
-    );
+  return <Outlet />;
+}
+
+function AuthPageLayout({
+  children,
+  registration = false,
+}: PropsWithChildren<{ registration?: boolean }>) {
   return (
     <AuthLayout registration={registration}>
       <div className="flex min-w-0 flex-col">
@@ -61,17 +63,35 @@ function RootLayout() {
             </Link>
           )}
         </header>
-        <Outlet />
+        {children}
       </div>
     </AuthLayout>
   );
 }
 
+/** Provider 与页面处于同一匹配链，避免导航中途拆掉旧页面的上下文。 */
+function WorkspaceRoute() {
+  return (
+    <SessionBoundary>
+      <Workspace />
+    </SessionBoundary>
+  );
+}
+
 function Workspace() {
-  const { data: user } = useSession();
+  const session = useSession();
+  const user = session.data;
   return user ? (
     <WorkspaceViewProvider key={user.id} user={user}>
       <WorkspaceLayout user={user}>
+        {session.isError && (
+          <div className="mb-[16px] space-y-[8px]">
+            <ErrorNotice error={session.error} />
+            <Button onClick={() => void session.refetch()} loading={session.isFetching}>
+              重试读取账户资料
+            </Button>
+          </div>
+        )}
         <Outlet />
       </WorkspaceLayout>
     </WorkspaceViewProvider>
@@ -81,15 +101,23 @@ function Workspace() {
 /** 会话请求失败时保留错误和重试入口，仅 401 视为未登录。 */
 function SessionBoundary({ children }: PropsWithChildren) {
   const session = useSession();
-  if (session.isPending) return <p role="status">正在恢复登录状态...</p>;
-  if (session.isError)
+  if (session.isPending)
     return (
-      <div className="space-y-4">
-        <ErrorNotice error={session.error} />
-        <Button onClick={() => void session.refetch()} loading={session.isFetching}>
-          重试
-        </Button>
+      <div className="grid min-h-svh place-items-center bg-muted p-[24px]">
+        <p role="status" className="text-[14px] text-[var(--color-neutral-strong)]">
+          正在恢复登录状态...
+        </p>
       </div>
+    );
+  if (session.isError && !session.data)
+    return (
+      <PageRecovery
+        fullPage
+        title="暂时无法加载账户资料"
+        description="请稍后重试，或返回首页重新加载。"
+        onRetry={() => void session.refetch()}
+        loading={session.isFetching}
+      />
     );
   if (!session.data) return <Navigate to="/auth" replace />;
   return children;
@@ -122,49 +150,64 @@ function CurrentOrganizationCreatePage() {
 const rootRoute = createRootRoute({
   component: RootLayout,
   notFoundComponent: () => <Navigate to="/" replace />,
-  errorComponent: ({ error, reset }) => (
-    <>
-      <ErrorNotice error={error} />
-      <Button onClick={reset}>重新加载</Button>
-    </>
-  ),
+  errorComponent: () => <PageRecovery fullPage />,
+});
+const workspaceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: 'workspace',
+  component: WorkspaceRoute,
+  errorComponent: () => <PageRecovery fullPage />,
 });
 const homeRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => workspaceRoute,
   path: '/',
   component: HomePage,
+  errorComponent: () => <PageRecovery />,
 });
 const profileRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => workspaceRoute,
   path: '/profile',
   component: CurrentProfilePage,
+  errorComponent: () => <PageRecovery />,
 });
 const organizationRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => workspaceRoute,
   path: '/organization',
   component: CurrentOrganizationPage,
+  errorComponent: () => <PageRecovery />,
 });
 const organizationCreateRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => workspaceRoute,
   path: '/organization/create',
   component: CurrentOrganizationCreatePage,
+  errorComponent: () => <PageRecovery />,
 });
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/auth',
-  component: LoginPage,
+  component: () => (
+    <AuthPageLayout>
+      <LoginPage />
+    </AuthPageLayout>
+  ),
 });
 const registrationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/register',
-  component: RegisterPage,
+  component: () => (
+    <AuthPageLayout registration>
+      <RegisterPage />
+    </AuthPageLayout>
+  ),
 });
 const router = createRouter({
   routeTree: rootRoute.addChildren([
-    homeRoute,
-    profileRoute,
-    organizationRoute,
-    organizationCreateRoute,
+    workspaceRoute.addChildren([
+      homeRoute,
+      profileRoute,
+      organizationRoute,
+      organizationCreateRoute,
+    ]),
     loginRoute,
     registrationRoute,
   ]),

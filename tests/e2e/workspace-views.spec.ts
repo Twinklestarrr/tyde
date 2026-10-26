@@ -57,9 +57,13 @@ const expertReadPaths = new Set([
 const expertReads = (requests: RecordedRequest[]) =>
   requests.filter((request) => expertReadPaths.has(request.path));
 
-function unscheduledAttendance(month: string, user: AuthUser): WorkbenchAttendanceMonth {
+function unscheduledAttendance(
+  month: string,
+  user: AuthUser,
+  presentDate: string | null,
+): WorkbenchAttendanceMonth {
   const [year, monthNumber] = month.split('-').map(Number);
-  return {
+  const attendance: WorkbenchAttendanceMonth = {
     organizationId: typeof user.organization?.id === 'string' ? user.organization.id : null,
     independentSchedule: !user.organization,
     month,
@@ -107,6 +111,30 @@ function unscheduledAttendance(month: string, user: AuthUser): WorkbenchAttendan
       canWithdraw: false,
     },
   };
+  const presentDay = attendance.days.find((day) => day.scheduleDate === presentDate);
+  if (presentDay) {
+    attendance.summary.presentCount = 1;
+    Object.assign(presentDay, {
+      scheduleId: 31,
+      calendarStatus: 'PRESENT',
+      dayType: 'WORK',
+      shiftStartAt: `${presentDate} 09:00:00`,
+      shiftEndAt: `${presentDate} 18:00:00`,
+      timezone: 'Asia/Shanghai',
+      sourceType: 'MANUAL',
+      status: 'ACTIVE',
+      versionNo: 1,
+      dailyId: 41,
+      autoStatus: 'PRESENT',
+      finalStatus: 'PRESENT',
+      firstClockInAt: `${presentDate} 09:00:00`,
+      lastClockOutAt: `${presentDate} 18:00:00`,
+      reviewRequired: false,
+      manualOverride: false,
+      dailyVersionNo: 1,
+    });
+  }
+  return attendance;
 }
 const assignmentFixture: WorkbenchAssignmentDetail = {
   assignmentId: 41,
@@ -182,6 +210,7 @@ async function backend(page: Page, desktop: boolean) {
     projectsStatus: 200,
     detailStatus: 403,
     attendanceStatus: 200,
+    presentDate: null as string | null,
     holidayStatus: 200,
     applicationsStatus: 200,
     switchStatus: 200,
@@ -190,12 +219,16 @@ async function backend(page: Page, desktop: boolean) {
   const pendingSwitch: { release?: () => Promise<void> } = {};
   const requests: RecordedRequest[] = [];
   const sessionResponses: Pick<AuthUser, 'role' | 'roles' | 'selectedRole'>[] = [];
-  await page
-    .context()
-    .addCookies([
-      { name: 'view_session', value: 'active', url: origin, httpOnly: true, sameSite: 'Lax' },
-    ]);
-  await page.route('**/api/v1/**', async (route) => {
+  await page.context().addCookies([
+    {
+      name: 'view_session',
+      value: 'active',
+      url: origin,
+      httpOnly: true,
+      sameSite: 'Lax',
+    },
+  ]);
+  await page.context().route('**/api/v1/**', async (route) => {
     const request = route.request();
     const headers = await request.allHeaders();
     const url = new URL(request.url());
@@ -286,7 +319,7 @@ async function backend(page: Page, desktop: boolean) {
     if (path === '/api/v1/organizations/attendance' && request.method() === 'GET')
       return reply(
         state.attendanceStatus === 200
-          ? unscheduledAttendance(url.searchParams.get('month')!, state.user)
+          ? unscheduledAttendance(url.searchParams.get('month')!, state.user, state.presentDate)
           : null,
         state.attendanceStatus,
         {},
@@ -393,6 +426,8 @@ for (const [mode, desktop] of [
         .getByLabel('当前角色', { exact: true }),
     ).toHaveText('当前角色 · 领航员');
     await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveCount(0);
+    for (const name of ['我的项目', '排班考勤', '组织与申请'])
+      await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(0);
     expect(expertReads(requests)).toHaveLength(0);
     await chooseDesktop(page, '策略官');
     await expect(page).toHaveURL(/#\/profile$/);
@@ -403,13 +438,29 @@ for (const [mode, desktop] of [
     ).toHaveText('当前角色 · 策略官');
     await chooseDesktop(page, '执行专家');
     await page.getByRole('tab', { name: '概览', exact: true }).click();
-    const expertTabs = page.getByRole('tablist', { name: '执行专家个人中心业务', exact: true });
-    await expect(expertTabs).toBeVisible();
-    await expect(page.getByText('暂无符合执行专家参与范围的项目', { exact: true })).toBeVisible();
-    await expertTabs.getByRole('tab', { name: '排班考勤', exact: true }).click();
+    await expect(
+      page.getByRole('tablist', { name: '个人中心设置', exact: true }).getByRole('tab'),
+    ).toHaveText(['概览', '个人资料', '账户安全', '我的项目', '排班考勤', '组织与申请']);
+    await expect(
+      page.getByRole('tablist', { name: '执行专家个人中心业务', exact: true }),
+    ).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '查看全部项目', exact: true })).toBeVisible();
+    await expect(page.getByText('暂无参与项目', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '管理排班与考勤', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '排班考勤', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     await expect(page.getByText('本月暂无排班记录', { exact: true })).toBeVisible();
     const attendanceCall = requests.find(
-      (request) => request.path === '/api/v1/organizations/attendance',
+      (request) =>
+        request.path === '/api/v1/organizations/attendance' &&
+        request.query.month ===
+          new Intl.DateTimeFormat('sv-SE', {
+            timeZone: 'Asia/Shanghai',
+            year: 'numeric',
+            month: '2-digit',
+          }).format(new Date()),
     )!;
     expect(attendanceCall.query).toEqual({
       month: await page.getByLabel('考勤月份', { exact: true }).inputValue(),
@@ -418,13 +469,24 @@ for (const [mode, desktop] of [
     expect(
       requests.find((request) => request.path === '/api/v1/organizations/calendar/holidays')?.query,
     ).toEqual({ month: attendanceCall.query.month });
-    await expertTabs.getByRole('tab', { name: '组织与申请', exact: true }).click();
+    await page.getByRole('tab', { name: '概览', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await page.getByRole('button', { name: '查看全部申请', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '组织与申请', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     await expect(page.getByText('暂无申请记录', { exact: true })).toBeVisible();
     expect(
       requests.find((request) => request.path === '/api/v1/users/me/applications')?.body,
     ).toEqual({ businessType: null, current: 1, size: 10 });
     await chooseDesktop(page, '领航员');
-    await expect(expertTabs).toHaveCount(0);
+    for (const name of ['我的项目', '排班考勤', '组织与申请'])
+      await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '返回个人主页', exact: true })).toHaveCount(0);
     const expertCount = expertReads(requests).length;
     await page.goto(`${origin}/#/organization`);
     await expect(page).toHaveURL(/#\/$/);
@@ -512,13 +574,15 @@ for (const [mode, desktop] of [
   }) => {
     const { state, requests, sessionResponses } = await backend(page, desktop);
     state.projectsStatus = 503;
+    state.attendanceStatus = 503;
+    state.applicationsStatus = 503;
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${origin}/#/profile`);
     await expect(page.getByText('项目读取暂不可用', { exact: true })).toBeVisible();
     expect(
       requests.filter((request) => request.path === '/api/v1/expert-assignments/my-projects'),
     ).toHaveLength(1);
-    await expect(page.getByText('暂无符合执行专家参与范围的项目', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('暂无参与项目', { exact: true })).toHaveCount(0);
     state.projectsStatus = 200;
     state.projects.push({
       assignmentId: 41,
@@ -530,6 +594,7 @@ for (const [mode, desktop] of [
       currentNodeCode: 'ENTRANCE_EXAM',
     });
     await page.getByRole('button', { name: '重新读取项目', exact: true }).click();
+    await page.getByRole('tab', { name: '我的项目', exact: true }).click();
     await page.getByRole('button', { name: /真实范围内项目/ }).click();
     await expect(page.getByText('当前分配无访问权限', { exact: true })).toBeVisible();
     expect(
@@ -546,14 +611,12 @@ for (const [mode, desktop] of [
     await expect(
       detail.getByText('当前提供只读详情，接单、考试和生产操作尚未接入。', { exact: true }),
     ).toBeVisible();
-    state.attendanceStatus = 503;
     await page.getByRole('tab', { name: '排班考勤', exact: true }).click();
     await expect(page.getByText('排班考勤读取暂不可用', { exact: true })).toBeVisible();
     await expect(page.getByText('本月暂无排班记录', { exact: true })).toHaveCount(0);
     state.attendanceStatus = 200;
     await page.getByRole('button', { name: '重新读取考勤', exact: true }).click();
     await expect(page.getByText('本月暂无排班记录', { exact: true })).toBeVisible();
-    state.applicationsStatus = 503;
     await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
     await expect(page.getByText('申请读取暂不可用', { exact: true })).toBeVisible();
     await expect(page.getByText('暂无申请记录', { exact: true })).toHaveCount(0);
@@ -610,6 +673,115 @@ for (const [mode, desktop] of [
   });
 }
 
+test('个人主页同屏排列项目、年度考勤、能力与申请，桌面双列项目且手机无溢出', async ({ page }) => {
+  const { state, requests } = await backend(page, false);
+  await page.clock.install({ time: new Date('2026-10-22T04:00:00.000Z') });
+  state.presentDate = '2026-10-02';
+  state.projects = Array.from({ length: 5 }, (_, index) => ({
+    assignmentId: 41 + index,
+    projectId: 501 + index,
+    projectName: `主页布局项目 ${index + 1}`,
+    requesterName: '联调需求方',
+    needWrittenExam: false,
+    admissionStatus: 'PASSED',
+    currentNodeCode: 'PRODUCTION_TASK',
+  }));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${origin}/#/profile`);
+  const sidebar = page.getByRole('complementary', { name: '个人资料摘要', exact: true });
+  const projects = page.getByRole('region', { name: '所在项目', exact: true });
+  const attendance = page.getByRole('region', { name: '年度考勤', exact: true });
+  const capability = page.getByRole('region', { name: '履约与能力', exact: true });
+  const applications = page.getByRole('region', { name: '申请动态', exact: true });
+  for (const region of [projects, attendance, capability, applications])
+    await expect(region).toBeVisible();
+  await expect(capability.getByText('暂无能力评估数据', { exact: true })).toBeVisible();
+  await expect(
+    attendance.getByText('1 天正常出勤 · 已加载 10/10 个月', { exact: true }),
+  ).toBeVisible();
+  const attendanceMonths = () =>
+    requests
+      .filter((request) => request.path === '/api/v1/organizations/attendance')
+      .map((request) => request.query.month);
+  expect(attendanceMonths().sort()).toEqual(
+    Array.from({ length: 10 }, (_, index) => `2026-${String(index + 1).padStart(2, '0')}`),
+  );
+  await expect(
+    attendance.getByRole('button', { name: '2026-10-02 · 正常出勤，管理本月考勤', exact: true }),
+  ).toBeVisible();
+  await expect(
+    attendance.getByRole('button', { name: '2026-10-03 · 未排班，管理本月考勤', exact: true }),
+  ).toBeVisible();
+  await attendance.getByRole('combobox', { name: '年份', exact: true }).selectOption('2025');
+  await expect(
+    attendance.getByText('0 天正常出勤 · 已加载 12/12 个月', { exact: true }),
+  ).toBeVisible();
+  expect(
+    attendanceMonths()
+      .filter((month) => month.startsWith('2025-'))
+      .sort(),
+  ).toEqual(Array.from({ length: 12 }, (_, index) => `2025-${String(index + 1).padStart(2, '0')}`));
+  await attendance.getByRole('combobox', { name: '年份', exact: true }).selectOption('2026');
+  await expect(
+    attendance.getByText('1 天正常出勤 · 已加载 10/10 个月', { exact: true }),
+  ).toBeVisible();
+  const cards = projects.getByRole('list', { name: '所在项目列表' }).getByRole('button');
+  await expect(cards).toHaveCount(4);
+  const sidebarBox = (await sidebar.boundingBox())!;
+  const projectsBox = (await projects.boundingBox())!;
+  const attendanceBox = (await attendance.boundingBox())!;
+  const capabilityBox = (await capability.boundingBox())!;
+  const applicationsBox = (await applications.boundingBox())!;
+  expect(sidebarBox.x + sidebarBox.width).toBeLessThan(projectsBox.x);
+  expect(projectsBox.y + projectsBox.height).toBeLessThan(attendanceBox.y);
+  expect(attendanceBox.y + attendanceBox.height).toBeLessThan(capabilityBox.y);
+  expect(capabilityBox.y + capabilityBox.height).toBeLessThan(applicationsBox.y);
+  const first = (await cards.nth(0).boundingBox())!;
+  const second = (await cards.nth(1).boundingBox())!;
+  const third = (await cards.nth(2).boundingBox())!;
+  expect(Math.abs(first.y - second.y)).toBeLessThan(1);
+  expect(first.x + first.width).toBeLessThan(second.x);
+  expect(third.y).toBeGreaterThan(first.y + first.height);
+  await page.screenshot({ path: 'artifacts/profile-overview-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+    true,
+  );
+  const mobileSidebarBox = (await sidebar.boundingBox())!;
+  const mobileProjectsBox = (await projects.boundingBox())!;
+  expect(mobileSidebarBox.y + mobileSidebarBox.height).toBeLessThan(mobileProjectsBox.y);
+  await page.screenshot({ path: 'artifacts/profile-overview-mobile.png', fullPage: true });
+  await page.getByRole('button', { name: '查看全部项目', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '我的项目', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(
+    page.getByRole('region', { name: '我的项目', exact: true }).getByRole('listitem'),
+  ).toHaveCount(5);
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(projects).toBeVisible();
+  await attendance
+    .getByRole('button', { name: '2026-10-02 · 正常出勤，管理本月考勤', exact: true })
+    .click();
+  await expect(page.getByRole('tab', { name: '排班考勤', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByLabel('考勤月份', { exact: true })).toHaveValue('2026-10');
+  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await applications.getByRole('button', { name: '查看全部申请', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '组织与申请', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('region', { name: '组织与申请', exact: true })).toBeVisible();
+});
+
 test('当前角色移动账户菜单具备明确选中状态，320/375px均无横向溢出', async ({ page }) => {
   const { requests, sessionResponses } = await backend(page, false);
   await page.setViewportSize({ width: 320, height: 812 });
@@ -645,9 +817,10 @@ test('当前角色移动账户菜单具备明确选中状态，320/375px均无�
       ).toHaveText(`当前角色 · ${next}`);
       await expect(page.getByRole('tab', { name: '个人资料', exact: true })).toBeVisible();
       await expect(page.getByRole('tab', { name: '账户安全', exact: true })).toBeVisible();
-      await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveCount(
-        next === '执行专家' ? 1 : 0,
-      );
+      for (const name of ['概览', '我的项目', '排班考勤', '组织与申请'])
+        await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(
+          next === '执行专家' ? 1 : 0,
+        );
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
       ).toBe(true);
@@ -658,7 +831,8 @@ test('当前角色移动账户菜单具备明确选中状态，320/375px均无�
     requests.every(
       (request) =>
         (request.method === 'GET' &&
-          ['/api/v1/users/me', '/api/v1/expert-assignments/my-projects'].includes(request.path)) ||
+          ['/api/v1/users/me', ...expertReadPaths].includes(request.path)) ||
+        (request.method === 'POST' && request.path === '/api/v1/users/me/applications') ||
         (request.method === 'POST' && request.path === '/api/v1/auth/switch-role'),
     ),
   ).toBe(true);
@@ -699,4 +873,213 @@ test('selectedRole 为空时读取后端 role，切回专家后重读项目以�
   expect(
     requests.filter((request) => request.path === '/api/v1/expert-assignments/my-projects'),
   ).toHaveLength(2);
+});
+
+for (const channelMode of ['BroadcastChannel', 'storage 回退', '发送失败回退'] as const) {
+  test(`同账号双标签通过${channelMode}重读真实角色，保留资料草稿`, async ({ page }) => {
+    if (channelMode === 'storage 回退')
+      await page.context().addInitScript(() => {
+        Object.defineProperty(window, 'BroadcastChannel', { value: undefined });
+      });
+    if (channelMode === '发送失败回退')
+      await page.addInitScript(() => {
+        const NativeChannel = window.BroadcastChannel;
+        Object.defineProperty(window, 'BroadcastChannel', {
+          value: class extends NativeChannel {
+            postMessage() {
+              throw new Error('频道发送失败');
+            }
+          },
+        });
+      });
+    const { requests, state } = await backend(page, false);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${origin}/#/profile`);
+    const other = await page.context().newPage();
+    await other.setViewportSize({ width: 1280, height: 800 });
+    await other.goto(`${origin}/#/profile`);
+    await other.getByRole('button', { name: '编辑资料', exact: true }).click();
+    await other.getByLabel('个人简介', { exact: true }).fill('跨标签同步后仍保留的资料草稿');
+    const sessionReads = requests.filter((request) => request.path === '/api/v1/users/me').length;
+    await chooseDesktop(page, '领航员');
+    await expect(other.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
+      '领航员',
+    );
+    await expect(other.getByRole('tab', { name: '概览', exact: true })).toHaveCount(0);
+    await expect(other.getByLabel('个人简介', { exact: true })).toHaveValue(
+      '跨标签同步后仍保留的资料草稿',
+    );
+    await expect(other.getByLabel('组织身份', { exact: true })).toHaveText('视图联调组织 · 成员');
+    expect(state.user.selectedRole).toBe('NAVIGATOR');
+    expect(requests.filter((request) => request.path === '/api/v1/auth/switch-role')).toHaveLength(
+      1,
+    );
+    // 发送方主动重读一次、接收方收到信号重读一次；不因发送方自接收重复读取。
+    expect(requests.filter((request) => request.path === '/api/v1/users/me').length).toBe(
+      sessionReads + 2,
+    );
+    await expectNoPersistedView(page);
+    await expectNoPersistedView(other);
+    await other.close();
+  });
+}
+
+test('跨标签信号只使同账号会话失效，不使用外部角色数据，也不广播循环', async ({ page }) => {
+  const { state, requests } = await backend(page, false);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`${origin}/#/profile`);
+  await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
+    '执行专家',
+  );
+  const sender = await page.context().newPage();
+  await sender.setViewportSize({ width: 1280, height: 800 });
+  await sender.goto(origin);
+  await expect(sender.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
+    '执行专家',
+  );
+  const changes: unknown[] = [];
+  await sender.exposeFunction('recordRoleSignal', (value: unknown) => changes.push(value));
+  await sender.evaluate(() => {
+    const observer = new BroadcastChannel('tyde-session-role');
+    observer.onmessage = (event) => {
+      void (
+        window as unknown as { recordRoleSignal: (value: unknown) => Promise<void> }
+      ).recordRoleSignal(event.data);
+    };
+  });
+
+  state.user.role = 'PM';
+  state.user.selectedRole = 'PM';
+  const before = requests.filter((request) => request.path === '/api/v1/users/me').length;
+  await sender.evaluate((accountId) => {
+    const channel = new BroadcastChannel('tyde-session-role');
+    channel.postMessage({
+      type: 'SESSION_ROLE_INVALIDATED',
+      accountId,
+      selectedRole: 'NAVIGATOR',
+      roles: ['NAVIGATOR'],
+    });
+    channel.close();
+  }, state.user.id);
+  await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
+    '策略官',
+  );
+  await expect
+    .poll(() => requests.filter((request) => request.path === '/api/v1/users/me').length)
+    .toBe(before + 2);
+  expect(requests.filter((request) => request.path === '/api/v1/auth/switch-role')).toHaveLength(0);
+  // sender 也挂载会话，但接收方只重读，不再向频道发送第二次角色变化。
+  expect(changes).toHaveLength(1);
+
+  await chooseDesktop(page, '执行专家');
+  await expect.poll(() => changes.length).toBe(2);
+  expect(changes[1]).toEqual({ type: 'SESSION_ROLE_INVALIDATED', accountId: state.user.id });
+  await expectNoPersistedView(page);
+  await sender.close();
+});
+
+test('跨标签消息的账号不匹配时保留当前身份，广播设施失败不重放成功的切换', async ({ page }) => {
+  const { requests, state } = await backend(page, false);
+  await page.context().addInitScript(() => {
+    Object.defineProperty(window, 'BroadcastChannel', {
+      value: class {
+        constructor() {
+          throw new Error('频道已禁用');
+        }
+      },
+    });
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`${origin}/#/profile`);
+  await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
+    '执行专家',
+  );
+  const before = requests.filter((request) => request.path === '/api/v1/users/me').length;
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'tyde:session-role-sync',
+        storageArea: localStorage,
+        newValue: JSON.stringify({
+          type: 'SESSION_ROLE_INVALIDATED',
+          accountId: '00000000-0000-4000-8000-000000000099',
+          selectedRole: 'PM',
+        }),
+      }),
+    );
+  });
+  // 有效账号信号作为同步屏障，确保之前账号不匹配的消息已经处理。
+  state.user.role = 'NAVIGATOR';
+  state.user.selectedRole = 'NAVIGATOR';
+  await page.evaluate((accountId) => {
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'tyde:session-role-sync',
+        storageArea: localStorage,
+        newValue: JSON.stringify({ type: 'SESSION_ROLE_INVALIDATED', accountId }),
+      }),
+    );
+  }, state.user.id);
+  await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
+    '领航员',
+  );
+  expect(requests.filter((request) => request.path === '/api/v1/users/me').length).toBe(before + 1);
+  await page.evaluate(() => {
+    Object.defineProperty(Storage.prototype, 'setItem', {
+      value: () => {
+        throw new Error('存储已禁用');
+      },
+    });
+  });
+  await chooseDesktop(page, '策略官');
+  expect(requests.filter((request) => request.path === '/api/v1/auth/switch-role')).toHaveLength(1);
+  expect(state.user.selectedRole).toBe('PM');
+  await expectNoPersistedView(page);
+});
+
+test('个人中心顶层业务入口在窄屏可用键盘直达，并与概览共用单一页签导航', async ({ page }) => {
+  await backend(page, false);
+  await page.setViewportSize({ width: 320, height: 812 });
+  await page.goto(`${origin}/#/profile`);
+  const navigation = page.getByRole('tablist', { name: '个人中心设置', exact: true });
+  await expect(page.getByRole('tablist')).toHaveCount(1);
+  await expect(navigation.getByRole('tab')).toHaveText([
+    '概览',
+    '个人资料',
+    '账户安全',
+    '我的项目',
+    '排班考勤',
+    '组织与申请',
+  ]);
+  const security = navigation.getByRole('tab', { name: '账户安全', exact: true });
+  const projects = navigation.getByRole('tab', { name: '我的项目', exact: true });
+  const attendance = navigation.getByRole('tab', { name: '排班考勤', exact: true });
+  const organization = navigation.getByRole('tab', { name: '组织与申请', exact: true });
+  for (const width of [320, 375]) {
+    await page.setViewportSize({ width, height: 812 });
+    await security.focus();
+    await security.press('ArrowRight');
+    await expect(projects).toBeFocused();
+    await expect(projects).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('region', { name: '我的项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '返回个人主页', exact: true })).toHaveCount(0);
+    await projects.press('ArrowRight');
+    await expect(attendance).toBeFocused();
+    await expect(attendance).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('heading', { name: '我的排班考勤', exact: true })).toBeVisible();
+    await attendance.press('ArrowRight');
+    await expect(organization).toBeFocused();
+    await expect(organization).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('region', { name: '组织与申请', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '返回个人主页', exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+      true,
+    );
+    await page.getByRole('tab', { name: '概览', exact: true }).click();
+    await expect(navigation.getByRole('tab', { name: '概览', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(page.getByRole('region', { name: '所在项目', exact: true })).toBeVisible();
+  }
 });

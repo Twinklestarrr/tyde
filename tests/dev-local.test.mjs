@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -11,6 +11,27 @@ import { fileURLToPath } from 'node:url';
 const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const database =
   'postgresql://fixture:fixture-password@database.invalid:5432/tyde_dev?schema=public';
+const databaseProbe = String.raw`
+import net from 'node:net';
+import { appendFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const connect = net.createConnection;
+net.createConnection = function (options, ...args) {
+  const port = typeof options === 'object' ? options.port : options;
+  if (Number(port) !== 5432) return connect.call(this, options, ...args);
+  const host = typeof options === 'object' ? options.host : args[0];
+  appendFileSync(process.env.FIXTURE_EVENTS,
+    JSON.stringify({ event: 'db:probe', host, port: Number(port) }) + '\n');
+  const socket = new net.Socket();
+  queueMicrotask(() => {
+    if (process.env.FIXTURE_DB_LISTENING === '1') socket.emit('connect');
+    else socket.emit('error', Object.assign(new Error('fixture connection refused'),
+      { code: 'ECONNREFUSED' }));
+  });
+  return socket;
+};
+syncBuiltinESMExports();
+`;
 const worker = String.raw`
 import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -88,11 +109,17 @@ async function fixture(t) {
   await mkdir(join(root, 'scripts'));
   await mkdir(join(root, 'apps/server'), { recursive: true });
   await copyFile(join(project, 'scripts/dev-local.mjs'), join(root, 'scripts/dev-local.mjs'));
+  await writeFile(join(root, 'scripts/fixture-database-probe.mjs'), databaseProbe);
   await writeFile(join(root, 'scripts/fixture-worker.mjs'), worker);
   await writeFile(
     join(root, 'scripts/postgres-local.mjs'),
     `import { appendFileSync } from 'node:fs';
-appendFileSync(process.env.FIXTURE_EVENTS, JSON.stringify({ event: 'db:' + process.argv[2] }) + '\\n');
+appendFileSync(process.env.FIXTURE_EVENTS, JSON.stringify({ event: 'db:' + process.argv[2], args: process.argv.slice(2) }) + '\\n');
+if (process.env.FIXTURE_DB_FAILURE) {
+  console.error(process.env.FIXTURE_DB_FAILURE === 'missing'
+    ? '本地数据库数据目录不存在，请先初始化。' : '本地数据库启动失败。');
+  process.exitCode = 1;
+}
 `,
   );
   await writeFile(
@@ -129,20 +156,24 @@ appendFileSync(process.env.FIXTURE_EVENTS, JSON.stringify({ event: 'setup' }) + 
       .filter(Boolean)
       .map((line) => JSON.parse(line));
   const launch = (extraEnv = {}) => {
-    const child = spawn(process.execPath, ['scripts/dev-local.mjs'], {
-      cwd: root,
-      env: {
-        ...process.env,
-        FIXTURE_EVENTS: eventsFile,
-        DATABASE_URL: 'postgresql://shell:secret@127.0.0.1:5432/old_local',
-        TYDE_API_BASE_URL: 'https://remote.invalid',
-        API_PROXY_TARGET: 'https://remote.invalid',
-        HOST: '0.0.0.0',
-        PORT: '9999',
-        ...extraEnv,
+    const child = spawn(
+      process.execPath,
+      ['--import', './scripts/fixture-database-probe.mjs', 'scripts/dev-local.mjs'],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          FIXTURE_EVENTS: eventsFile,
+          DATABASE_URL: 'postgresql://shell:secret@127.0.0.1:5432/old_local',
+          TYDE_API_BASE_URL: 'https://remote.invalid',
+          API_PROXY_TARGET: 'https://remote.invalid',
+          HOST: '0.0.0.0',
+          PORT: '9999',
+          ...extraEnv,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    );
     running.add(child);
     let output = '';
     child.stdout.on('data', (chunk) => (output += chunk));
@@ -250,6 +281,99 @@ test('local launcher uses the remote .env, skips database changes and cleans own
         return true;
       }
     }, `测试进程 ${row.pid} 未退出`);
+});
+
+test('local launcher starts only an existing stopped local database before the application', async (t) => {
+  const local = await fixture(t);
+  for (const host of ['localhost', '127.0.0.1:5432']) {
+    await writeFile(local.eventsFile, '');
+    await local.configure(`postgresql://fixture:do-not-print@${host}/tyde_dev`);
+    const run = local.launch();
+    await waitFor(
+      async () => (await local.events()).some((row) => row.event === 'electron:leaf'),
+      '本地数据库启动后应用未启动：' + run.output(),
+    );
+    const rows = await local.events();
+    const names = rows.map((row) => row.event);
+    assert.deepEqual(rows.find((row) => row.event === 'db:start').args, [
+      'start',
+      '--existing-only',
+    ]);
+    assert.equal(rows.find((row) => row.event === 'db:probe').host, host.split(':')[0]);
+    assert.equal(names.filter((event) => event === 'db:probe').length, 1);
+    for (const [before, after] of [
+      ['db:probe', 'db:start'],
+      ['db:start', 'server:start'],
+      ['server:ready', 'electron:start'],
+    ])
+      assert.ok(names.indexOf(before) < names.indexOf(after), names.join(', '));
+    assert.ok(!names.some((event) => /^(migrate|setup)$/.test(event)), names.join(', '));
+    assert.doesNotMatch(run.output(), /do-not-print|shell:secret|postgresql:\/\//);
+    run.child.kill('SIGTERM');
+    const result = await run.finish();
+    assert.equal(result.code, 0, result.output);
+    assert.ok(!(await local.events()).some((row) => row.event === 'db:stop'));
+  }
+});
+
+test('local launcher reuses listening databases and skips unmanaged database addresses', async (t) => {
+  const local = await fixture(t);
+  for (const host of ['127.0.0.1', 'localhost:55432', '[::1]:5432']) {
+    await writeFile(local.eventsFile, '');
+    await local.configure(`postgresql://fixture:do-not-print@${host}/tyde_dev`);
+    const run = local.launch({ FIXTURE_DB_LISTENING: '1' });
+    await waitFor(
+      async () => (await local.events()).some((row) => row.event === 'electron:leaf'),
+      '复用数据库时应用未启动：' + run.output(),
+    );
+    const names = (await local.events()).map((row) => row.event);
+    assert.equal(names.includes('db:probe'), host === '127.0.0.1', names.join(', '));
+    assert.ok(!names.includes('db:start'), names.join(', '));
+    assert.ok(!names.some((event) => /^(migrate|setup)$/.test(event)), names.join(', '));
+    run.child.kill('SIGTERM');
+    const result = await run.finish();
+    assert.equal(result.code, 0, result.output);
+    assert.ok(!(await local.events()).some((row) => row.event === 'db:stop'));
+  }
+});
+
+test('database startup failures stop before backend or Electron without printing credentials', async (t) => {
+  const local = await fixture(t);
+  await local.configure('postgresql://fixture:do-not-print@127.0.0.1:5432/tyde_dev');
+  for (const failure of ['missing', 'startup']) {
+    await writeFile(local.eventsFile, '');
+    const result = await local.launch({ FIXTURE_DB_FAILURE: failure }).finish();
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, failure === 'missing' ? /数据目录不存在/ : /数据库启动失败/);
+    assert.doesNotMatch(result.output, /do-not-print|shell:secret|postgresql:\/\//);
+    const rows = await local.events();
+    assert.deepEqual(
+      rows.map((row) => row.event),
+      ['db:probe', 'db:start'],
+    );
+    assert.deepEqual(rows[1].args, ['start', '--existing-only']);
+  }
+});
+
+test('existing-only database startup refuses an uninitialized directory without creating files', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'tyde-existing-postgres-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'scripts/lib'), { recursive: true });
+  for (const file of ['postgres-local.mjs', 'lib/postgres-tools.mjs'])
+    await copyFile(join(project, 'scripts', file), join(root, 'scripts', file));
+  const result = spawnSync(
+    process.execPath,
+    ['scripts/postgres-local.mjs', 'start', '--existing-only'],
+    {
+      cwd: root,
+      env: { ...process.env, PG_BIN: join(root, 'missing-postgres-tools') },
+      encoding: 'utf8',
+      timeout: 5000,
+    },
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /已有本地 PostgreSQL 数据目录/);
+  await assert.rejects(access(join(root, '.local')), { code: 'ENOENT' });
 });
 
 test('a normal desktop exit preserves the owned backend until the launcher is stopped', async (t) => {

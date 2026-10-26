@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import type {
   AuthUser,
   OrganizationDetail,
@@ -105,6 +106,22 @@ interface RecordedRequest {
   fileName?: string;
 }
 
+const logoBytes = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJ0lEQVR4nGNQXLr9PyWYYXAZQCwYxAbgM4zkQBw1YDAYQFZSHhADAOlp0x+yOzC+AAAAAElFTkSuQmCC',
+  'base64',
+);
+const logoReceipt = {
+  objectKey: 'org-logo/2026/10/23/0123456789abcdef0123456789abcdef.png',
+  uploadToken: 'l'.repeat(43),
+  url: 'https://logos.example.test/local-logo.png',
+  sensitive: false,
+  fileName: 'organization-logo.png',
+  extension: 'png',
+  size: logoBytes.length,
+  contentType: 'image/png',
+  fileHash: createHash('sha256').update(logoBytes).digest('hex'),
+};
+
 /** 仅检验下载字节与浏览器下载行为，工作簿格式由服务端测试覆盖。 */
 const templateBytes = Buffer.from('PK\u0003\u0004organization-template-byte-fixture');
 const writePaths = {
@@ -117,6 +134,36 @@ const writePaths = {
 };
 const calls = (requests: RecordedRequest[], path: string) =>
   requests.filter((request) => request.path === path);
+const importCell = (dialog: Locator, row: number, column: string) =>
+  dialog.getByLabel(`第 ${row} 行 ${column}`, { exact: true });
+async function selectImportCell(dialog: Locator, row: number, column: string, option: string) {
+  await importCell(dialog, row, column).click();
+  await dialog.getByRole('option', { name: option, exact: true }).click();
+  await expect(importCell(dialog, row, column)).toHaveText(option);
+}
+async function importDraft(dialog: Locator) {
+  const count = await dialog.getByLabel(/^第 \d+ 行 姓名$/).count();
+  return Promise.all(
+    Array.from({ length: count }, (_, index) =>
+      Promise.all(
+        ['姓名', '手机号', '人员属性', '组织角色', '入组日期'].map((column) =>
+          importCell(dialog, index + 1, column).evaluate((control) =>
+            control instanceof HTMLInputElement ? control.value : control.textContent?.trim(),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+async function pasteMembers(cell: Locator, text: string) {
+  await cell.evaluate((input, value) => {
+    const clipboard = new DataTransfer();
+    clipboard.setData('text/plain', value);
+    input.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }),
+    );
+  }, text);
+}
 
 async function organizationBackend(
   page: Page,
@@ -142,6 +189,7 @@ async function organizationBackend(
     pending: [approvalFixture(1), approvalFixture(2)],
     history: [] as OrganizationApprovalRecord[],
     importMode: 'invalid' as 'invalid' | 'network' | 'success',
+    importErrorRow: 1,
   };
   state.user.organization = { ...state.organization, joinStatus: 'ACTIVE' };
   const requests: RecordedRequest[] = [];
@@ -196,6 +244,10 @@ async function organizationBackend(
       route.fulfill({ status, json: { code: status, message, data } });
     if (!authenticated) return reply(null, 401, '请先登录');
     if (url.pathname === '/api/v1/users/me') return reply(state.user);
+    if (url.pathname === '/api/v1/files/upload') {
+      expect(record.form.bizType).toBe('ORG_LOGO');
+      return reply(logoReceipt);
+    }
     if (url.pathname === '/api/v1/organizations') {
       expect(url.searchParams.get('orgId')).toBe(orgId);
       return reply(
@@ -209,6 +261,10 @@ async function organizationBackend(
         return reply(null, state.organizationUpdateStatus, '组织资料服务暂不可用');
       for (const key of ['description', 'logoUrl'] as const)
         if (typeof body?.[key] === 'string') state.organization[key] = body[key] as string;
+      if (body?.logoUrl === logoReceipt.objectKey) {
+        expect(body.logoUploadToken).toBe(logoReceipt.uploadToken);
+        state.organization.logoUrl = logoReceipt.url;
+      }
       state.user.organization = { ...state.user.organization, ...state.organization };
       return reply({
         id: orgId,
@@ -360,17 +416,24 @@ async function organizationBackend(
     if (url.pathname === writePaths.import) {
       if (state.importMode === 'network') return route.abort('failed');
       const invalid = state.importMode === 'invalid';
+      const rows = (record.form.memberText || '导入联调成员')
+        .split('\n')
+        .filter((row) => row.trim());
       const result: OrganizationImportResult = {
-        sourceType: record.fileName ? 'CSV' : 'TEXT',
+        sourceType: record.fileName
+          ? /\.xlsx?$/i.test(record.fileName)
+            ? 'EXCEL'
+            : 'CSV'
+          : 'TEXT',
         textIgnored: false,
-        totalCount: 1,
-        validCount: invalid ? 0 : 1,
+        totalCount: rows.length,
+        validCount: invalid ? Math.max(0, rows.length - 1) : rows.length,
         invalidCount: invalid ? 1 : 0,
-        createdCount: invalid ? 0 : 1,
+        createdCount: invalid ? 0 : rows.length,
         rowErrors: invalid
           ? [
               {
-                rowNo: 1,
+                rowNo: state.importErrorRow,
                 field: 'phone',
                 value: '138****0004',
                 errorCode: 'FORMAT_INVALID',
@@ -380,20 +443,18 @@ async function organizationBackend(
           : [],
         members: invalid
           ? []
-          : [
-              {
-                memberId: uuid(9001),
-                userId: uuid(9002),
-                uid: 'ORG19002',
-                accountType: 'INDIVIDUAL',
-                phoneMasked: '138****9002',
-                realName: '导入联调成员',
-                position: 'MEMBER',
-                employmentType: 'FULL_TIME',
-                joinedAt: timestamp,
-                joinStatus: 'PENDING_ACTIVATION',
-              },
-            ],
+          : rows.map((row, index) => ({
+              memberId: uuid(9001 + index * 2),
+              userId: uuid(9002 + index * 2),
+              uid: `ORG${19002 + index}`,
+              accountType: 'INDIVIDUAL',
+              phoneMasked: '138****9002',
+              realName: row.split(/[,\t]/)[0]!.trim(),
+              position: 'MEMBER',
+              employmentType: 'FULL_TIME',
+              joinedAt: timestamp,
+              joinStatus: 'PENDING_ACTIVATION',
+            })),
         createdAt: invalid ? null : timestamp,
       };
       return reply(result, invalid ? 400 : 200, invalid ? '成员信息校验失败' : '操作成功');
@@ -423,10 +484,14 @@ for (const [mode, origin, desktop] of [
     await openOrganization(page, origin, desktop);
     await page.getByRole('button', { name: '编辑组织资料', exact: true }).click();
     const edit = page.getByRole('dialog', { name: '编辑组织资料', exact: true });
+    await expect(edit.getByLabel('Logo 地址', { exact: true })).not.toBeVisible();
+    await edit.getByRole('button', { name: '使用图片链接', exact: true }).click();
     await edit.getByLabel('Logo 地址', { exact: true }).fill('javascript:alert(1)');
     await edit.getByRole('button', { name: '保存组织资料', exact: true }).click();
     await expect(
-      edit.getByText('请输入不含用户名和密码的 HTTPS 图片地址', { exact: true }),
+      edit
+        .getByRole('region', { name: '组织 Logo', exact: true })
+        .getByText(/请输入不含用户名和密码的 HTTPS 图片地址/),
     ).toBeVisible();
     expect(calls(requests, writePaths.organization)).toHaveLength(0);
     await edit.getByLabel('Logo 地址', { exact: true }).fill('https://logos.example.test/team.png');
@@ -451,7 +516,7 @@ for (const [mode, origin, desktop] of [
       page.getByLabel('组织基本信息').getByText('双端保存的组织简介', { exact: true }),
     ).toBeVisible();
     await page.getByRole('button', { name: '编辑组织资料', exact: true }).click();
-    await edit.getByLabel('Logo 地址', { exact: true }).fill('');
+    await edit.getByRole('button', { name: '清除图片', exact: true }).click();
     await edit.getByRole('button', { name: '保存组织资料', exact: true }).click();
     await expect(edit).not.toBeVisible();
     expect(calls(requests, writePaths.organization).at(-1)?.body).toEqual({ orgId, logoUrl: '' });
@@ -633,21 +698,28 @@ for (const [mode, origin, desktop] of [
     const download = await pendingDownload;
     expect(download.suggestedFilename()).toBe('成员导入模板.xlsx');
     expect(await readFile((await download.path())!)).toEqual(templateBytes);
-    const input = dialog.getByLabel(/^成员清单\s*\*?\s*$/);
-    await input.fill('导入联调成员,not-a-phone,全职,成员');
+    const name = importCell(dialog, 1, '姓名');
+    const phone = importCell(dialog, 1, '手机号');
+    await name.fill('导入联调成员');
+    await phone.fill('13800009001');
+    await selectImportCell(dialog, 1, '人员属性', '全职');
+    await selectImportCell(dialog, 1, '组织角色', '管理员');
+    await selectImportCell(dialog, 1, '组织角色', '成员');
     await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
     await expect(
       dialog
         .getByRole('region', { name: '逐行导入错误', exact: true })
         .getByText(/第 1 行.*手机号格式不正确/),
     ).toBeVisible();
-    await expect(input).toHaveValue('导入联调成员,not-a-phone,全职,成员');
+    await expect(name).toHaveValue('导入联调成员');
+    await expect(phone).toHaveValue('13800009001');
+    await expect(phone).toHaveAttribute('aria-invalid', 'true');
     await expect(
       dialog.getByText('总数 1 · 有效 0 · 无效 1 · 已导入 0', { exact: true }),
     ).toBeVisible();
     expect(calls(requests, writePaths.import)).toHaveLength(1);
     const invalidKey = calls(requests, writePaths.import)[0].headers['idempotency-key'];
-    await input.fill('导入联调成员,13800009002,全职,成员');
+    await phone.fill('13800009002');
     state.importMode = 'network';
     for (const count of [2, 3]) {
       await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
@@ -663,11 +735,11 @@ for (const [mode, origin, desktop] of [
     expect(networkCalls[0].headers['idempotency-key']).toBe(
       networkCalls[1].headers['idempotency-key'],
     );
-    await input.fill('导入联调成员,13800009002,兼职,成员');
+    await selectImportCell(dialog, 1, '人员属性', '兼职');
     state.importMode = 'success';
     await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
     await expect(dialog.getByText(/已成功导入 1 位成员。新建账号首次成功登录后激活/)).toBeVisible();
-    await expect(input).toHaveValue('');
+    await expect(name).toHaveValue('');
     const textCall = calls(requests, writePaths.import).at(-1)!;
     expect(textCall.form).toEqual({ orgId, memberText: '导入联调成员,13800009002,兼职,成员' });
     expect(textCall.headers['content-type']).toMatch(/^multipart\/form-data; boundary=/);
@@ -675,7 +747,7 @@ for (const [mode, origin, desktop] of [
       networkCalls[1].headers['idempotency-key'],
     );
     await dialog.getByRole('radio', { name: '上传表格', exact: true }).check();
-    await dialog.getByLabel(/^成员表格\s*\*?\s*$/).setInputFiles({
+    await dialog.locator('#organization-import-file').setInputFiles({
       name: 'members.csv',
       mimeType: 'text/csv',
       buffer: Buffer.from('导入联调成员,13800009002,全职,成员\n'),
@@ -891,4 +963,501 @@ test('组织管理375px列表与弹窗不撑出页面，无组织不查询组织
   expect(
     requests.slice(before).some((request) => request.path.startsWith('/api/v1/organizations')),
   ).toBe(false);
+});
+
+test('组织 Logo 本地预览在保存时上传，资料失败重试复用凭证，清除提交空值', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { state, requests } = await organizationBackend(page, origin);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '编辑组织资料', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '编辑组织资料', exact: true });
+  const logo = dialog.getByRole('region', { name: '组织 Logo', exact: true });
+  const input = logo.getByLabel('选择组织 Logo 图片', { exact: true });
+  await expect(input).toHaveClass(/sr-only/);
+  await expect(logo.getByRole('button', { name: '使用图片链接', exact: true })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  const choosing = page.waitForEvent('filechooser');
+  await logo.getByText('上传图片', { exact: true }).click();
+  await (
+    await choosing
+  ).setFiles({ name: logoReceipt.fileName, mimeType: 'image/png', buffer: logoBytes });
+  const preview = logo.getByRole('img', { name: '组织 Logo 预览', exact: true });
+  await expect(preview).toHaveAttribute('src', /^blob:/);
+  const previewUrl = (await preview.getAttribute('src'))!;
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(0);
+  expect(calls(requests, writePaths.organization)).toHaveLength(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+    true,
+  );
+  await page.screenshot({ path: 'artifacts/organization-logo-edit-mobile.png', fullPage: false });
+  state.organizationUpdateStatus = 503;
+  await dialog.getByRole('button', { name: '保存组织资料', exact: true }).click();
+  await expect(dialog.getByText('组织资料服务暂不可用', { exact: true })).toBeVisible();
+  await expect(preview).toHaveAttribute('src', previewUrl);
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(1);
+  const upload = calls(requests, '/api/v1/files/upload')[0]!;
+  expect(upload.form).toMatchObject({ bizType: 'ORG_LOGO', category: 'IMAGE' });
+  expect(upload.fileName).toBe(logoReceipt.fileName);
+  expect(upload.authenticated).toBe(true);
+  expect(upload.headers['x-tyde-client']).toBe('web');
+  expect(upload.headers.authorization).toBeUndefined();
+  expect(calls(requests, writePaths.organization)[0]?.body).toEqual({
+    orgId,
+    logoUrl: logoReceipt.objectKey,
+    logoUploadToken: logoReceipt.uploadToken,
+  });
+  state.organizationUpdateStatus = 200;
+  await dialog.getByRole('button', { name: '保存组织资料', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(1);
+  expect(calls(requests, writePaths.organization)).toHaveLength(2);
+  expect(calls(requests, writePaths.organization)[1]?.body).toEqual(
+    calls(requests, writePaths.organization)[0]?.body,
+  );
+  expect(state.organization.logoUrl).toBe(logoReceipt.url);
+  await page.getByRole('button', { name: '编辑组织资料', exact: true }).click();
+  await logo.getByRole('button', { name: '清除图片', exact: true }).click();
+  await dialog.getByRole('button', { name: '保存组织资料', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(calls(requests, writePaths.organization).at(-1)?.body).toEqual({ orgId, logoUrl: '' });
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(1);
+});
+
+test('组织 Logo 不支持的类型、空文件及超限图片本地拦截，取消不上传', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { requests } = await organizationBackend(page, origin);
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '编辑组织资料', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '编辑组织资料', exact: true });
+  const logo = dialog.getByRole('region', { name: '组织 Logo', exact: true });
+  const input = logo.getByLabel('选择组织 Logo 图片', { exact: true });
+  for (const file of [
+    {
+      name: 'invalid.svg',
+      mimeType: 'image/svg+xml',
+      buffer: Buffer.from('<svg/>'),
+      message: '请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片',
+    },
+    {
+      name: 'empty.png',
+      mimeType: 'image/png',
+      buffer: Buffer.alloc(0),
+      message: '请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片',
+    },
+    {
+      name: 'too-large.png',
+      mimeType: 'image/png',
+      buffer: Buffer.alloc(10 * 1024 * 1024 + 1),
+      message: 'Logo 图片最大 10 MiB',
+    },
+  ]) {
+    await input.setInputFiles(file);
+    await expect(logo.getByText(file.message, { exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: '保存组织资料', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: '保存组织资料', exact: true })).toBeEnabled();
+    expect(calls(requests, '/api/v1/files/upload')).toHaveLength(0);
+    expect(calls(requests, writePaths.organization)).toHaveLength(0);
+    await logo.getByRole('button', { name: '清除图片', exact: true }).click();
+    await expect(dialog.getByText(file.message, { exact: true })).toHaveCount(0);
+  }
+  await input.setInputFiles({
+    name: logoReceipt.fileName,
+    mimeType: 'image/png',
+    buffer: logoBytes,
+  });
+  await expect(logo.getByRole('img', { name: '组织 Logo 预览', exact: true })).toHaveAttribute(
+    'src',
+    /^blob:/,
+  );
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  expect(calls(requests, '/api/v1/files/upload')).toHaveLength(0);
+  expect(calls(requests, writePaths.organization)).toHaveLength(0);
+});
+
+test('组织导入表格从Excel粘贴表头与多行，逐格修改增删并在错误行保留草稿', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { state, requests } = await organizationBackend(page, origin);
+  state.importErrorRow = 2;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '批量导入成员', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '批量导入成员', exact: true });
+  const grid = dialog.getByRole('region', { name: '成员表格编辑区', exact: true });
+  await pasteMembers(
+    importCell(dialog, 1, '姓名'),
+    '\uFEFF 姓名\t手机号\t人员属性\t组织角色\t入组日期\r\n  粘贴成员甲  \t 13800009002 \t 全职 \t 成员 \t 2026-10-01 \r\n粘贴成员乙\t13800009004\t兼职\t管理员\t\r\n',
+  );
+  await expect(importCell(dialog, 1, '姓名')).toHaveValue('粘贴成员甲');
+  await expect(importCell(dialog, 1, '手机号')).toHaveValue('13800009002');
+  await expect(importCell(dialog, 2, '姓名')).toHaveValue('粘贴成员乙');
+  await expect(importCell(dialog, 2, '组织角色')).toHaveText('管理员');
+  await expect(importCell(dialog, 1, '入组日期')).toHaveValue('2026-10-01');
+  await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+  await expect(importCell(dialog, 2, '手机号')).toHaveAttribute('aria-invalid', 'true');
+  await expect(importCell(dialog, 1, '手机号')).not.toHaveAttribute('aria-invalid', 'true');
+  await expect(
+    dialog
+      .getByRole('region', { name: '逐行导入错误', exact: true })
+      .getByText('第 2 行 · 手机号：手机号格式不正确（138****0004）', { exact: true }),
+  ).toBeVisible();
+  await expect(importCell(dialog, 2, '手机号')).toHaveValue('13800009004');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+    true,
+  );
+  await page.screenshot({ path: 'artifacts/organization-import-table-desktop.png' });
+  await importCell(dialog, 2, '姓名').fill('编辑后的成员');
+  await importCell(dialog, 2, '手机号').fill('13800009003');
+  await pasteMembers(importCell(dialog, 2, '手机号'), '13800009003\t全职\t成员\t2026-10-02');
+  await expect(importCell(dialog, 2, '姓名')).toHaveValue('编辑后的成员');
+  await expect(importCell(dialog, 2, '入组日期')).toHaveValue('2026-10-02');
+  const names = grid.getByLabel(/^第 \d+ 行 姓名$/);
+  const beforeAdd = await names.count();
+  await dialog.getByRole('button', { name: '添加成员', exact: true }).click();
+  await expect(names).toHaveCount(beforeAdd + 1);
+  await importCell(dialog, beforeAdd + 1, '姓名').fill('删除前的临时成员');
+  await dialog.getByRole('button', { name: `删除第 ${beforeAdd + 1} 行`, exact: true }).click();
+  await expect(names).toHaveCount(beforeAdd);
+  state.importMode = 'success';
+  await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+  await expect(dialog.getByText(/已成功导入 2 位成员/)).toBeVisible();
+  expect(calls(requests, writePaths.import)).toHaveLength(2);
+  expect(calls(requests, writePaths.import).at(-1)?.form).toEqual({
+    orgId,
+    memberText:
+      '粘贴成员甲,13800009002,全职,成员,2026-10-01\r\n编辑后的成员,13800009003,全职,成员,2026-10-02',
+  });
+  expect(calls(requests, writePaths.import).at(-1)?.headers['idempotency-key']).not.toBe(
+    calls(requests, writePaths.import)[0]?.headers['idempotency-key'],
+  );
+});
+
+test('组织导入表格拒绝超过500行或5列的整次粘贴，不截断也不覆盖原草稿', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { state, requests } = await organizationBackend(page, origin);
+  state.importMode = 'success';
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '批量导入成员', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '批量导入成员', exact: true });
+  const grid = dialog.getByRole('region', { name: '成员表格编辑区', exact: true });
+  await importCell(dialog, 1, '姓名').fill('保留原成员');
+  await importCell(dialog, 1, '手机号').fill('13800009002');
+  await selectImportCell(dialog, 1, '人员属性', '全职');
+  const before = await grid.getByLabel(/^第 \d+ 行 姓名$/).count();
+  const tooMany = Array.from(
+    { length: 501 },
+    (_, index) => `成员${index + 1}\t13800009002\t全职\t成员\t`,
+  ).join('\n');
+  await pasteMembers(importCell(dialog, 1, '姓名'), tooMany);
+  await expect(
+    dialog.getByText('单次最多导入 500 个成员，请分批粘贴或导入。', { exact: true }),
+  ).toBeVisible();
+  await expect(grid.getByLabel(/^第 \d+ 行 姓名$/)).toHaveCount(before);
+  await expect(importCell(dialog, 1, '姓名')).toHaveValue('保留原成员');
+  expect(calls(requests, writePaths.import)).toHaveLength(0);
+  await pasteMembers(importCell(dialog, 1, '姓名'), '一\t二\t三\t四\t五\t六');
+  await expect(dialog.getByText(/第 1 行超过 5 列/)).toBeVisible();
+  await expect(importCell(dialog, 1, '手机号')).toHaveValue('13800009002');
+  expect(calls(requests, writePaths.import)).toHaveLength(0);
+  await dialog.getByRole('button', { name: '清空表格', exact: true }).click();
+  await expect(importCell(dialog, 1, '姓名')).toHaveValue('');
+  await pasteMembers(importCell(dialog, 1, '姓名'), '合法成员\t13800009004\t全职\t成员');
+  await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+  await expect(dialog.getByText(/已成功导入 1 位成员/)).toBeVisible();
+  expect(calls(requests, writePaths.import)).toHaveLength(1);
+  expect(calls(requests, writePaths.import)[0]?.form.memberText).toBe(
+    '合法成员,13800009004,全职,成员',
+  );
+});
+
+test('组织导入375文件区支持选择拖放、替换移除与CSV及Excel文件卡片，非法文件不提交', async ({
+  page,
+}) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { state, requests } = await organizationBackend(page, origin);
+  state.importMode = 'success';
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '批量导入成员', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '批量导入成员', exact: true });
+  await dialog.getByRole('radio', { name: '上传表格', exact: true }).check();
+  const input = dialog.locator('#organization-import-file');
+  await expect(input).toHaveClass(/sr-only/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+    true,
+  );
+  await page.screenshot({ path: 'artifacts/organization-import-empty-mobile.png' });
+  for (const file of [
+    { name: 'invalid.txt', mimeType: 'text/plain', buffer: Buffer.from('invalid') },
+    {
+      name: 'empty.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      buffer: Buffer.alloc(0),
+    },
+  ]) {
+    await input.setInputFiles(file);
+    await expect(
+      dialog.getByText('请选择非空 CSV、XLS 或 XLSX 文件，文件最大 50 MiB', { exact: true }),
+    ).toBeVisible();
+    expect(calls(requests, writePaths.import)).toHaveLength(0);
+  }
+  const choosing = page.waitForEvent('filechooser');
+  await dialog.getByText('点击选择表格，或拖拽到这里', { exact: true }).click();
+  await (
+    await choosing
+  ).setFiles({
+    name: 'members.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('导入联调成员,13800009002,全职,成员'),
+  });
+  await expect(dialog.getByText('members.csv', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('更换表格', { exact: true })).toBeVisible();
+  const replacing = page.waitForEvent('filechooser');
+  await dialog.getByText('更换表格', { exact: true }).click();
+  await (
+    await replacing
+  ).setFiles({
+    name: 'replacement.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('替换后的成员,13800009003,兼职,成员'),
+  });
+  await expect(dialog.getByText('replacement.csv', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('members.csv', { exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '移除表格', exact: true }).click();
+  await expect(dialog.getByText('replacement.csv', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('members.csv', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('点击选择表格，或拖拽到这里', { exact: true })).toBeVisible();
+  for (const [fileName, contentType] of [
+    ['members.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    ['members.xls', 'application/vnd.ms-excel'],
+  ] as const) {
+    // 只验证选择区与multipart传输，Excel内容解析由服务端测试覆盖。
+    await dialog.locator('[data-slot="file-upload-field"]').evaluate(
+      (target, file) => {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([file.bytes], file.name, { type: file.type }));
+        target.dispatchEvent(
+          new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }),
+        );
+      },
+      { name: fileName, type: contentType, bytes: 'spreadsheet-transport-fixture' },
+    );
+    await expect(dialog.getByText(fileName, { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+      true,
+    );
+    if (fileName.endsWith('.xlsx'))
+      await page.screenshot({ path: 'artifacts/organization-import-file-mobile.png' });
+    await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+    await expect(
+      dialog
+        .getByRole('region', { name: '成员导入结果', exact: true })
+        .getByText(/^来源：Excel 表格/),
+    ).toBeVisible();
+    expect(calls(requests, writePaths.import).at(-1)?.fileName).toBe(fileName);
+    expect(calls(requests, writePaths.import).at(-1)?.form.memberText).toBeUndefined();
+    expect(calls(requests, writePaths.import).at(-1)?.form.orgId).toBe(orgId);
+  }
+  expect(calls(requests, writePaths.import)).toHaveLength(2);
+  expect(requests.some((request) => request.path.includes('/files/'))).toBe(false);
+});
+
+test('组织导入手机号真实键盘限制11位数字，单格及整表非法粘贴整次拒绝保留草稿', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { requests } = await organizationBackend(page, origin);
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '批量导入成员', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '批量导入成员', exact: true });
+  const phone = importCell(dialog, 1, '手机号');
+  await expect(phone).toHaveAttribute('maxlength', '11');
+  await phone.pressSequentially('88888888888888888888888');
+  await expect(phone).toHaveValue('88888888888');
+  await phone.fill('');
+  await phone.pressSequentially('a1b3c8d00009002!');
+  await expect(phone).toHaveValue('13800009002');
+  await pasteMembers(
+    importCell(dialog, 1, '姓名'),
+    '保留成员甲\t13800009002\t全职\t成员\n保留成员乙\t13800009003\t兼职\t管理员',
+  );
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  for (const value of ['1380000900299', '1380000900a', '１３８００００９００２']) {
+    await page.evaluate((text) => navigator.clipboard.writeText(text), value);
+    await phone.selectText();
+    await phone.press('ControlOrMeta+V');
+    await expect(dialog.getByText('手机号只能填写最多 11 位数字', { exact: true })).toBeVisible();
+    await expect(phone).toHaveValue('13800009002');
+  }
+  await page.evaluate(() => navigator.clipboard.writeText(' 13900009004 '));
+  await phone.selectText();
+  await phone.press('ControlOrMeta+V');
+  await expect(phone).toHaveValue('13900009004');
+  await expect(dialog.getByText('手机号只能填写最多 11 位数字', { exact: true })).toHaveCount(0);
+  await page.evaluate(() => navigator.clipboard.writeText('5'));
+  await phone.press('End');
+  await phone.press('ControlOrMeta+V');
+  await expect(dialog.getByText('手机号只能填写最多 11 位数字', { exact: true })).toBeVisible();
+  await expect(phone).toHaveValue('13900009004');
+  const original = await importDraft(dialog);
+  for (const [target, text, row] of [
+    ['姓名', '覆盖成员甲\t13800009002\t兼职\t管理员\n覆盖成员乙\t1380000900399\t全职\t成员', 2],
+    ['姓名', '覆盖成员甲,1380000900a,兼职,管理员\n覆盖成员乙,13800009003,全职,成员', 1],
+    ['手机号', '1380000900299\t兼职\t管理员', 1],
+    ['手机号', '13900009009\t兼职\t管理员\n1380000900a\t全职\t成员', 2],
+  ] as const) {
+    await pasteMembers(importCell(dialog, 1, target), text);
+    await expect(
+      dialog.getByText(`第 ${row} 行手机号只能填写最多 11 位数字`, { exact: true }),
+    ).toBeVisible();
+    expect(await importDraft(dialog)).toEqual(original);
+    expect(calls(requests, writePaths.import)).toHaveLength(0);
+  }
+});
+
+test('组织导入手机号前缀、必填、短号和同批重复均逐行拦截，改正后才发送一次', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { state, requests } = await organizationBackend(page, origin);
+  state.importMode = 'success';
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '批量导入成员', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '批量导入成员', exact: true });
+  await pasteMembers(
+    importCell(dialog, 1, '姓名'),
+    '前缀错误\t88888888888\t全职\t成员\n手机号缺失\t\t全职\t成员\n位数不足\t1380000\t兼职\t成员\n重复成员甲\t13800009002\t全职\t成员\n重复成员乙\t13800009002\t兼职\t成员',
+  );
+  await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+  for (const [row, message] of [
+    [1, '请输入 11 位大陆手机号码'],
+    [2, '手机号不能为空'],
+    [3, '请输入 11 位大陆手机号码'],
+    [5, '同一批成员手机号重复'],
+  ] as const) {
+    await expect(importCell(dialog, row, '手机号')).toHaveAttribute('aria-invalid', 'true');
+    await expect(importCell(dialog, row, '手机号')).toHaveAccessibleDescription(message);
+  }
+  await expect(dialog.getByText('请修正表格中的标记项后再导入', { exact: true })).toBeVisible();
+  expect(calls(requests, writePaths.import)).toHaveLength(0);
+  await importCell(dialog, 1, '手机号').fill('13900009001');
+  await importCell(dialog, 2, '手机号').fill('13900009002');
+  await importCell(dialog, 3, '手机号').fill('13900009003');
+  await importCell(dialog, 5, '手机号').fill('13900009005');
+  await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+  await expect(dialog.getByText(/已成功导入 5 位成员/)).toBeVisible();
+  expect(calls(requests, writePaths.import)).toHaveLength(1);
+  expect(calls(requests, writePaths.import)[0]?.form).toEqual({
+    orgId,
+    memberText:
+      '前缀错误,13900009001,全职,成员\r\n手机号缺失,13900009002,全职,成员\r\n位数不足,13900009003,兼职,成员\r\n重复成员甲,13800009002,全职,成员\r\n重复成员乙,13900009005,兼职,成员',
+  });
+});
+
+test('组织导入人员属性和角色使用公共下拉，原生日期可填写清除且英文表格映射中文', async ({
+  page,
+}) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { state, requests } = await organizationBackend(page, origin);
+  state.importMode = 'success';
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '批量导入成员', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '批量导入成员', exact: true });
+  await importCell(dialog, 1, '姓名').fill('字段联调成员甲');
+  await importCell(dialog, 1, '手机号').fill('13900009001');
+  await expect(importCell(dialog, 1, '人员属性')).toHaveRole('combobox');
+  await expect(importCell(dialog, 1, '人员属性')).toHaveText('请选择');
+  await expect(importCell(dialog, 1, '组织角色')).toHaveText('成员');
+  await selectImportCell(dialog, 1, '人员属性', '全职');
+  await selectImportCell(dialog, 1, '人员属性', '兼职');
+  await selectImportCell(dialog, 1, '组织角色', '管理员');
+  await selectImportCell(dialog, 1, '组织角色', '成员');
+  await selectImportCell(dialog, 1, '组织角色', '管理员');
+  const date = importCell(dialog, 1, '入组日期');
+  await expect(date).toHaveAttribute('type', 'date');
+  await date.fill('2024-02-29');
+  await expect(date).toHaveValue('2024-02-29');
+  await date.fill('');
+  await expect(date).toHaveValue('');
+  await date.fill('2026-10-05');
+  await dialog.getByRole('button', { name: '添加成员', exact: true }).click();
+  await pasteMembers(
+    importCell(dialog, 2, '姓名'),
+    'English Member Alpha\t13900009002\tFull-time\tMember\t2026-10-06\nEnglish Member Beta\t13900009003\tPart-time\tAdministrator\t',
+  );
+  await expect(importCell(dialog, 2, '人员属性')).toHaveText('全职');
+  await expect(importCell(dialog, 2, '组织角色')).toHaveText('成员');
+  await expect(importCell(dialog, 3, '人员属性')).toHaveText('兼职');
+  await expect(importCell(dialog, 3, '组织角色')).toHaveText('管理员');
+  await expect(importCell(dialog, 2, '入组日期')).toHaveValue('2026-10-06');
+  await expect(importCell(dialog, 3, '入组日期')).toHaveValue('');
+  expect(calls(requests, writePaths.import)).toHaveLength(0);
+  await importCell(dialog, 2, '人员属性').click();
+  await expect(dialog.getByRole('option', { name: '全职', exact: true })).toBeVisible();
+  await page.screenshot({ path: 'artifacts/organization-import-select-date-desktop.png' });
+  await dialog.getByRole('option', { name: '全职', exact: true }).click();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await importCell(dialog, 3, '组织角色').click();
+  await expect(dialog.getByRole('option', { name: '管理员', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
+    true,
+  );
+  await page.screenshot({ path: 'artifacts/organization-import-select-mobile.png' });
+  await dialog.getByRole('option', { name: '管理员', exact: true }).click();
+  await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+  await expect(dialog.getByText(/已成功导入 3 位成员/)).toBeVisible();
+  expect(calls(requests, writePaths.import)).toHaveLength(1);
+  expect(calls(requests, writePaths.import)[0]?.form).toEqual({
+    orgId,
+    memberText:
+      '字段联调成员甲,13900009001,兼职,管理员,2026-10-05\r\nEnglish Member Alpha,13900009002,全职,成员,2026-10-06\r\nEnglish Member Beta,13900009003,兼职,管理员',
+  });
+});
+
+test('组织导入姓名、枚举和日期拒绝非法粘贴保稿，必填项逐行提示且改正后才提交', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { state, requests } = await organizationBackend(page, origin);
+  state.importMode = 'success';
+  await openOrganization(page, origin);
+  await page.getByRole('button', { name: '批量导入成员', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '批量导入成员', exact: true });
+  const name = importCell(dialog, 1, '姓名');
+  await name.pressSequentially('A'.repeat(70));
+  await expect(name).toHaveValue('A'.repeat(64));
+  await pasteMembers(name, '保留姓名\t13900009011\t全职\t成员\t2026-10-01');
+  const original = await importDraft(dialog);
+  for (const [text, message] of [
+    [`${'长'.repeat(65)}\t13900009011\t全职\t成员\t2026-10-01`, '姓名最多填写 64 个字符'],
+    ['8非法姓名\t13900009011\t全职\t成员\t2026-10-01', '姓名须以文字开头'],
+    ['覆盖姓名\t13900009011\t外包\t成员\t2026-10-01', '人员属性必须填写全职或兼职'],
+    ['覆盖姓名\t13900009011\t全职\t主管\t2026-10-01', '组织角色必须填写管理员或成员'],
+    ['覆盖姓名\t13900009011\t全职\t成员\t2026-02-30', '入组日期必须为有效的 YYYY-MM-DD 日期'],
+    ['覆盖姓名\t13900009011\t全职\t成员\t2026/10/01', '入组日期必须为有效的 YYYY-MM-DD 日期'],
+  ] as const) {
+    await pasteMembers(name, text);
+    await expect(dialog.getByRole('alert')).toContainText(message);
+    expect(await importDraft(dialog)).toEqual(original);
+    expect(calls(requests, writePaths.import)).toHaveLength(0);
+  }
+  await name.fill('');
+  await dialog.getByRole('button', { name: '添加成员', exact: true }).click();
+  await importCell(dialog, 2, '姓名').fill('合法成员乙');
+  await importCell(dialog, 2, '手机号').fill('13900009012');
+  await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+  await expect(name).toHaveAttribute('aria-invalid', 'true');
+  await expect(name).toHaveAccessibleDescription('姓名不能为空');
+  await expect(importCell(dialog, 2, '人员属性')).toHaveAttribute('aria-invalid', 'true');
+  await expect(importCell(dialog, 2, '人员属性')).toHaveAccessibleDescription(
+    '人员属性必须填写全职或兼职',
+  );
+  await expect(dialog.getByText('请修正表格中的标记项后再导入', { exact: true })).toBeVisible();
+  expect(calls(requests, writePaths.import)).toHaveLength(0);
+  await page.screenshot({ path: 'artifacts/organization-import-required-fields-desktop.png' });
+  await name.fill('合法成员甲');
+  await selectImportCell(dialog, 2, '人员属性', '兼职');
+  await dialog.getByRole('button', { name: '确认导入', exact: true }).click();
+  await expect(dialog.getByText(/已成功导入 2 位成员/)).toBeVisible();
+  expect(calls(requests, writePaths.import)).toHaveLength(1);
+  expect(calls(requests, writePaths.import)[0]?.form).toEqual({
+    orgId,
+    memberText: '合法成员甲,13900009011,全职,成员,2026-10-01\r\n合法成员乙,13900009012,兼职',
+  });
 });

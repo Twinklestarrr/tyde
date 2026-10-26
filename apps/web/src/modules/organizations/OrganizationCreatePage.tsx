@@ -17,15 +17,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
+import { FileUploadField } from '@/components/ui/shared/FileUploadField';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { api } from '@/services/api';
 import { OrganizationPageHeader } from './OrganizationPageHeader';
+import { OrganizationLogoField, useOrganizationLogo } from './OrganizationLogoField';
 
 interface CreateValues {
   name: string;
   unifiedCreditCode: string;
   description: string;
-  logoUrl: string;
   expertiseTags: string;
 }
 
@@ -36,17 +37,7 @@ function tagsFrom(value: string) {
     .filter(Boolean);
 }
 
-function validHttpsUrl(value: string) {
-  if (!value.trim()) return true;
-  try {
-    const url = new URL(value.trim());
-    return url.protocol === 'https:' && !url.username && !url.password;
-  } catch {
-    return false;
-  }
-}
-
-/** 无组织时独立创建；资料保存与证照认领只调用 main 已有接口。 */
+/** 无组织时独立创建，Logo 和证照在创建时上传并关联。 */
 export function OrganizationCreatePage({ user }: { user: AuthUser }) {
   if (typeof user.organization?.id === 'string') return <Navigate to="/organization" replace />;
   return <OrganizationCreateForm user={user} />;
@@ -60,12 +51,10 @@ function OrganizationCreateForm({ user }: { user: AuthUser }) {
       name: '',
       unifiedCreditCode: '',
       description: '',
-      logoUrl: '',
       expertiseTags: '',
     },
     mode: 'onBlur',
   });
-  const fileInput = useRef<HTMLInputElement>(null);
   const inFlight = useRef(false);
   const mounted = useRef(false);
   const uploaded = useRef<{ file: File; result: BusinessLicenseUploadResult } | null>(null);
@@ -75,6 +64,7 @@ function OrganizationCreateForm({ user }: { user: AuthUser }) {
   const [refreshError, setRefreshError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<OrganizationDetail | null>(null);
+  const logo = useOrganizationLogo('', 512, () => setError(null));
   const currentRole = user.selectedRole ?? user.role;
   const canCreate = currentRole === 'EXPERT';
 
@@ -126,13 +116,12 @@ function OrganizationCreateForm({ user }: { user: AuthUser }) {
     const input: OrganizationCreateInput = { name: values.name.trim() };
     const credit = values.unifiedCreditCode.trim();
     const description = values.description.trim();
-    const logoUrl = values.logoUrl.trim();
     const expertiseTags = tagsFrom(values.expertiseTags);
     if (credit) input.unifiedCreditCode = credit;
     if (description) input.description = description;
-    if (logoUrl) input.logoUrl = logoUrl;
     if (expertiseTags.length) input.expertiseTags = expertiseTags;
     try {
+      Object.assign(input, await logo.prepare());
       if (license) {
         const result =
           uploaded.current?.file === license
@@ -289,29 +278,7 @@ function OrganizationCreateForm({ user }: { user: AuthUser }) {
                   />
                 )}
               </FormField>
-              <FormField
-                controlId="create-org-logo"
-                label="Logo 地址（选填）"
-                error={form.formState.errors.logoUrl?.message}
-                description="目前仅支持公开的 HTTPS 图片地址；本地上传保存尚未开放。"
-              >
-                {({ invalid, describedBy }) => (
-                  <Input
-                    id="create-org-logo"
-                    size="profile"
-                    type="url"
-                    maxLength={512}
-                    placeholder="https://example.com/logo.png"
-                    aria-invalid={invalid || undefined}
-                    aria-describedby={describedBy}
-                    {...form.register('logoUrl', {
-                      validate: (value) =>
-                        (value.trim().length <= 512 && validHttpsUrl(value)) ||
-                        '请输入不含用户名和密码的 HTTPS 图片地址（最多 512 字符）',
-                    })}
-                  />
-                )}
-              </FormField>
+              <OrganizationLogoField logo={logo} disabled={busy} />
               <FormField
                 controlId="create-org-license"
                 label="营业执照（选填）"
@@ -320,29 +287,22 @@ function OrganizationCreateForm({ user }: { user: AuthUser }) {
               >
                 {({ invalid, describedBy }) => (
                   <div className="flex min-w-0 flex-wrap items-center gap-[10px]">
-                    <input
-                      ref={fileInput}
+                    <FileUploadField
                       id="create-org-license"
-                      type="file"
                       accept={AVATAR_ACCEPT}
-                      hidden
-                      onChange={(event) => {
-                        chooseFile(event.target.files?.[0]);
-                        event.target.value = '';
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="account"
                       disabled={busy}
                       aria-invalid={invalid || undefined}
                       aria-describedby={describedBy}
-                      onClick={() => fileInput.current?.click()}
+                      contentClassName="rounded-[8px]"
+                      onFilesSelected={(files) => chooseFile(files[0])}
                     >
-                      <FileImage className="size-[16px]" aria-hidden />
-                      选择营业执照
-                    </Button>
+                      <Button asChild variant="outline" size="account" disabled={busy}>
+                        <span>
+                          <FileImage className="size-[16px]" aria-hidden />
+                          选择营业执照
+                        </span>
+                      </Button>
+                    </FileUploadField>
                     {(license || fileError) && (
                       <span className="flex max-w-full min-w-0 items-center rounded-[8px] border bg-muted pl-[10px]">
                         <span

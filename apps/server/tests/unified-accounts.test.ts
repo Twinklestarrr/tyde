@@ -167,6 +167,50 @@ test('license failure propagates within business transaction before member creat
   );
   expect(tx.userOrgRel.create).not.toHaveBeenCalled();
 });
+test('organization creation saves a claimed logo URL before completing the owner relationship', async () => {
+  const { service, tx, user } = setup();
+  const logoUrl = 'https://storage.example/org-logo/new.png';
+  const claim = vi
+    .spyOn(FileRegistryService.prototype, 'syncOrganizationLogo')
+    .mockResolvedValue(logoUrl);
+  const result = await service.createOrganization(token, 'desktop', {
+    name: '图片组织',
+    logoUrl: 'org-logo/new.png',
+    logoUploadToken: 'image-token',
+  });
+  expect(claim).toHaveBeenCalledWith(tx, result.id, user.uid, 'org-logo/new.png', 'image-token');
+  expect(tx.organization.update).toHaveBeenCalledWith({
+    where: { id: result.id },
+    data: { logoUrl },
+  });
+  expect(result.logoUrl).toBe(logoUrl);
+  expect(claim.mock.invocationCallOrder[0]).toBeLessThan(
+    tx.userOrgRel.create.mock.invocationCallOrder[0]!,
+  );
+});
+test('invalid or failed organization logo claims stop creation and propagate through the transaction', async () => {
+  const { service, tx } = setup();
+  const claim = vi
+    .spyOn(FileRegistryService.prototype, 'syncOrganizationLogo')
+    .mockRejectedValue(new Error('logo claim failure'));
+  await expect(
+    service.createOrganization(token, 'desktop', {
+      name: '图片组织',
+      logoUploadToken: 'image-token',
+    }),
+  ).rejects.toMatchObject({ status: 400 });
+  expect(tx.organization.create).not.toHaveBeenCalled();
+  await expect(
+    service.createOrganization(token, 'desktop', {
+      name: '图片组织',
+      logoUrl: 'org-logo/new.png',
+      logoUploadToken: 'image-token',
+    }),
+  ).rejects.toThrow('logo claim failure');
+  expect(claim).toHaveBeenCalledOnce();
+  expect(tx.organization.update).not.toHaveBeenCalled();
+  expect(tx.userOrgRel.create).not.toHaveBeenCalled();
+});
 test('revoked sessions and frozen accounts cannot create or switch', async () => {
   for (const mode of ['revoked', 'frozen']) {
     const { service, session, user, tx } = setup();

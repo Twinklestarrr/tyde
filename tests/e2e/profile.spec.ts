@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { test, expect, type Page } from '@playwright/test';
-import type { AuthUser, OrganizationDetail } from '../../packages/shared/src/index';
+import type {
+  AuthUser,
+  OrganizationDetail,
+  WorkbenchApplication,
+} from '../../packages/shared/src/index';
 
 const fixtureUser: AuthUser = {
   id: 'profile-fixture',
@@ -63,13 +67,32 @@ const avatarReceipt = {
   contentType: 'image/png',
   fileHash: createHash('sha256').update(avatarBytes).digest('hex'),
 };
+const logoBytes = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJ0lEQVR4nGNQXLr9PyWYYXAZQCwYxAbgM4zkQBw1YDAYQFZSHhADAOlp0x+yOzC+AAAAAElFTkSuQmCC',
+  'base64',
+);
+const logoReceipt = {
+  ...avatarReceipt,
+  size: logoBytes.length,
+  fileHash: createHash('sha256').update(logoBytes).digest('hex'),
+  objectKey: 'org-logo/2026/10/23/0123456789abcdef0123456789abcdef.png',
+  uploadToken: 'l'.repeat(43),
+  url: 'https://avatars.example.test/local-organization-logo.png',
+  fileName: 'organization-logo.png',
+};
 async function profileBackend(page: Page, origin: string, signedIn = true) {
   const state = {
     signedIn,
     user: { ...fixtureUser },
     updateStatus: 200,
     orgStatus: 200,
+    organizationUpdateStatus: 200,
+    organizationDetail: { ...organization },
     uploadStatus: 200,
+    meStatus: 200,
+    departureStatus: 200,
+    withdrawStatus: 200,
+    applications: [] as WorkbenchApplication[],
   };
   const requests: RecordedRequest[] = [];
   const signIn = async () => {
@@ -144,7 +167,8 @@ async function profileBackend(page: Page, origin: string, signedIn = true) {
         'Set-Cookie': 'profile_session=; Max-Age=0; HttpOnly; Path=/; SameSite=Lax',
       });
     }
-    if (path === '/api/v1/users/me' && request.method() === 'GET') return reply(state.user);
+    if (path === '/api/v1/users/me' && request.method() === 'GET')
+      return reply(state.meStatus === 200 ? state.user : null, state.meStatus);
     if (path === '/api/v1/auth/switch-role' && request.method() === 'POST') {
       const role = body?.role as AuthUser['role'];
       if (!state.user.roles.includes(role)) return reply(null, 403);
@@ -155,9 +179,95 @@ async function profileBackend(page: Page, origin: string, signedIn = true) {
     if (path === '/api/v1/expert-assignments/my-projects' && request.method() === 'GET')
       return reply([]);
     if (path === '/api/v1/files/upload' && request.method() === 'POST')
-      return reply(state.uploadStatus === 200 ? avatarReceipt : null, state.uploadStatus);
+      return reply(
+        state.uploadStatus === 200
+          ? record.form.bizType === 'ORG_LOGO'
+            ? logoReceipt
+            : avatarReceipt
+          : null,
+        state.uploadStatus,
+      );
     if (path === '/api/v1/organizations' && request.method() === 'GET')
-      return reply(organization, state.orgStatus);
+      return reply(state.organizationDetail, state.orgStatus);
+    if (path === '/api/v1/organizations/update' && request.method() === 'POST') {
+      if (
+        (state.user.selectedRole ?? state.user.role) !== 'EXPERT' ||
+        state.user.organization?.position !== 'OWNER' ||
+        state.user.organization.joinStatus !== 'ACTIVE'
+      )
+        return reply(null, 403);
+      if (state.organizationUpdateStatus !== 200)
+        return reply(null, state.organizationUpdateStatus);
+      if (typeof body?.description === 'string')
+        state.organizationDetail.description = body.description;
+      if (typeof body?.logoUrl === 'string') state.organizationDetail.logoUrl = body.logoUrl;
+      if (body?.logoUrl === logoReceipt.objectKey) {
+        expect(body.logoUploadToken).toBe(logoReceipt.uploadToken);
+        state.organizationDetail.logoUrl = logoReceipt.url;
+      }
+      state.user.organization = {
+        ...state.user.organization,
+        description: state.organizationDetail.description,
+        logoUrl: state.organizationDetail.logoUrl,
+      };
+      return reply({
+        id: organization.id,
+        description: state.organizationDetail.description,
+        logoUrl: state.organizationDetail.logoUrl,
+        updatedAt: '2026-10-23T01:00:00.000Z',
+      });
+    }
+    if (path === '/api/v1/users/me/applications')
+      return reply({
+        records: state.applications,
+        total: state.applications.length,
+        current: body?.current ?? 1,
+        size: body?.size ?? 10,
+        pages: state.applications.length ? 1 : 0,
+      });
+    if (path === '/api/v1/organizations/members/exit-requests') {
+      if (state.departureStatus !== 200) return reply(null, state.departureStatus);
+      state.user.organization = { ...state.user.organization, joinStatus: 'EXIT_APPROVING' };
+      return reply({
+        flowNo: 'EXIT-PROFILE-1',
+        businessType: 'ORG_MEMBER_EXIT',
+        businessId: '00000000-0000-4000-8000-000000000002',
+        flowStatus: 'PENDING',
+        memberId: '00000000-0000-4000-8000-000000000002',
+        joinStatus: 'EXIT_APPROVING',
+        plannedLeaveDate: null,
+        appliedAt: '2026-10-22T06:00:00.000Z',
+      });
+    }
+    if (path === '/api/v1/organizations/attendance/withdraw') {
+      const application = state.applications.find(
+        (item) => item.applicationId === body?.applicationId,
+      )!;
+      if (state.withdrawStatus === 409) {
+        application.flowVersionNo += 1;
+        return reply(null, 409);
+      }
+      if (state.withdrawStatus !== 200) return reply(null, state.withdrawStatus);
+      application.status = 'WITHDRAWN';
+      application.flowVersionNo += 1;
+      application.finishedAt = '2026-10-22 15:00:00';
+      return reply({
+        applicationId: application.applicationId,
+        flowNo: application.flowNo,
+        flowVersionNo: application.flowVersionNo,
+        businessType: application.businessType,
+        applicationType: 'LEAVE',
+        attendanceDate: '2026-10-22',
+        finalStatus: 'LEAVE',
+        status: 'WITHDRAWN',
+        versionNo: null,
+        dailyId: null,
+        leaveStartAt: '2026-10-22 09:00:00',
+        leaveEndAt: '2026-10-22 12:00:00',
+        appliedAt: '2026-10-22T06:00:00.000Z',
+        finishedAt: '2026-10-22T07:00:00.000Z',
+      });
+    }
     if (path === '/api/v1/users/me/update' && request.method() === 'POST') {
       if (state.updateStatus !== 200) return reply(null, state.updateStatus);
       if (body?.newPassword) {
@@ -201,6 +311,33 @@ const writes = (requests: RecordedRequest[]) =>
   requests.filter((r) => r.path === '/api/v1/users/me/update');
 const uploads = (requests: RecordedRequest[]) =>
   requests.filter((request) => request.path === '/api/v1/files/upload');
+const applicationFixture: WorkbenchApplication = {
+  applicationId: '00000000-0000-4000-8000-000000000003',
+  flowNo: 'PROFILE-LEAVE-1',
+  flowVersionNo: 7,
+  businessType: 'ATTENDANCE_LEAVE',
+  businessId: '00000000-0000-4000-8000-000000000003',
+  businessNo: null,
+  title: '本人请假申请',
+  applicantOrgId: organization.id,
+  applicantOrgName: organization.name,
+  applyReason: '个人事务',
+  status: 'PENDING',
+  currentNode: 1,
+  currentNodeCode: 'OWNER_APPROVAL',
+  formData: {
+    attendanceDate: '2026-10-22',
+    finalStatus: 'LEAVE',
+    leaveStartAt: '2026-10-22 09:00:00',
+    leaveEndAt: '2026-10-22 12:00:00',
+    timezone: 'Asia/Shanghai',
+  },
+  targetMemberId: null,
+  targetMemberName: null,
+  plannedLeaveDate: null,
+  appliedAt: '2026-10-22 14:00:00',
+  finishedAt: null,
+};
 async function blobIsReadable(page: Page, url: string) {
   return page.evaluate(async (value) => {
     try {
@@ -285,7 +422,7 @@ for (const [mode, origin, desktop] of [
     await editProfile(page);
     const panel = page.getByRole('tabpanel', { name: '个人资料', exact: true });
     const choosingAvatar = page.waitForEvent('filechooser');
-    await panel.getByRole('button', { name: '更换头像', exact: true }).click();
+    await panel.getByText('更换头像', { exact: true }).click();
     await (
       await choosingAvatar
     ).setFiles({
@@ -500,9 +637,303 @@ for (const [mode, origin, desktop] of [
     await page.reload();
     await expect(org.getByText('普通成员可见摘要', { exact: true })).toBeVisible();
     expect(requests.filter((r) => r.path === '/api/v1/organizations')).toHaveLength(2);
-    expect(requests.every((r) => r.method === 'GET')).toBe(true);
+    expect(
+      requests.every((r) => r.method === 'GET' || r.path === '/api/v1/users/me/applications'),
+    ).toBe(true);
+  });
+  test(`个人中心 ${mode} 本人退出失败留稿并复用幂等键，成功显示审批中且主管不能退出`, async ({
+    page,
+  }) => {
+    if (desktop)
+      await page.addInitScript((apiBaseUrl) => {
+        window.tydeDesktop = { getRuntimeConfig: async () => ({ ok: true, data: { apiBaseUrl } }) };
+      }, origin);
+    const { state, requests } = await profileBackend(page, origin);
+    state.user.organization = { ...organization, position: 'MEMBER', joinStatus: 'ACTIVE' };
+    state.departureStatus = 503;
+    await openProfile(page, origin);
+    await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '组织与申请', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await page.getByRole('button', { name: '申请退出组织', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '申请退出组织', exact: true });
+    await dialog.getByLabel(/^拟离职日期\s*\*?\s*$/).fill('2099-12-31');
+    await dialog.getByLabel(/^退出原因\s*\*?\s*$/).fill('个人安排');
+    await dialog.getByRole('button', { name: '提交退出申请', exact: true }).click();
+    await expect(dialog.getByText('资料服务暂不可用', { exact: true })).toBeVisible();
+    await expect(dialog.getByLabel(/^退出原因\s*\*?\s*$/)).toHaveValue('个人安排');
+    const exits = () =>
+      requests.filter((request) => request.path.endsWith('/members/exit-requests'));
+    expect(exits()).toHaveLength(1);
+    state.departureStatus = 200;
+    await dialog.getByRole('button', { name: '提交退出申请', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    const organizationPanel = page.getByRole('region', { name: '组织与申请', exact: true });
+    await expect(organizationPanel.getByText('退出审批中', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '申请退出组织', exact: true })).toHaveCount(0);
+    expect(exits()).toHaveLength(2);
+    expect(exits()[0].headers['idempotency-key']).toBe(exits()[1].headers['idempotency-key']);
+    expect(exits()[1].body).toEqual({
+      orgId: organization.id,
+      reason: '个人安排',
+      plannedLeaveDate: '2099-12-31',
+    });
+    expect(exits().every((request) => request.authenticated)).toBe(true);
+    state.user.organization = { ...organization, joinStatus: 'ACTIVE' };
+    await page.reload();
+    await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '组织与申请', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(
+      page.getByText('主管退出前请先在组织管理中转让主管角色。', { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: '申请退出组织', exact: true })).toHaveCount(0);
+  });
+  test(`个人中心 ${mode} 仅考勤申请可撤回，失败不重放，409重读后使用最新流程版本`, async ({
+    page,
+  }) => {
+    if (desktop)
+      await page.addInitScript((apiBaseUrl) => {
+        window.tydeDesktop = { getRuntimeConfig: async () => ({ ok: true, data: { apiBaseUrl } }) };
+      }, origin);
+    const { state, requests } = await profileBackend(page, origin);
+    state.user.organization = { ...organization, position: 'MEMBER', joinStatus: 'ACTIVE' };
+    state.applications = [
+      { ...applicationFixture },
+      {
+        ...applicationFixture,
+        applicationId: '00000000-0000-4000-8000-000000000004',
+        businessType: 'ORG_MEMBER_EXIT',
+        title: '本人退出申请',
+      },
+      {
+        ...applicationFixture,
+        applicationId: '00000000-0000-4000-8000-000000000005',
+        businessType: 'ATTENDANCE_CORRECTION',
+        title: '不可撤回修正申请',
+        canWithdraw: false,
+      },
+    ];
+    state.withdrawStatus = 503;
+    await openProfile(page, origin);
+    await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '组织与申请', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(page.getByRole('button', { name: '撤回申请', exact: true })).toHaveCount(1);
+    await expect(page.getByText('考勤日期：2026-10-22', { exact: true })).toHaveCount(2);
+    await page.getByRole('button', { name: '撤回申请', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '撤回考勤申请', exact: true });
+    await dialog.getByRole('button', { name: '确认撤回', exact: true }).click();
+    await expect(dialog.getByText('资料服务暂不可用', { exact: true })).toBeVisible();
+    const withdrawals = () =>
+      requests.filter((request) => request.path.endsWith('/attendance/withdraw'));
+    expect(withdrawals()).toHaveLength(1);
+    state.withdrawStatus = 409;
+    await dialog.getByRole('button', { name: '确认撤回', exact: true }).click();
+    await expect(
+      dialog.getByText('申请状态或版本已变化，请先读取最新记录。', { exact: true }),
+    ).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '确认撤回', exact: true })).toHaveCount(0);
+    state.withdrawStatus = 200;
+    await dialog.getByRole('button', { name: '读取最新记录', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await page.getByRole('button', { name: '撤回申请', exact: true }).click();
+    await dialog.getByRole('button', { name: '确认撤回', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '撤回申请', exact: true })).toHaveCount(0);
+    expect(withdrawals().map((request) => request.body)).toEqual([
+      { applicationId: applicationFixture.applicationId, flowVersionNo: 7 },
+      { applicationId: applicationFixture.applicationId, flowVersionNo: 7 },
+      { applicationId: applicationFixture.applicationId, flowVersionNo: 8 },
+    ]);
+    expect(withdrawals().every((request) => request.authenticated)).toBe(true);
   });
 }
+
+test.describe('个人中心组织资料编辑', () => {
+  const origin = 'http://127.0.0.1:5176';
+  test(`个人中心 Web 主管直接编辑组织资料，失败留稿并按真实结果更新摘要`, async ({ page }) => {
+    const { state, requests } = await profileBackend(page, origin);
+    state.user.organization = {
+      ...organization,
+      description: '会话中的旧简介',
+      joinStatus: 'ACTIVE',
+    };
+    await openProfile(page, origin);
+    const sidebar = page.getByRole('region', { name: '所属组织', exact: true });
+    await expect(sidebar.getByText(organization.description!, { exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
+    const panel = page.getByRole('region', { name: '组织与申请', exact: true });
+    await expect(panel.getByRole('button', { name: '编辑组织资料', exact: true })).toBeVisible();
+    expect(requests.filter((request) => request.path === '/api/v1/organizations')).toHaveLength(1);
+    await panel.getByRole('button', { name: '编辑组织资料', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '编辑组织资料', exact: true });
+    await expect(dialog.getByLabel('组织简介', { exact: true })).toHaveValue(
+      organization.description!,
+    );
+    await dialog.getByLabel('组织简介', { exact: true }).fill('在个人中心保存的组织简介');
+    await expect(dialog.getByLabel('Logo 地址', { exact: true })).not.toBeVisible();
+    await dialog.getByRole('button', { name: '使用图片链接', exact: true }).click();
+    await dialog
+      .getByLabel('Logo 地址', { exact: true })
+      .fill('https://avatars.example.test/org-logo.png');
+    state.organizationUpdateStatus = 503;
+    await dialog.getByRole('button', { name: '保存组织资料', exact: true }).click();
+    await expect(dialog.getByText('资料服务暂不可用', { exact: true })).toBeVisible();
+    await expect(dialog.getByLabel('组织简介', { exact: true })).toHaveValue(
+      '在个人中心保存的组织简介',
+    );
+    await expect(dialog.getByLabel('Logo 地址', { exact: true })).toHaveValue(
+      'https://avatars.example.test/org-logo.png',
+    );
+    const updates = () =>
+      requests.filter((request) => request.path === '/api/v1/organizations/update');
+    expect(updates()).toHaveLength(1);
+    state.organizationUpdateStatus = 200;
+    await dialog.getByRole('button', { name: '保存组织资料', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(panel.getByText('组织资料已保存', { exact: true })).toBeVisible();
+    await expect(panel.getByText('在个人中心保存的组织简介', { exact: true })).toBeVisible();
+    await expect(sidebar.getByText('在个人中心保存的组织简介', { exact: true })).toBeVisible();
+    expect(updates()).toHaveLength(2);
+    expect(updates()[1].body).toEqual({
+      orgId: organization.id,
+      description: '在个人中心保存的组织简介',
+      logoUrl: 'https://avatars.example.test/org-logo.png',
+    });
+    expect(updates().every((request) => request.method === 'POST' && request.authenticated)).toBe(
+      true,
+    );
+    expect(writes(requests)).toHaveLength(0);
+    expect(uploads(requests)).toHaveLength(0);
+  });
+  test('个人中心组织 Logo 使用共享图片选择器，保存上传并同步组织摘要', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const { state, requests } = await profileBackend(page, origin);
+    state.user.organization = { ...organization, joinStatus: 'ACTIVE' };
+    await openProfile(page, origin);
+    await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
+    const panel = page.getByRole('region', { name: '组织与申请', exact: true });
+    await panel.getByRole('button', { name: '编辑组织资料', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '编辑组织资料', exact: true });
+    const logo = dialog.getByRole('region', { name: '组织 Logo', exact: true });
+    await expect(logo.getByRole('button', { name: '使用图片链接', exact: true })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    await logo
+      .getByLabel('选择组织 Logo 图片', { exact: true })
+      .setInputFiles({ name: logoReceipt.fileName, mimeType: 'image/png', buffer: logoBytes });
+    await expect(logo.getByRole('img', { name: '组织 Logo 预览', exact: true })).toHaveAttribute(
+      'src',
+      /^blob:/,
+    );
+    expect(uploads(requests)).toHaveLength(0);
+    await page.screenshot({
+      path: 'artifacts/profile-organization-logo-edit-desktop.png',
+      fullPage: false,
+    });
+    await dialog.getByRole('button', { name: '保存组织资料', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(panel.getByText('组织资料已保存', { exact: true })).toBeVisible();
+    expect(uploads(requests)).toHaveLength(1);
+    expect(uploads(requests)[0]?.form).toEqual({ bizType: 'ORG_LOGO', category: 'IMAGE' });
+    expect(uploads(requests)[0]?.fileBytes).toEqual(logoBytes);
+    expect(
+      requests.find((request) => request.path === '/api/v1/organizations/update')?.body,
+    ).toEqual({
+      orgId: organization.id,
+      logoUrl: logoReceipt.objectKey,
+      logoUploadToken: logoReceipt.uploadToken,
+    });
+    expect(state.user.organization?.logoUrl).toBe(logoReceipt.url);
+    expect(writes(requests)).toHaveLength(0);
+  });
+  test(`个人中心 Web 组织详情失败不可编辑，保存后回读失败只重试读取`, async ({ page }) => {
+    const { state, requests } = await profileBackend(page, origin);
+    state.user.organization = { ...organization, joinStatus: 'ACTIVE' };
+    state.orgStatus = 403;
+    await openProfile(page, origin);
+    await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
+    const panel = page.getByRole('region', { name: '组织与申请', exact: true });
+    await expect(
+      panel.getByText('组织详情未更新，请重新读取后编辑组织资料。', { exact: true }),
+    ).toBeVisible();
+    await expect(panel.getByRole('button', { name: '编辑组织资料', exact: true })).toHaveCount(0);
+    state.orgStatus = 200;
+    await panel.getByRole('button', { name: '重新读取组织资料', exact: true }).click();
+    await panel.getByRole('button', { name: '编辑组织资料', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '编辑组织资料', exact: true });
+    await dialog.getByLabel('组织简介', { exact: true }).fill('写入成功但暂未回读的简介');
+    state.orgStatus = 503;
+    state.meStatus = 503;
+    await dialog.getByRole('button', { name: '保存组织资料', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      panel.getByText('组织资料已保存；最新资料读取失败，请手动重试读取。', { exact: true }),
+    ).toBeVisible();
+    await expect(panel.getByText('写入成功但暂未回读的简介', { exact: true })).toBeVisible();
+    const updates = () =>
+      requests.filter((request) => request.path === '/api/v1/organizations/update');
+    expect(updates()).toHaveLength(1);
+    state.orgStatus = 200;
+    state.meStatus = 200;
+    await panel.getByRole('button', { name: '重新读取组织与申请', exact: true }).click();
+    await expect(panel.getByText('组织与申请已更新', { exact: true })).toBeVisible();
+    await expect(panel.getByRole('button', { name: '编辑组织资料', exact: true })).toBeVisible();
+    expect(updates()).toHaveLength(1);
+  });
+  test(`个人中心 Web 管理员、成员与非正常在组主管不显示组织编辑入口`, async ({ page }) => {
+    const { state, requests } = await profileBackend(page, origin);
+    for (const [position, joinStatus] of [
+      ['ADMIN', 'ACTIVE'],
+      ['MEMBER', 'ACTIVE'],
+      ['OWNER', 'EXIT_APPROVING'],
+      ['OWNER', 'PENDING_LEAVE'],
+    ] as const) {
+      state.organizationDetail.position = position;
+      state.user.organization = { ...state.organizationDetail, joinStatus };
+      await openProfile(page, origin);
+      await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
+      const panel = page.getByRole('region', { name: '组织与申请', exact: true });
+      await expect(
+        panel.getByText('仅正常在组的主管可修改组织资料。', { exact: true }),
+      ).toBeVisible();
+      await expect(panel.getByRole('button', { name: '编辑组织资料', exact: true })).toHaveCount(0);
+    }
+    expect(
+      requests.filter((request) => request.path === '/api/v1/organizations/update'),
+    ).toHaveLength(0);
+  });
+});
+
+test('角色切换成功后的资料回读失败保留个人资料草稿，手动重读不重放切换', async ({ page }) => {
+  const origin = 'http://127.0.0.1:5176';
+  const { state, requests } = await profileBackend(page, origin);
+  await openProfile(page, origin);
+  await editProfile(page);
+  await page.getByLabel('个人简介', { exact: true }).fill('回读失败也保留的草稿');
+  state.meStatus = 503;
+  await page.getByRole('combobox', { name: '当前角色', exact: true }).click();
+  await page.getByRole('option', { name: '策略官', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
+    '策略官',
+  );
+  await expect(page.getByText('资料服务暂不可用', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('个人简介', { exact: true })).toHaveValue('回读失败也保留的草稿');
+  state.meStatus = 200;
+  const retry = page.getByRole('button', { name: '重试读取账户资料', exact: true });
+  if (await retry.isVisible()) await retry.click();
+  await expect(page.getByText('资料服务暂不可用', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('个人简介', { exact: true })).toHaveValue('回读失败也保留的草稿');
+  expect(requests.filter((request) => request.path.endsWith('/auth/switch-role'))).toHaveLength(1);
+});
 
 test('个人中心登录保护、概览与资料表单在桌面和手机无横向溢出', async ({ page }) => {
   const origin = 'http://127.0.0.1:5176';
@@ -520,9 +951,14 @@ test('个人中心登录保护、概览与资料表单在桌面和手机无横�
   ]) {
     await page.setViewportSize(viewport);
     await page.getByRole('tab', { name: '概览', exact: true }).click();
-    const expertTabs = page.getByRole('tablist', { name: '执行专家个人中心业务', exact: true });
-    await expect(expertTabs).toBeVisible();
-    await expect(expertTabs.getByRole('tab')).toHaveText(['我的项目', '排班考勤', '组织与申请']);
+    await expect(
+      page.getByRole('tablist', { name: '个人中心设置', exact: true }).getByRole('tab'),
+    ).toHaveText(['概览', '个人资料', '账户安全', '我的项目', '排班考勤', '组织与申请']);
+    await expect(
+      page.getByRole('tablist', { name: '执行专家个人中心业务', exact: true }),
+    ).toHaveCount(0);
+    for (const name of ['查看全部项目', '管理排班与考勤', '查看全部申请'])
+      await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(page.getByText('示例数据', { exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
       true,
@@ -531,11 +967,12 @@ test('个人中心登录保护、概览与资料表单在桌面和手机无横�
     const avatar = page.getByRole('region', { name: '头像设置', exact: true });
     await expect(avatar).toBeVisible();
     const fileInput = avatar.getByLabel('上传本地头像', { exact: true });
-    await expect(fileInput).toHaveAttribute('hidden', '');
-    await expect(fileInput).not.toBeVisible();
+    await expect(fileInput).toHaveClass(/sr-only/);
     await expect(avatar.getByText(fixtureUser.nickname.slice(0, 1), { exact: true })).toBeVisible();
-    for (const name of ['更换头像', '清除头像']) {
-      const button = avatar.getByRole('button', { name, exact: true });
+    for (const button of [
+      avatar.locator('[data-slot="file-upload-field"] [data-slot="button"]'),
+      avatar.getByRole('button', { name: '清除头像', exact: true }),
+    ]) {
       await expect(button).toBeVisible();
       expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }

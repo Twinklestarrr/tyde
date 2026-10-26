@@ -26,6 +26,8 @@ export interface OrganizationUpdateInput {
   orgId: string;
   description?: string | null;
   logoUrl?: string | null;
+  /** 本地 Logo 图片上传返回的认领凭证，与 logoUrl 中的 objectKey 一同提交。 */
+  logoUploadToken?: string;
 }
 export interface OrganizationUpdateResult {
   id: string;

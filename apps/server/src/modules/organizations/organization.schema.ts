@@ -40,14 +40,23 @@ export const organizationUpdateBody = {
     },
     logoUrl: {
       ...text(
-        '组织 Logo 地址或 objectKey；可选，不传或 null 保持原值；去除首尾空白，空白字符串清为空串，最多500字符。不验证文件归属、不认领文件。',
-        'logos/example.png',
+        '组织 Logo 图片地址或 ORG_LOGO objectKey；可选，不传或 null 保持原值；去除首尾空白，空白字符串清空，最多500字符。新上传图片须同时提交logoUploadToken，校验本人上传并认领；组织已认领图片可重复保存。替换或清空会在同一事务释放旧图，旧外部HTTPS地址兼容保留。',
+        'org-logo/2026/10/23/example.png',
         true,
       ),
       maxLength: 500,
     },
+    logoUploadToken: {
+      ...text(
+        '新上传Logo的一次性凭证，须与logoUrl=objectKey一起提交；来自登录后bizType=ORG_LOGO图片上传。默认24小时内有效，仅保存在内存；错误或他人凭证403，过期或已被其他组织认领409。旧地址或清空时省略，null视为未提供。',
+        'example-upload-token',
+        true,
+      ),
+      minLength: 1,
+      maxLength: 256,
+    },
   },
-  examples: [{ orgId, description: '提供数据标注服务。', logoUrl: 'logos/example.png' }],
+  examples: [{ orgId, description: '提供数据标注服务。', logoUrl: 'https://example.com/logo.png' }],
 };
 export const organizationDetailResponse = {
   type: 'object',
@@ -77,8 +86,8 @@ export const organizationDetailResponse = {
       true,
     ),
     logoUrl: text(
-      '组织 Logo 地址或 objectKey；未填写为 null，主动清空为空串。',
-      'logos/example.png',
+      '组织 Logo 图片地址；新认领图片返回可展示URL，兼容历史objectKey。未填写为 null，主动清空为空串。',
+      'https://example.com/logo.png',
       true,
     ),
     expertiseTags: {

@@ -105,7 +105,7 @@ export async function organizationRoutes(
           ...organizationSchema(
             'updateOrganization',
             '编辑组织基本资料',
-            '仅ACTIVE（正常在组）的OWNER（主管）可编辑。仅description、logoUrl部分更新；不传/null保持原值，空串清空。写入、权限检查与审计在同一组织行锁事务中完成。',
+            '仅ACTIVE（正常在组）的OWNER（主管）可编辑。仅description、logoUrl部分更新；不传/null保持原值，空串清空。新上传Logo通过logoUrl=objectKey及logoUploadToken认领本人ORG_LOGO图片；已属于该组织的图片可重复保存，替换/清空释放旧图。写入、文件认领/释放、权限检查与审计在同一组织行锁事务中完成。',
             organizationUpdateResponse,
           ),
           body: organizationUpdateBody,

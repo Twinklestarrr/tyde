@@ -1,12 +1,60 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHttpAuth } from '../packages/platform/src/web.ts';
-import { AVATAR_MAX_BYTES, AVATAR_ACCEPT } from '../packages/shared/dist/index.js';
+import {
+  AVATAR_MAX_BYTES,
+  AVATAR_ACCEPT,
+  ORG_LOGO_MAX_BYTES,
+  ORG_LOGO_ACCEPT,
+} from '../packages/shared/dist/index.js';
 
 const orgId = '00000000-0000-4000-8000-000000000002';
 const userId = '00000000-0000-4000-8000-000000000001';
 const applicationId = '00000000-0000-4000-8000-000000000004';
 const wallTime = '2026-10-21 09:30:00';
+const attendanceApply = {
+  orgId,
+  attendanceDate: '2026-10-21',
+  applicationType: 'LEAVE',
+  finalStatus: 'LEAVE',
+  reason: '个人安排',
+  versionNo: 5,
+  dailyId: 12,
+  leaveStartAt: wallTime,
+  leaveEndAt: '2026-10-21 12:00:00',
+};
+const attendanceApplied = {
+  applicationId,
+  flowNo: 'TEST-ATTENDANCE-1',
+  flowVersionNo: 0,
+  businessType: 'ATTENDANCE_LEAVE',
+  applicationType: 'LEAVE',
+  attendanceDate: attendanceApply.attendanceDate,
+  finalStatus: 'LEAVE',
+  status: 'PENDING',
+  versionNo: 5,
+  dailyId: 12,
+  leaveStartAt: wallTime,
+  leaveEndAt: attendanceApply.leaveEndAt,
+  appliedAt: '2026-10-21T01:00:00.000Z',
+  finishedAt: null,
+};
+const scheduleInput = {
+  schedules: [
+    { scheduleDate: '2026-10-21', dayType: 'WORK', startTime: '09:00', endTime: '18:00' },
+    { scheduleDate: '2026-10-22', dayType: 'REST' },
+  ],
+  overwrite: false,
+  timezone: 'Asia/Shanghai',
+  idempotencyKey: 'fixture-personal-schedule-1',
+};
+const scheduled = {
+  batchNo: 'TEST-SCHEDULE-1',
+  createdCount: 1,
+  updatedCount: 0,
+  skippedCount: 1,
+  conflicts: [{ scheduleDate: '2026-10-21', scheduleId: 9, versionNo: 3 }],
+};
 const project = {
   assignmentId: 23,
   projectId: 17,
@@ -227,6 +275,11 @@ const avatarResult = (file) => ({
   contentType: 'image/png',
   fileHash: 'c'.repeat(64),
 });
+const logoResult = (file) => ({
+  ...avatarResult(file),
+  objectKey: 'org-logo/2026/10/23/0123456789abcdef0123456789abcdef.png',
+  url: 'https://images.example.test/logo.png',
+});
 const result = (data, status = 200) =>
   new Response(
     JSON.stringify({ code: status, message: status === 200 ? '操作成功' : '真实服务端错误', data }),
@@ -266,6 +319,115 @@ function deferred() {
 
 for (const desktop of [false, true]) {
   const mode = desktop ? 'Electron renderer' : 'Web';
+  test(`${mode} personal attendance writes preserve scope, independent versions and schedule idempotency`, async (t) => {
+    const corrected = {
+      ...attendanceApplied,
+      businessType: 'ATTENDANCE_CORRECTION',
+      applicationType: 'CORRECTION',
+      finalStatus: 'PRESENT',
+      versionNo: null,
+      dailyId: null,
+      leaveStartAt: null,
+      leaveEndAt: null,
+    };
+    const withdrawn = {
+      ...attendanceApplied,
+      status: 'WITHDRAWN',
+      flowVersionNo: 8,
+      finishedAt: '2026-10-21T02:00:00.000Z',
+    };
+    const updateInput = {
+      orgId,
+      dailyId: 12,
+      finalStatus: 'PRESENT',
+      manualRemark: ' 核对出勤 ',
+      versionNo: 5,
+    };
+    const updated = {
+      id: 12,
+      beforeStatus: null,
+      finalStatus: 'PRESENT',
+      manualOverride: true,
+      manualRemark: '核对出勤',
+      correctedBy: 'TEST10001',
+      correctedAt: wallTime,
+      versionNo: 6,
+      adjustmentId: 10,
+    };
+    const { api, calls } = adapter(t, desktop, ({ path, data }) => {
+      if (path.endsWith('/schedules/batch')) return result(scheduled);
+      if (path.endsWith('/attendance/apply'))
+        return result(data.applicationType === 'LEAVE' ? attendanceApplied : corrected);
+      if (path.endsWith('/attendance/withdraw')) return result(withdrawn);
+      if (path.endsWith('/attendance/update')) return result(updated);
+      throw new Error(`Unexpected endpoint ${path}`);
+    });
+    assert.deepEqual(await api.batchMySchedules(scheduleInput), scheduled);
+    assert.deepEqual(await api.applyMyAttendance(attendanceApply), attendanceApplied);
+    const correction = {
+      orgId,
+      attendanceDate: attendanceApply.attendanceDate,
+      applicationType: 'CORRECTION',
+      finalStatus: 'PRESENT',
+      reason: '核对出勤',
+      versionNo: null,
+    };
+    assert.deepEqual(await api.applyMyAttendance(correction), corrected);
+    const withdrawal = { applicationId, flowVersionNo: 7 };
+    assert.deepEqual(await api.withdrawMyAttendance(withdrawal), withdrawn);
+    assert.deepEqual(await api.updateMyAttendance(updateInput), updated);
+    assert.deepEqual(
+      calls.map(({ path, method }) => [path, method]),
+      [
+        ['/api/v1/users/me/schedules/batch', 'PUT'],
+        ['/api/v1/organizations/attendance/apply', 'POST'],
+        ['/api/v1/organizations/attendance/apply', 'POST'],
+        ['/api/v1/organizations/attendance/withdraw', 'POST'],
+        ['/api/v1/organizations/attendance/update', 'POST'],
+      ],
+    );
+    const { idempotencyKey, ...body } = scheduleInput;
+    assert.deepEqual(calls[0].data, body);
+    assert.equal(calls[0].headers['Idempotency-Key'], idempotencyKey);
+    assert.deepEqual(calls[1].data, attendanceApply);
+    assert.deepEqual(calls[2].data, correction);
+    assert.deepEqual(calls[3].data, withdrawal);
+    assert.deepEqual(calls[4].data, updateInput);
+    assert.ok(
+      calls.every(
+        ({ credentials, headers }) =>
+          credentials === (desktop ? 'include' : 'same-origin') &&
+          headers['X-Tyde-Client'] === 'web' &&
+          headers.Authorization === undefined,
+      ),
+    );
+  });
+
+  test(`${mode} attendance write failures do not replay requests and retain server conflicts`, async (t) => {
+    let networkFailure = false;
+    const { api, calls } = adapter(t, desktop, () => {
+      if (networkFailure) throw new TypeError('fixture network unavailable');
+      return result(null, 409);
+    });
+    const operations = [
+      () => api.batchMySchedules(scheduleInput),
+      () => api.applyMyAttendance(attendanceApply),
+      () => api.withdrawMyAttendance({ applicationId, flowVersionNo: 0 }),
+      () => api.updateMyAttendance({ orgId, dailyId: 12, finalStatus: 'REST', versionNo: 5 }),
+    ];
+    for (const operation of operations) {
+      const before = calls.length;
+      await assert.rejects(operation(), (error) => error.status === 409);
+      assert.equal(calls.length, before + 1);
+    }
+    networkFailure = true;
+    for (const operation of operations) {
+      const before = calls.length;
+      await assert.rejects(operation());
+      assert.equal(calls.length, before + 1);
+    }
+  });
+
   test(`${mode} avatar upload uses restricted multipart fields and accepts the exact size boundary`, async (t) => {
     const { api, calls } = adapter(t, desktop, ({ data }) =>
       result(avatarResult(data.get('file'))),
@@ -370,6 +532,94 @@ for (const desktop of [false, true]) {
       ),
     );
   });
+
+  test(`${mode} organization Logo upload uses its own image scope and validates size and format before sending`, async (t) => {
+    const { api, calls } = adapter(t, desktop, ({ data }) => result(logoResult(data.get('file'))));
+    const file = new File(['image'], 'logo.png', { type: 'image/png' });
+    assert.deepEqual(await api.uploadOrganizationLogo(file), logoResult(file));
+    const call = calls[0];
+    assert.equal(call.path, '/api/v1/files/upload');
+    assert.equal(call.method, 'POST');
+    assert.equal(call.credentials, desktop ? 'include' : 'same-origin');
+    assert.deepEqual(call.headers, { 'X-Tyde-Client': 'web' });
+    assert.deepEqual([...call.data.keys()], ['bizType', 'category', 'file']);
+    assert.equal(call.data.get('bizType'), 'ORG_LOGO');
+    assert.equal(call.data.get('category'), 'IMAGE');
+    assert.equal(call.data.get('file'), file);
+    assert.ok(ORG_LOGO_ACCEPT.includes('.webp'));
+    const boundary = new File([new Uint8Array(ORG_LOGO_MAX_BYTES)], 'boundary.png', {
+      type: 'image/png',
+    });
+    assert.equal((await api.uploadOrganizationLogo(boundary)).size, ORG_LOGO_MAX_BYTES);
+    const before = calls.length;
+    for (const [invalidFile, status] of [
+      [new File([new Uint8Array(ORG_LOGO_MAX_BYTES + 1)], 'too-large.png'), 413],
+      [new File([], 'empty.png'), 400],
+      [new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' }), 400],
+      [new File(['image'], 'wrong.png', { type: 'text/plain' }), 400],
+    ])
+      await assert.rejects(
+        api.uploadOrganizationLogo(invalidFile),
+        (error) => error.status === status,
+      );
+    assert.equal(calls.length, before);
+  });
+
+  test(`${mode} organization Logo upload rejects unrelated upload credentials and never replays failed writes`, async (t) => {
+    const file = new File(['image'], 'logo.png', { type: 'image/png' });
+    let payload = logoResult(file);
+    let status = 503;
+    const { api, calls } = adapter(t, desktop, () => result(payload, status));
+    await assert.rejects(api.uploadOrganizationLogo(file), (error) => error.status === 503);
+    assert.equal(calls.length, 1);
+    status = 200;
+    for (const patch of [
+      { objectKey: avatarResult(file).objectKey },
+      { uploadToken: 'invalid' },
+      { sensitive: true },
+      { size: file.size + 1 },
+      { contentType: 'text/plain' },
+    ]) {
+      payload = { ...logoResult(file), ...patch };
+      await assert.rejects(
+        api.uploadOrganizationLogo(file),
+        (error) => error.status === 502 && error.code === 'INVALID_RESPONSE',
+      );
+    }
+    assert.equal(calls.length, 6);
+  });
+
+  test(`${mode} organization create and edit submit the uploaded Logo key and claim token together`, async (t) => {
+    const upload = logoResult(new File(['image'], 'logo.png', { type: 'image/png' }));
+    const created = {
+      id: orgId,
+      name: '测试组织',
+      unifiedCreditCode: null,
+      description: null,
+      businessLicenseUrl: null,
+      logoUrl: upload.url,
+      expertiseTags: [],
+      verifyStatus: 'APPROVED',
+      status: 'ACTIVE',
+      position: 'OWNER',
+      createdAt: wallTime,
+    };
+    const updated = { id: orgId, description: null, logoUrl: upload.url, updatedAt: wallTime };
+    const { api, calls } = adapter(t, desktop, ({ path }) =>
+      result(path.endsWith('/update') ? updated : created),
+    );
+    const logo = { logoUrl: upload.objectKey, logoUploadToken: upload.uploadToken };
+    assert.deepEqual(await api.createOrganization({ name: '测试组织', ...logo }), created);
+    assert.deepEqual(await api.updateOrganization({ orgId, ...logo }), updated);
+    assert.deepEqual(
+      calls.map(({ path, data }) => ({ path, data })),
+      [
+        { path: '/api/v1/organizations', data: { name: '测试组织', ...logo } },
+        { path: '/api/v1/organizations/update', data: { orgId, ...logo } },
+      ],
+    );
+  });
+
   test(`${mode} personal reads preserve endpoint scope, wall clock, nullable fields and query defaults`, async (t) => {
     const { api, calls } = adapter(t, desktop, ({ path }) => {
       if (path.includes('/my-projects')) return result([project]);
@@ -497,6 +747,116 @@ for (const desktop of [false, true]) {
     assert.equal(calls.length - before, 3);
   });
 }
+
+test('attendance writes reject invalid dates, foreign scope and unrelated response resources', async (t) => {
+  let response = attendanceApplied;
+  const { api, calls } = adapter(t, false, () => result(response));
+  for (const patch of [
+    { attendanceDate: '2026-02-30' },
+    { attendanceDate: '2026-99-99' },
+    { orgId: 'not-a-uuid' },
+    { versionNo: undefined },
+    { reason: ' ' },
+    { userId },
+    { applicationType: 'CORRECTION' },
+    { leaveStartAt: '2026-10-20 09:00:00' },
+    { leaveEndAt: wallTime },
+  ])
+    await assert.rejects(
+      api.applyMyAttendance({ ...attendanceApply, ...patch }),
+      (error) => error.status === 400,
+    );
+  for (const schedules of [
+    [],
+    [{ ...scheduleInput.schedules[0], memberId: userId }],
+    [{ scheduleDate: '2026-10-21', dayType: 'REST', startTime: '09:00' }],
+    [{ ...scheduleInput.schedules[0], endTime: '08:00' }],
+    [scheduleInput.schedules[0], scheduleInput.schedules[0]],
+  ])
+    await assert.rejects(
+      api.batchMySchedules({ ...scheduleInput, schedules }),
+      (error) => error.status === 400,
+    );
+  await assert.rejects(
+    api.batchMySchedules({ ...scheduleInput, orgId }),
+    (error) => error.status === 400,
+  );
+  await assert.rejects(
+    api.batchMySchedules({ ...scheduleInput, timezone: 'invalid-zone' }),
+    (error) => error.status === 400,
+  );
+  await assert.rejects(
+    api.withdrawMyAttendance({ applicationId: 1, flowVersionNo: 0 }),
+    (error) => error.status === 400,
+  );
+  await assert.rejects(
+    api.updateMyAttendance({ orgId, dailyId: 12, finalStatus: 'LEAVE', versionNo: null }),
+    (error) => error.status === 400,
+  );
+  assert.equal(calls.length, 0);
+  for (const patch of [
+    { applicationId: 1 },
+    { applicationType: 'CORRECTION' },
+    { attendanceDate: '2026-10-22' },
+    { versionNo: 3 },
+    { dailyId: 99 },
+    { status: 'APPROVED' },
+    { leaveEndAt: '2026-10-21 14:00:00' },
+    { flowVersionNo: undefined },
+  ]) {
+    response = { ...attendanceApplied, ...patch };
+    await assert.rejects(api.applyMyAttendance(attendanceApply), (error) => error.status === 502);
+  }
+  response = {
+    ...attendanceApplied,
+    applicationId: userId,
+    status: 'WITHDRAWN',
+    flowVersionNo: 1,
+    finishedAt: '2026-10-21T02:00:00.000Z',
+  };
+  await assert.rejects(
+    api.withdrawMyAttendance({ applicationId, flowVersionNo: 0 }),
+    (error) => error.status === 502,
+  );
+  response = {
+    ...scheduled,
+    conflicts: [{ ...scheduled.conflicts[0], scheduleDate: '2026-10-23' }],
+  };
+  await assert.rejects(api.batchMySchedules(scheduleInput), (error) => error.status === 502);
+  response = { ...scheduled, skippedCount: 0 };
+  await assert.rejects(api.batchMySchedules(scheduleInput), (error) => error.status === 502);
+  const update = { orgId, dailyId: 12, finalStatus: 'PRESENT', versionNo: 5 };
+  const updated = {
+    id: 12,
+    beforeStatus: null,
+    finalStatus: 'PRESENT',
+    manualOverride: true,
+    manualRemark: null,
+    correctedBy: 'TEST10001',
+    correctedAt: wallTime,
+    versionNo: 6,
+    adjustmentId: 10,
+  };
+  for (const patch of [
+    { id: 99 },
+    { versionNo: 5 },
+    { finalStatus: 'REST' },
+    { manualOverride: false },
+  ]) {
+    response = { ...updated, ...patch };
+    await assert.rejects(api.updateMyAttendance(update), (error) => error.status === 502);
+  }
+});
+
+test('optional personal application withdrawal permission remains explicit when returned', async (t) => {
+  let canWithdraw = false;
+  const { api } = adapter(t, false, () => result(page([{ ...application, canWithdraw }])));
+  assert.equal((await api.listMyApplications({})).records[0].canWithdraw, false);
+  canWithdraw = true;
+  assert.equal((await api.listMyApplications({})).records[0].canWithdraw, true);
+  canWithdraw = 'true';
+  await assert.rejects(api.listMyApplications({}), (error) => error.status === 502);
+});
 
 test('personal read parsers reject incomplete nested data rather than filling missing nulls', async (t) => {
   let payload;

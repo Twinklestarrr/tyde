@@ -1,14 +1,26 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { ApiError, type AuthUser, type WorkbenchAttendanceCalendarStatus } from '@tyde/shared';
-import { BriefcaseBusiness, Building2, CalendarCheck2 } from 'lucide-react';
+import {
+  ApiError,
+  type AuthUser,
+  type OrganizationDetail,
+  type OrganizationUpdateResult,
+  type WorkbenchApplication,
+  type WorkbenchAttendanceApplicationResult,
+  type WorkbenchPage,
+} from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
+import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { TabsContent } from '@/components/ui/tabs';
 import { SESSION_KEY } from '@/hooks/useSession';
-import { joinStatusLabels, positionLabels, shanghaiToday } from '@/modules/organizations/common';
+import { joinStatusLabels, positionLabels } from '@/modules/organizations/common';
+import { OrganizationEdit, SelfDeparture } from '@/modules/organizations/OrganizationPage';
+import { ProfileAttendance } from './ProfileAttendance';
+import { ProfileOverview } from './ProfileOverview';
+import { ProfileApplicationWithdrawal } from './ProfileApplicationWithdrawal';
 import { api } from '@/services/api';
 
 const panelClass = 'min-w-0 space-y-[20px] rounded-[8px] border bg-card p-[16px] sm:p-[24px]';
@@ -41,50 +53,6 @@ const profileScope = (user: AuthUser) => [
   user.organization?.position,
   user.organization?.joinStatus,
 ];
-const attendanceMeta: Record<
-  WorkbenchAttendanceCalendarStatus,
-  { label: string; short: string; color: string }
-> = {
-  PRESENT: {
-    label: '正常出勤',
-    short: '勤',
-    color: 'bg-accent text-[var(--color-primary-strong)]',
-  },
-  LATE: {
-    label: '迟到',
-    short: '迟',
-    color: 'bg-[var(--color-warning-soft)] text-[var(--color-warning-hover)]',
-  },
-  EARLY_LEAVE: {
-    label: '早退',
-    short: '早',
-    color: 'bg-[var(--color-warning-soft)] text-[var(--color-warning-hover)]',
-  },
-  LATE_EARLY: {
-    label: '迟到且早退',
-    short: '迟早',
-    color: 'bg-[var(--color-warning-soft)] text-[var(--color-warning-hover)]',
-  },
-  LEAVE: { label: '请假', short: '假', color: 'bg-accent text-[var(--color-primary-strong)]' },
-  ABSENT: {
-    label: '缺勤',
-    short: '缺',
-    color: 'bg-[var(--color-danger-soft)] text-[var(--color-danger-strong)]',
-  },
-  REST: { label: '休息', short: '休', color: 'bg-muted text-muted-foreground' },
-  UNSCHEDULED: { label: '未排班', short: '—', color: 'bg-card text-muted-foreground' },
-  REVIEW_REQUIRED: {
-    label: '需人工复核',
-    short: '复',
-    color: 'bg-[var(--color-danger-soft)] text-[var(--color-danger-strong)]',
-  },
-  PENDING_ATTENDANCE: {
-    label: '待出勤',
-    short: '待',
-    color: 'bg-accent text-[var(--color-primary-strong)]',
-  },
-};
-
 /** 业务读取失去会话时让公共会话边界重新确认身份，不将业务错误当作登录成功。 */
 async function readProfile<T>(request: Promise<T>, cache: QueryClient): Promise<T> {
   try {
@@ -96,52 +64,62 @@ async function readProfile<T>(request: Promise<T>, cache: QueryClient): Promise<
   }
 }
 
-/** 只有执行专家视图挂载本人业务；角色切换卸载读取，资料与安全由外层共用。 */
-export function ProfileExpertContent({ user }: { user: AuthUser }) {
-  const [tab, setTab] = useState('projects');
+/** 概览与完整业务共用个人中心页签，卡片入口同步选中对应页签。 */
+export function ProfileExpertContent({
+  user,
+  showProjects,
+  onSectionChange,
+}: {
+  user: AuthUser;
+  showProjects: boolean;
+  onSectionChange: (section: 'overview' | 'projects' | 'attendance' | 'organization') => void;
+}) {
+  const [assignmentId, setAssignmentId] = useState<number | null>(null);
+  const [attendanceMonth, setAttendanceMonth] = useState<string>();
   const scope = profileScope(user);
   return (
-    <Tabs value={tab} onValueChange={setTab} className="min-w-0">
-      <h2 className="sr-only">执行专家业务</h2>
-      <TabsList
-        variant="business"
-        aria-label="执行专家个人中心业务"
-        className="flex w-full gap-[4px]"
-      >
-        {[
-          { value: 'projects', label: '我的项目', Icon: BriefcaseBusiness },
-          { value: 'attendance', label: '排班考勤', Icon: CalendarCheck2 },
-          { value: 'organization', label: '组织与申请', Icon: Building2 },
-        ].map(({ value, label, Icon }) => (
-          <TabsTrigger
-            key={value}
-            variant="business"
-            value={value}
-            className="h-[44px] min-w-0 flex-1 px-[6px] text-[12px] sm:px-[12px]"
-          >
-            <Icon className="hidden size-[16px] shrink-0 sm:block" aria-hidden />
-            {label}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-      <TabsContent value="projects" className="m-0 min-w-0">
-        {tab === 'projects' && <ExpertProjects key={scope.join(':')} user={user} />}
+    <>
+      <TabsContent value="overview" className="m-0">
+        <ProfileOverview
+          user={user}
+          showProjects={showProjects}
+          onProjects={(id) => {
+            setAssignmentId(id ?? null);
+            onSectionChange('projects');
+          }}
+          onAttendance={(month) => {
+            setAttendanceMonth(month);
+            onSectionChange('attendance');
+          }}
+          onApplications={() => onSectionChange('organization')}
+        />
       </TabsContent>
+      {showProjects && (
+        <TabsContent value="projects" className="m-0 min-w-0">
+          <ExpertProjects key={scope.join(':')} user={user} initialAssignmentId={assignmentId} />
+        </TabsContent>
+      )}
       <TabsContent value="attendance" className="m-0 min-w-0">
-        {tab === 'attendance' && <ExpertAttendance key={scope.join(':')} user={user} />}
+        <ProfileAttendance key={scope.join(':')} user={user} initialMonth={attendanceMonth} />
       </TabsContent>
       <TabsContent value="organization" className="m-0 min-w-0">
-        {tab === 'organization' && <ExpertApplications key={scope.join(':')} user={user} />}
+        <ExpertApplications key={scope.join(':')} user={user} />
       </TabsContent>
-    </Tabs>
+    </>
   );
 }
 
-function ExpertProjects({ user }: { user: AuthUser }) {
+function ExpertProjects({
+  user,
+  initialAssignmentId = null,
+}: {
+  user: AuthUser;
+  initialAssignmentId?: number | null;
+}) {
   const cache = useQueryClient();
   const [keyword, setKeyword] = useState('');
   const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(initialAssignmentId);
   const projects = useQuery({
     queryKey: [...profileScope(user), 'projects', search],
     queryFn: () => readProfile(api.getMyExpertProjects(search || undefined), cache),
@@ -301,232 +279,19 @@ function ExpertProjects({ user }: { user: AuthUser }) {
   );
 }
 
-function ExpertAttendance({ user }: { user: AuthUser }) {
-  const cache = useQueryClient();
-  const [month, setMonth] = useState(() => shanghaiToday().slice(0, 7));
-  const [queryMonth, setQueryMonth] = useState(month);
-  const [monthError, setMonthError] = useState('');
-  const organization = user.organization;
-  const orgId = typeof organization?.id === 'string' ? organization.id : undefined;
-  const canRead =
-    !organization ||
-    (!!orgId &&
-      ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE'].includes(String(organization.joinStatus)));
-  const input = { month: queryMonth, ...(orgId ? { orgId } : {}) };
-  const attendance = useQuery({
-    queryKey: [...profileScope(user), 'attendance', input],
-    queryFn: () => readProfile(api.getMyAttendance(input), cache),
-    enabled: canRead,
-  });
-  const holidays = useQuery({
-    queryKey: [...profileScope(user), 'holidays', queryMonth],
-    queryFn: () => readProfile(api.getAttendanceHolidays({ month: queryMonth }), cache),
-  });
-  const firstWeekday = (new Date(`${queryMonth}-01T00:00:00Z`).getUTCDay() + 6) % 7;
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || Number(month.slice(0, 4)) < 1900) {
-      setMonthError('请选择 1900 年起的有效月份');
-      return;
-    }
-    setMonthError('');
-    if (queryMonth === month) {
-      if (canRead) void attendance.refetch();
-      void holidays.refetch();
-    } else setQueryMonth(month);
-  }
-  return (
-    <section aria-label="我的排班考勤" className={panelClass}>
-      <div>
-        <h3 className="text-[17px] leading-[26px] font-semibold">我的排班考勤</h3>
-        <p className={`mt-[6px] ${quietClass}`}>读取本人的真实月历与考勤汇总，当前仅供查看。</p>
-      </div>
-      <form onSubmit={submit} className="flex min-w-0 flex-wrap items-end gap-[8px]">
-        <label className="min-w-0 flex-1 basis-[160px] text-[12px] leading-[20px]">
-          考勤月份
-          <Input
-            size="profile"
-            type="month"
-            min="1900-01"
-            max="9999-12"
-            value={month}
-            className="mt-[6px]"
-            aria-invalid={!!monthError}
-            aria-describedby={monthError ? 'profile-month-error' : undefined}
-            onChange={(event) => setMonth(event.target.value)}
-          />
-        </label>
-        <Button
-          type="submit"
-          variant="outline"
-          size="settings"
-          loading={attendance.isFetching || holidays.isFetching}
-        >
-          查询考勤
-        </Button>
-      </form>
-      {monthError && (
-        <p id="profile-month-error" role="alert" className="text-[13px] text-[var(--color-danger)]">
-          {monthError}
-        </p>
-      )}
-      {!canRead && (
-        <p className={quietClass}>当前组织关系暂不能读取考勤，请在我的组织中核对入组状态。</p>
-      )}
-      {canRead && attendance.isPending && (
-        <p role="status" className={quietClass}>
-          正在读取本人考勤…
-        </p>
-      )}
-      {attendance.isError && (
-        <div className="space-y-[8px]">
-          <ErrorNotice error={attendance.error} />
-          <Button variant="outline" size="settings" onClick={() => void attendance.refetch()}>
-            重新读取考勤
-          </Button>
-        </div>
-      )}
-      {attendance.isSuccess && (
-        <>
-          <dl
-            aria-label="月度考勤汇总"
-            className="grid grid-cols-2 gap-[12px] text-[13px] sm:grid-cols-5"
-          >
-            {[
-              ['正常出勤', attendance.data.summary.presentCount],
-              ['迟到', attendance.data.summary.lateCount],
-              ['早退', attendance.data.summary.earlyLeaveCount],
-              ['请假', attendance.data.summary.leaveCount],
-              ['缺勤', attendance.data.summary.absentCount],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-[8px] bg-muted p-[12px]">
-                <dt className="text-muted-foreground">{label}</dt>
-                <dd className="mt-[4px] text-[18px] font-semibold">
-                  {value}
-                  <span className="ml-[4px] text-[12px] font-normal">天</span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-          {attendance.data.days.every((day) => day.calendarStatus === 'UNSCHEDULED') && (
-            <p className={quietClass}>本月暂无排班记录</p>
-          )}
-          <div aria-label={`${queryMonth} 本人考勤月历`}>
-            <div
-              className="mb-[6px] grid grid-cols-7 gap-[4px] text-center text-[12px] text-muted-foreground"
-              aria-hidden
-            >
-              {['一', '二', '三', '四', '五', '六', '日'].map((day) => (
-                <span key={day}>{day}</span>
-              ))}
-            </div>
-            <ul className="grid grid-cols-7 gap-[4px]">
-              {Array.from({ length: firstWeekday }, (_, index) => (
-                <li key={`empty-${index}`} aria-hidden />
-              ))}
-              {attendance.data.days.map((day) => {
-                const meta = attendanceMeta[day.calendarStatus];
-                return (
-                  <li
-                    key={day.scheduleDate}
-                    aria-label={`${day.scheduleDate} ${meta.label}`}
-                    className={`flex min-h-[64px] min-w-0 flex-col items-center justify-center gap-[5px] rounded-[6px] border px-[2px] py-[8px] text-[12px] ${meta.color}`}
-                  >
-                    <time dateTime={day.scheduleDate}>{Number(day.scheduleDate.slice(-2))}</time>
-                    <span aria-hidden>{meta.short}</span>
-                    <span className="sr-only">{meta.label}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-          <ul
-            aria-label="考勤状态图例"
-            className="flex flex-wrap gap-x-[14px] gap-y-[8px] text-[12px] leading-[20px] text-muted-foreground"
-          >
-            {[...new Set(attendance.data.days.map((day) => day.calendarStatus))].map((status) => (
-              <li key={status}>
-                {attendanceMeta[status].short} · {attendanceMeta[status].label}
-              </li>
-            ))}
-          </ul>
-          <details className="rounded-[8px] border p-[12px]">
-            <summary className="flex min-h-[44px] cursor-pointer items-center text-[13px] font-medium">
-              查看每日班次与打卡明细
-            </summary>
-            <ul className="mt-[8px] divide-y text-[12px] leading-[20px]">
-              {attendance.data.days.map((day) => (
-                <li
-                  key={day.scheduleDate}
-                  className="space-y-[4px] py-[12px] [overflow-wrap:anywhere]"
-                >
-                  <p className="font-medium">
-                    {day.scheduleDate} · {attendanceMeta[day.calendarStatus].label}
-                  </p>
-                  <p className="text-muted-foreground">
-                    班次：
-                    {day.shiftStartAt && day.shiftEndAt
-                      ? `${day.shiftStartAt.slice(11)} — ${day.shiftEndAt.slice(11)}（${day.timezone}）`
-                      : '无有效工作班次'}
-                  </p>
-                  <p className="text-muted-foreground">
-                    上班打卡：{day.firstClockInAt || '无记录'}；下班打卡：
-                    {day.lastClockOutAt || '无记录'}
-                  </p>
-                  {day.reviewReason && <p>复核说明：{day.reviewReason}</p>}
-                  {day.application && (
-                    <p>
-                      考勤申请：{day.application.applicationType === 'LEAVE' ? '请假' : '考勤修正'}{' '}
-                      · {flowLabels[day.application.status]}
-                    </p>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </details>
-        </>
-      )}
-      <section aria-label="节假日安排" className="space-y-[10px] border-t pt-[16px]">
-        <h4 className="text-[14px] font-semibold">节假日安排</h4>
-        {holidays.isPending && (
-          <p role="status" className={quietClass}>
-            正在读取节假日日历…
-          </p>
-        )}
-        {holidays.isError && (
-          <div className="space-y-[8px]">
-            <ErrorNotice error={holidays.error} />
-            <Button variant="outline" size="settings" onClick={() => void holidays.refetch()}>
-              重新读取节假日
-            </Button>
-          </div>
-        )}
-        {holidays.isSuccess &&
-          (holidays.data.days.length ? (
-            <ul className="space-y-[8px] text-[12px] leading-[20px]">
-              {holidays.data.days.map((day) => (
-                <li key={day.date} className="break-words">
-                  {day.date} · {day.holidayName} ·{' '}
-                  {day.calendarDayType === 'PUBLIC_HOLIDAY' ? '法定放假日' : '调休工作日'}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className={quietClass}>本月没有已公布的特殊放假或调休安排。</p>
-          ))}
-        <p className={quietClass}>
-          节假日安排与实际排班分别展示，不据此推算出勤。迟到且早退会同时计入两项汇总。
-        </p>
-      </section>
-    </section>
-  );
-}
-
 function ExpertApplications({ user }: { user: AuthUser }) {
   const cache = useQueryClient();
   const [current, setCurrent] = useState(1);
+  const [exiting, setExiting] = useState(false);
+  const [exitSubmitted, setExitSubmitted] = useState(false);
+  const [editingOrganization, setEditingOrganization] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const departureKeys = useRef(new Map<string, string>());
+  const queryKey = [...profileScope(user), 'applications', current];
   const applications = useQuery({
-    queryKey: [...profileScope(user), 'applications', current],
+    queryKey,
     queryFn: () =>
       readProfile(api.listMyApplications({ businessType: null, current, size: 10 }), cache),
   });
@@ -539,6 +304,106 @@ function ExpertApplications({ user }: { user: AuthUser }) {
     typeof org?.joinStatus === 'string'
       ? joinStatusLabels[org.joinStatus as keyof typeof joinStatusLabels]
       : '';
+  const orgId = typeof org?.id === 'string' ? org.id : '';
+  const validOrgId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId);
+  const canReadOrganization =
+    (user.selectedRole ?? user.role) === 'EXPERT' &&
+    validOrgId &&
+    ['OWNER', 'ADMIN'].includes(String(org?.position)) &&
+    ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE'].includes(String(org?.joinStatus));
+  const organizationKey = ['profile-organization', user.id, orgId, org?.position, org?.joinStatus];
+  const organizationDetail = useQuery({
+    queryKey: organizationKey,
+    queryFn: () => readProfile(api.getOrganization(orgId), cache),
+    enabled: canReadOrganization,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const organizationSummary = organizationDetail.data ?? org;
+  const activeOrganizationOwner =
+    canReadOrganization && org?.position === 'OWNER' && org.joinStatus === 'ACTIVE';
+  const canEditOrganization =
+    activeOrganizationOwner &&
+    organizationDetail.data?.position === 'OWNER' &&
+    !organizationDetail.isError;
+  const pendingExit =
+    exitSubmitted ||
+    org?.joinStatus === 'EXIT_APPROVING' ||
+    applications.data?.records.some(
+      (record) =>
+        record.businessType === 'ORG_MEMBER_EXIT' &&
+        record.status === 'PENDING' &&
+        record.applicantOrgId === orgId,
+    );
+  const canExit =
+    validOrgId &&
+    ['ADMIN', 'MEMBER'].includes(String(org?.position)) &&
+    org?.joinStatus === 'ACTIVE' &&
+    !['FROZEN', 'DISSOLVED'].includes(String(org.status)) &&
+    !pendingExit;
+
+  async function refreshAfterWrite(message: string) {
+    setRefreshing(true);
+    const results = await Promise.allSettled([
+      cache.invalidateQueries({ queryKey: ['profile-workbench', user.id] }, { throwOnError: true }),
+      cache.invalidateQueries(
+        { queryKey: ['profile-organization', user.id] },
+        { throwOnError: true },
+      ),
+      cache.invalidateQueries({ queryKey: ['organization', user.id] }, { throwOnError: true }),
+      cache.invalidateQueries({ queryKey: SESSION_KEY }, { throwOnError: true }),
+    ]);
+    const failed = results.some((result) => result.status === 'rejected');
+    setRefreshFailed(failed);
+    setNotice(failed ? `${message}；最新资料读取失败，请手动重试读取。` : message);
+    setRefreshing(false);
+  }
+
+  async function organizationSaved(result: OrganizationUpdateResult) {
+    if (cache.getQueryData<AuthUser | null>(SESSION_KEY)?.id !== user.id) return;
+    await Promise.all([
+      cache.cancelQueries({ queryKey: organizationKey }),
+      cache.cancelQueries({ queryKey: ['organization', user.id, orgId, 'detail'] }),
+      cache.cancelQueries({ queryKey: SESSION_KEY }),
+    ]);
+    if (cache.getQueryData<AuthUser | null>(SESSION_KEY)?.id !== user.id) return;
+    const fields = { description: result.description, logoUrl: result.logoUrl };
+    cache.setQueryData<OrganizationDetail>(organizationKey, (previous) =>
+      previous ? { ...previous, ...fields } : previous,
+    );
+    cache.setQueriesData<OrganizationDetail>(
+      { queryKey: ['organization', user.id, orgId, 'detail'] },
+      (previous) => (previous ? { ...previous, ...fields } : previous),
+    );
+    cache.setQueryData<AuthUser | null>(SESSION_KEY, (current) =>
+      current?.organization?.id === orgId
+        ? { ...current, organization: { ...current.organization, ...fields } }
+        : current,
+    );
+    await refreshAfterWrite('组织资料已保存');
+  }
+
+  async function withdrawn(result: WorkbenchAttendanceApplicationResult) {
+    cache.setQueryData<WorkbenchPage<WorkbenchApplication>>(
+      queryKey,
+      (previous) =>
+        previous && {
+          ...previous,
+          records: previous.records.map((record) =>
+            record.applicationId === result.applicationId
+              ? {
+                  ...record,
+                  status: result.status,
+                  flowVersionNo: result.flowVersionNo,
+                  canWithdraw: false,
+                }
+              : record,
+          ),
+        },
+    );
+    await refreshAfterWrite('考勤申请已撤回');
+  }
   return (
     <section aria-label="组织与申请" className={panelClass}>
       <div>
@@ -547,19 +412,92 @@ function ExpertApplications({ user }: { user: AuthUser }) {
           组织身份来自真实成员关系，申请记录只查询本人发起的流程。
         </p>
       </div>
+      {notice && <Alert>{notice}</Alert>}
+      {refreshFailed && (
+        <Button
+          variant="outline"
+          size="settings"
+          loading={refreshing}
+          onClick={() => void refreshAfterWrite('组织与申请已更新')}
+        >
+          重新读取组织与申请
+        </Button>
+      )}
       <div className="space-y-[12px] rounded-[8px] border p-[16px]">
         <h4 className="text-[14px] font-semibold">我的组织</h4>
         {org ? (
           <>
             <p className="break-words text-[14px] leading-[22px] font-medium">
-              {typeof org.name === 'string' ? org.name : '所属组织'}
+              {typeof organizationSummary?.name === 'string'
+                ? organizationSummary.name
+                : '所属组织'}
             </p>
             <p className={quietClass}>
               {[position, joinStatus].filter(Boolean).join(' · ') || '查看成员关系详情'}
             </p>
-            <Button asChild variant="outline" size="settings">
-              <Link to="/organization">查看组织信息与可用操作</Link>
-            </Button>
+            {typeof organizationSummary?.description === 'string' &&
+              organizationSummary.description.trim() && (
+                <p className={`${quietClass} whitespace-pre-wrap`}>
+                  {organizationSummary.description}
+                </p>
+              )}
+            {typeof organizationSummary?.unifiedCreditCode === 'string' &&
+              organizationSummary.unifiedCreditCode && (
+                <p className={quietClass}>
+                  统一社会信用代码：{organizationSummary.unifiedCreditCode}
+                </p>
+              )}
+            <div className="flex flex-wrap items-center gap-[8px]">
+              <Button asChild variant="outline" size="settings">
+                <Link to="/organization">查看组织信息与可用操作</Link>
+              </Button>
+              {canEditOrganization && (
+                <Button
+                  variant="outline"
+                  size="settings"
+                  disabled={organizationDetail.isFetching}
+                  onClick={() => setEditingOrganization(true)}
+                >
+                  编辑组织资料
+                </Button>
+              )}
+              {canExit && (
+                <Button
+                  variant="destructiveOutline"
+                  size="settings"
+                  onClick={() => setExiting(true)}
+                >
+                  申请退出组织
+                </Button>
+              )}
+              {pendingExit && <p className={quietClass}>退出审批中</p>}
+            </div>
+            {org.position === 'OWNER' && org.joinStatus === 'ACTIVE' && (
+              <p className={quietClass}>主管退出前请先在组织管理中转让主管角色。</p>
+            )}
+            {(!activeOrganizationOwner ||
+              (organizationDetail.data && organizationDetail.data.position !== 'OWNER')) && (
+              <p className={quietClass}>仅正常在组的主管可修改组织资料。</p>
+            )}
+            {canReadOrganization && organizationDetail.isPending && (
+              <p role="status" className={quietClass}>
+                正在读取组织资料…
+              </p>
+            )}
+            {canReadOrganization && organizationDetail.isError && (
+              <div className="space-y-[8px]">
+                <p className={quietClass}>组织详情未更新，请重新读取后编辑组织资料。</p>
+                <ErrorNotice error={organizationDetail.error} />
+                <Button
+                  variant="outline"
+                  size="settings"
+                  loading={organizationDetail.isFetching}
+                  onClick={() => void organizationDetail.refetch()}
+                >
+                  重新读取组织资料
+                </Button>
+              </div>
+            )}
           </>
         ) : (
           <p className={quietClass}>当前未加入组织</p>
@@ -601,10 +539,21 @@ function ExpertApplications({ user }: { user: AuthUser }) {
                   {application.applyReason && (
                     <p className="whitespace-pre-wrap">申请原因：{application.applyReason}</p>
                   )}
+                  {attendanceApplicationDetails(application).map(([label, value]) => (
+                    <p key={label}>
+                      {label}：{value}
+                    </p>
+                  ))}
                   {application.targetMemberName && <p>目标成员：{application.targetMemberName}</p>}
                   {application.plannedLeaveDate && <p>计划离组：{application.plannedLeaveDate}</p>}
                   {application.finishedAt && <p>结束时间：{application.finishedAt}（上海时间）</p>}
                   <p className="text-[12px] text-muted-foreground">流水号：{application.flowNo}</p>
+                  <ProfileApplicationWithdrawal
+                    application={application}
+                    userId={user.id}
+                    onSuccess={withdrawn}
+                    onRefresh={() => applications.refetch()}
+                  />
                 </li>
               ))}
             </ul>
@@ -641,6 +590,52 @@ function ExpertApplications({ user }: { user: AuthUser }) {
           </nav>
         )}
       </section>
+      {editingOrganization && canEditOrganization && organizationDetail.data && (
+        <OrganizationEdit
+          orgId={orgId}
+          detail={organizationDetail.data}
+          onClose={() => setEditingOrganization(false)}
+          onSuccess={organizationSaved}
+        />
+      )}
+      {exiting && canExit && (
+        <SelfDeparture
+          orgId={orgId}
+          requestKeys={departureKeys.current}
+          onClose={() => setExiting(false)}
+          onSuccess={async () => {
+            if (cache.getQueryData<AuthUser | null>(SESSION_KEY)?.id !== user.id) return;
+            setExiting(false);
+            setExitSubmitted(true);
+            await refreshAfterWrite('退出申请已提交，等待主管审批');
+          }}
+        />
+      )}
     </section>
   );
+}
+
+function attendanceApplicationDetails(application: WorkbenchApplication): [string, string][] {
+  if (!['ATTENDANCE_LEAVE', 'ATTENDANCE_CORRECTION'].includes(application.businessType)) return [];
+  const form = application.formData;
+  if (!form) return [];
+  const result: [string, string][] = [];
+  if (typeof form.attendanceDate === 'string') result.push(['考勤日期', form.attendanceDate]);
+  const statuses: Record<string, string> = {
+    PRESENT: '正常出勤',
+    LATE: '迟到',
+    EARLY_LEAVE: '早退',
+    LATE_EARLY: '迟到且早退',
+    LEAVE: '请假',
+    ABSENT: '缺勤',
+    REST: '休息',
+  };
+  const status = typeof form.finalStatus === 'string' ? statuses[form.finalStatus] : undefined;
+  if (status) result.push(['申请目标状态', status]);
+  if (typeof form.leaveStartAt === 'string' && typeof form.leaveEndAt === 'string')
+    result.push([
+      '请假时段',
+      `${form.leaveStartAt} — ${form.leaveEndAt}${typeof form.timezone === 'string' ? `（${form.timezone}）` : ''}`,
+    ]);
+  return result;
 }

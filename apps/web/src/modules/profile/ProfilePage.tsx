@@ -5,6 +5,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   BadgeCheck,
   BookOpen,
+  BriefcaseBusiness,
+  Building2,
+  CalendarCheck2,
   CalendarDays,
   Compass,
   ChevronDown,
@@ -34,16 +37,26 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
+import { FileUploadField } from '@/components/ui/shared/FileUploadField';
 import AuthPasswordInput from '@/components/ui/shared/AuthPasswordInput';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { api } from '@/services/api';
 import { useAuthFlow } from '@/modules/auth/AuthFlow';
 import { useWorkspaceView, workspaceViewOptions } from '@/layouts/WorkspaceView';
+import { positionLabels } from '@/modules/organizations/common';
 import { ProfileExpertContent } from './ProfileExpertContent';
 import { ProfileOrganization } from './ProfileOrganization';
 
 type ProfileValues = { avatarUrl: string; idCardNo: string; bio: string };
+const profileTabs = [
+  { value: 'overview', label: '概览', icon: BookOpen },
+  { value: 'profile', label: '个人资料', icon: UserRound },
+  { value: 'security', label: '账户安全', icon: ShieldCheck },
+  { value: 'projects', label: '我的项目', icon: BriefcaseBusiness },
+  { value: 'attendance', label: '排班考勤', icon: CalendarCheck2 },
+  { value: 'organization', label: '组织与申请', icon: Building2 },
+] as const;
 
 /** 公共账户设置与当前会话角色联动，专家角色提供本人业务入口。 */
 export function ProfilePage({ user }: { user: AuthUser }) {
@@ -51,6 +64,24 @@ export function ProfilePage({ user }: { user: AuthUser }) {
   const viewLabel = workspaceViewOptions.find((option) => option.value === view)!.label;
   const ViewIcon = view === 'NAVIGATOR' ? Compass : view === 'PM' ? Target : BadgeCheck;
   const showExpert = view === 'EXPERT' && user.roles.includes('EXPERT');
+  const showProjects =
+    showExpert &&
+    (user.organization
+      ? ['ADMIN', 'MEMBER'].includes(String(user.organization.position))
+      : user.accountType === 'INDIVIDUAL');
+  const tabs = profileTabs.filter((tab) =>
+    tab.value === 'profile' || tab.value === 'security'
+      ? true
+      : tab.value === 'projects'
+        ? showProjects
+        : showExpert,
+  );
+  const organizationName =
+    typeof user.organization?.name === 'string' ? user.organization.name.trim() : '';
+  const organizationPosition =
+    typeof user.organization?.position === 'string'
+      ? positionLabels[user.organization.position as keyof typeof positionLabels]
+      : undefined;
   const name = user.nickname || user.realName;
   const [section, setSection] = useState('overview');
   const [editing, setEditing] = useState(false);
@@ -61,22 +92,24 @@ export function ProfilePage({ user }: { user: AuthUser }) {
   return (
     <div className="mx-auto max-w-[1200px]">
       <Tabs
-        value={section === 'overview' && !showExpert ? 'profile' : section}
+        value={
+          tabs.some((tab) => tab.value === section) ? section : showExpert ? 'overview' : 'profile'
+        }
         onValueChange={(value) => {
           setSection(value);
           setEditing(false);
         }}
-        className="grid min-w-0 items-start gap-[32px] lg:grid-cols-[248px_minmax(0,1fr)] lg:gap-[40px]"
+        className="grid min-w-0 items-start gap-[32px] lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-[32px]"
       >
         <aside aria-label="个人资料摘要" className="min-w-0">
           <div className="flex min-w-0 items-center gap-[20px] lg:flex-col lg:items-start">
             <UserAvatar
               url={user.avatarUrl}
               name={name}
-              className="size-[104px] rounded-full border border-border text-[42px] sm:size-[128px] lg:size-[224px] lg:text-[88px]"
+              className="size-[104px] rounded-full border border-border text-[42px] sm:size-[128px] lg:size-[280px] lg:text-[104px]"
             />
             <div className="min-w-0 flex-1">
-              <h1 className="m-0 break-words text-[24px] leading-[32px] font-semibold tracking-normal">
+              <h1 className="m-0 break-words text-[26px] leading-[34px] font-semibold tracking-normal">
                 {name}
               </h1>
               {user.realName !== name && (
@@ -95,6 +128,14 @@ export function ProfilePage({ user }: { user: AuthUser }) {
                   <ViewIcon className="size-[14px]" aria-hidden />
                   当前角色 · {viewLabel}
                 </span>
+                {organizationName && (
+                  <span
+                    aria-label="组织身份"
+                    className="max-w-full break-words rounded-[6px] border bg-card px-[8px] py-[2px] text-[var(--color-neutral-strong)]"
+                  >
+                    {organizationName} · {organizationPosition ?? '岗位待确认'}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -170,36 +211,25 @@ export function ProfilePage({ user }: { user: AuthUser }) {
         <div className="min-w-0">
           <TabsList
             aria-label="个人中心设置"
-            className="mb-[24px] flex h-auto w-full justify-start gap-[16px] rounded-none border-b bg-transparent p-0"
+            className="mb-[24px] flex h-auto w-full flex-wrap justify-start gap-x-[16px] gap-y-0 rounded-none border-b bg-transparent p-0"
           >
-            {showExpert && (
+            {tabs.map(({ value, label, icon: Icon }) => (
               <TabsTrigger
-                value="overview"
+                key={value}
+                value={value}
                 className="h-[48px] gap-[8px] rounded-none border-b-2 border-transparent px-[8px] text-[13px] text-[var(--color-neutral-strong)] data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
               >
-                <BookOpen className="size-[17px]" aria-hidden />
-                概览
+                <Icon className="size-[17px]" aria-hidden />
+                {label}
               </TabsTrigger>
-            )}
-            <TabsTrigger
-              value="profile"
-              className="h-[48px] gap-[8px] rounded-none border-b-2 border-transparent px-[8px] text-[13px] text-[var(--color-neutral-strong)] data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
-            >
-              <UserRound className="size-[17px]" aria-hidden />
-              个人资料
-            </TabsTrigger>
-            <TabsTrigger
-              value="security"
-              className="h-[48px] gap-[8px] rounded-none border-b-2 border-transparent px-[8px] text-[13px] text-[var(--color-neutral-strong)] data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
-            >
-              <ShieldCheck className="size-[17px]" aria-hidden />
-              账户安全
-            </TabsTrigger>
+            ))}
           </TabsList>
           {showExpert && (
-            <TabsContent value="overview" className="m-0">
-              <ProfileExpertContent user={user} />
-            </TabsContent>
+            <ProfileExpertContent
+              user={user}
+              showProjects={showProjects}
+              onSectionChange={setSection}
+            />
           )}
           <TabsContent value="profile" className="m-0 flex-col gap-[20px] data-[state=active]:flex">
             <div className="rounded-[8px] border bg-card p-[20px] sm:p-[24px]">
@@ -251,7 +281,6 @@ function ProfileDetails({
   const [avatarDraft, setAvatarDraft] = useState<{ file: File; url: string } | null>(null);
   const [avatarFileError, setAvatarFileError] = useState('');
   const [avatarLinkOpen, setAvatarLinkOpen] = useState(false);
-  const avatarFileInput = useRef<HTMLInputElement>(null);
   const uploadedAvatar = useRef<{ file: File; result: AvatarUploadResult } | null>(null);
   const inFlight = useRef(false);
   const form = useForm<ProfileValues>({
@@ -271,6 +300,25 @@ function ProfileDetails({
     setAvatarDraft(null);
     uploadedAvatar.current = null;
     setAvatarFileError('');
+  }
+
+  function chooseAvatarFile(file: File | undefined) {
+    if (!file) return;
+    const extension = file.name.includes('.')
+      ? (file.name.split('.').at(-1)?.toLowerCase() ?? '')
+      : '';
+    if (
+      !AVATAR_EXTENSIONS.some((allowed) => allowed === extension) ||
+      !file.size ||
+      file.size > AVATAR_MAX_BYTES
+    ) {
+      setAvatarFileError('请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片，最大 10 MiB');
+      return;
+    }
+    clearLocalAvatar();
+    form.clearErrors('avatarUrl');
+    form.setValue('avatarUrl', user.avatarUrl ?? '');
+    setAvatarDraft({ file, url: URL.createObjectURL(file) });
   }
 
   useEffect(() => {
@@ -382,14 +430,23 @@ function ProfileDetails({
                 />
                 <div className="min-w-0 flex-1 space-y-[8px]">
                   <div className="flex flex-wrap gap-[8px]">
-                    <Button
-                      variant="outline"
-                      size="account"
-                      onClick={() => avatarFileInput.current?.click()}
+                    <FileUploadField
+                      id="profile-avatar-file"
+                      accept={AVATAR_ACCEPT}
+                      disabled={saving}
+                      aria-label="上传本地头像"
+                      aria-invalid={!!avatarFileError}
+                      aria-describedby={`profile-avatar-help${avatarFileError ? ' profile-avatar-file-error' : ''}`}
+                      contentClassName="rounded-[8px]"
+                      onFilesSelected={(files) => chooseAvatarFile(files[0])}
                     >
-                      <ImagePlus className="size-[16px]" aria-hidden />
-                      更换头像
-                    </Button>
+                      <Button asChild variant="outline" size="account" disabled={saving}>
+                        <span>
+                          <ImagePlus className="size-[16px]" aria-hidden />
+                          更换头像
+                        </span>
+                      </Button>
+                    </FileUploadField>
                     <Button
                       variant="ghost"
                       size="account"
@@ -416,39 +473,6 @@ function ProfileDetails({
                   )}
                 </div>
               </div>
-              <label htmlFor="profile-avatar-file" className="sr-only">
-                上传本地头像
-              </label>
-              <input
-                ref={avatarFileInput}
-                id="profile-avatar-file"
-                type="file"
-                accept={AVATAR_ACCEPT}
-                hidden
-                tabIndex={-1}
-                aria-invalid={!!avatarFileError}
-                aria-describedby={`profile-avatar-help${avatarFileError ? ' profile-avatar-file-error' : ''}`}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = '';
-                  if (!file) return;
-                  const extension = file.name.includes('.')
-                    ? (file.name.split('.').at(-1)?.toLowerCase() ?? '')
-                    : '';
-                  if (
-                    !AVATAR_EXTENSIONS.some((allowed) => allowed === extension) ||
-                    !file.size ||
-                    file.size > AVATAR_MAX_BYTES
-                  ) {
-                    setAvatarFileError('请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片，最大 10 MiB');
-                    return;
-                  }
-                  clearLocalAvatar();
-                  form.clearErrors('avatarUrl');
-                  form.setValue('avatarUrl', user.avatarUrl ?? '');
-                  setAvatarDraft({ file, url: URL.createObjectURL(file) });
-                }}
-              />
               {avatarFileError && (
                 <p
                   id="profile-avatar-file-error"

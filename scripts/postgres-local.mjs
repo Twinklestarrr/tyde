@@ -15,8 +15,13 @@ function run(name, args, options = {}) {
   return result.status ?? 1;
 }
 if (command === 'start') {
+  const initialized = existsSync(join(data, 'PG_VERSION'));
+  if (process.argv.includes('--existing-only') && !initialized) {
+    console.error('未找到已有本地 PostgreSQL 数据目录，请先显式完成初始化；本次未创建数据库。');
+    process.exit(1);
+  }
   await mkdir(data, { recursive: true, mode: 0o700 });
-  if (!existsSync(join(data, 'PG_VERSION'))) {
+  if (!initialized) {
     const pwfile = resolve(root, '.local/pg-admin-password');
     await writeFile(pwfile, randomBytes(32).toString('base64url'), { mode: 0o600 });
     if (
