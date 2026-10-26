@@ -32,10 +32,16 @@ export const businesses = {
     category: 'PROJECT_ATTACHMENT',
     sensitive: true,
   },
+  MEMBER_PERFORMANCE_ATTACHMENT: {
+    dir: 'member-performance',
+    category: 'PROJECT_ATTACHMENT',
+    sensitive: true,
+  },
   COMMON: { dir: 'common', category: 'ANY', sensitive: false },
 } as const satisfies Record<string, { dir: string; category: FileCategory; sensitive: boolean }>;
 export type FileBizType = keyof typeof businesses;
 export interface FileUploadResponse {
+  fileId: string;
   objectKey: string;
   uploadToken: string;
   url: string | null;

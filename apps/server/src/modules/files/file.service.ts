@@ -1,3 +1,4 @@
+import { canReadPerformanceFile } from '../personnel/personnel-records.service.js';
 import { canReadManagedExamFile } from '../entrance-exams/exam-file-access.js';
 import { canReadExpertProjectFile } from '../expert/expert-assignment.service.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -20,7 +21,12 @@ export class FileService {
   ): Promise<FileUploadResponse> {
     const policy = uploadPolicy(bizType, category);
     if (
-      ['AVATAR', 'PROJECT_ATTACHMENT', 'ENTRANCE_EXAM_ATTACHMENT'].includes(policy.bizType) &&
+      [
+        'AVATAR',
+        'PROJECT_ATTACHMENT',
+        'ENTRANCE_EXAM_ATTACHMENT',
+        'MEMBER_PERFORMANCE_ATTACHMENT',
+      ].includes(policy.bizType) &&
       !ownerUid
     )
       throw new AuthError(401, 'UNAUTHORIZED', '头像及业务附件必须登录后上传');
@@ -47,7 +53,7 @@ export class FileService {
               : this.registry.config.urlExpireSeconds,
           );
       const fileHash = createHash('sha256').update(file.content).digest('hex');
-      const { uploadToken } = await this.registry.register(
+      const { record, uploadToken } = await this.registry.register(
         { ...metadata, objectKey, fileSize: file.content.length, fileHash },
         policy.bizType,
         policy.category,
@@ -56,6 +62,7 @@ export class FileService {
       return {
         ...metadata,
         objectKey,
+        fileId: record.id,
         uploadToken,
         url,
         sensitive: policy.business.sensitive,
@@ -99,6 +106,11 @@ export class FileService {
     });
     if (!record || !['UPLOADED', 'CLAIMED'].includes(record.status))
       throw new AuthError(403, 'FORBIDDEN', '无权访问该文件');
+    if (record.bizType === 'MEMBER_PERFORMANCE_ATTACHMENT' && record.status === 'CLAIMED') {
+      if (!(await canReadPerformanceFile(this.registry.db, record, principal)))
+        throw new AuthError(403, 'FORBIDDEN', '无权访问该成员表现附件');
+      return this.registry.storage.open(record.objectKey);
+    }
     const businessAttachment = ['PROJECT_ATTACHMENT', 'ENTRANCE_EXAM_ATTACHMENT'].includes(
       record.bizType,
     );

@@ -398,6 +398,7 @@ model ProjectCategory {
 }
 
 model Project {
+  outputReports         ProjectOutputReport[]
   id                    Int                         @id @default(autoincrement())
   projectNo             String                      @unique @db.VarChar(40)
   requesterType         String                      @db.VarChar(16)
@@ -440,6 +441,7 @@ model Project {
   roleNodeSnapshots     ProjectRoleNodeSnapshot[]
   expertAssignments     ProjectExpertAssignment[]
   entranceExams         ProjectEntranceExam[]
+  subtasks              ProjectSubtask[]
 
   @@index([createdBy, status, deleted])
   @@index([requesterType, requesterId, projectName])
@@ -613,6 +615,9 @@ model ProjectProductionStage {
 
 // 仅保存实际项目成员真值；注册/组织身份/管理授权不会创建成员。
 model ProjectMember {
+  outputReports               ProjectOutputReport[]
+  subtaskAssignments          ProjectSubtaskAssignee[]
+  performances                ProjectMemberPerformance[]
   id                          Int                      @id @default(autoincrement())
   projectId                   Int
   userId                      String                   @db.Uuid
@@ -642,6 +647,7 @@ model ProjectMember {
   expertAssignment            ProjectExpertAssignment? @relation(fields: [expertAssignmentId], references: [id], onDelete: Restrict)
   admissionAttempt            EntranceExamAttempt?     @relation(fields: [admissionAttemptId], references: [id], onDelete: Restrict)
 
+  @@unique([id, projectId, userId])
   @@index([userId, status])
   @@index([userOrgRelId, status])
   @@index([projectId, status, joinedAt])
@@ -1116,5 +1122,117 @@ model AttendanceClockEvent {
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
   organization Organization? @relation(fields: [orgId], references: [id], onDelete: Restrict)
   membership UserOrgRel? @relation(fields: [userOrgRelId, userId, orgId], references: [id, userId, orgId], onDelete: Restrict)
+
   @@index([scopeKey, userId, attendanceDate])
+}
+
+// 表现归属由成员、项目、用户复合外键固定；附件由UploadedFile一次性认领。
+model ProjectMemberPerformance {
+  id            Int           @id @default(autoincrement())
+  projectId     Int
+  memberId      Int
+  userId        String        @db.Uuid
+  recordDate    DateTime      @db.Date
+  content       String        @db.VarChar(2000)
+  attachmentIds String[]      @db.Uuid
+  recordedBy    String        @db.VarChar(36)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+  member        ProjectMember @relation(fields: [memberId, projectId, userId], references: [id, projectId, userId], onDelete: Restrict)
+
+  @@index([projectId, memberId, recordDate, id])
+}
+
+model ProjectSubtask {
+  acceptanceRound          Int                      @default(1)
+  reportedQuantity         Decimal?                 @db.Decimal(30, 4)
+  actualQuantity           Decimal?                 @db.Decimal(30, 4)
+  quantityAdjustmentRemark String?                  @db.VarChar(1000)
+  actualDeliveryDate       DateTime?                @db.Date
+  submittedBy              String?                  @db.VarChar(36)
+  submittedAt              DateTime?                @db.Timestamptz(3)
+  reviewedBy               String?                  @db.VarChar(36)
+  reviewedAt               DateTime?                @db.Timestamptz(3)
+  rejectReason             String?                  @db.VarChar(500)
+  outputReports            ProjectOutputReport[]
+  id                       Int                      @id @default(autoincrement())
+  projectId                Int
+  subtaskNo                String                   @unique @db.VarChar(64)
+  subtaskName              String                   @db.VarChar(128)
+  expectedDeliveryDate     DateTime                 @db.Date
+  expectedQuantity         Decimal                  @db.Decimal(30, 4)
+  quantityUnit             String                   @db.VarChar(30)
+  distributionMode         String                   @db.VarChar(16)
+  status                   String                   @default("IN_PROGRESS") @db.VarChar(24)
+  createdBy                String                   @db.VarChar(36)
+  createdAt                DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime                 @updatedAt @db.Timestamptz(3)
+  project                  Project                  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  assignees                ProjectSubtaskAssignee[]
+
+  @@unique([projectId, subtaskName])
+  @@unique([id, projectId])
+  @@index([projectId, status, id])
+}
+
+model ProjectSubtaskAssignee {
+  id             Int            @id @default(autoincrement())
+  projectId      Int
+  subtaskId      Int
+  memberId       Int
+  userId         String         @db.Uuid
+  assignmentType String         @db.VarChar(16)
+  assignedBy     String         @db.VarChar(36)
+  assignedAt     DateTime       @default(now()) @db.Timestamptz(3)
+  subtask        ProjectSubtask @relation(fields: [subtaskId, projectId], references: [id, projectId], onDelete: Restrict)
+  member         ProjectMember  @relation(fields: [memberId, projectId, userId], references: [id, projectId, userId], onDelete: Restrict)
+
+  @@unique([subtaskId, memberId])
+  @@index([projectId, memberId, subtaskId])
+}
+
+// 项目级使用null子任务；数据库表达式唯一索引统一null的唯一性语义。
+model ProjectOutputReport {
+  qualities    ProjectOutputQuality[]
+  id           Int                    @id @default(autoincrement())
+  projectId    Int
+  subtaskId    Int?
+  memberId     Int
+  userId       String                 @db.Uuid
+  reportDate   DateTime               @db.Date
+  quantity     Decimal                @db.Decimal(30, 4)
+  quantityUnit String                 @db.VarChar(30)
+  remark       String?                @db.VarChar(1000)
+  dataSource   String                 @default("MANUAL") @db.VarChar(16)
+  reviewStatus String                 @default("PENDING") @db.VarChar(16)
+  returnReason String?                @db.VarChar(500)
+  verifiedBy   String?                @db.VarChar(36)
+  returnedBy   String?                @db.VarChar(36)
+  verifiedAt   DateTime?              @db.Timestamptz(3)
+  returnedAt   DateTime?              @db.Timestamptz(3)
+  lockedAt     DateTime?              @db.Timestamptz(3)
+  createdBy    String                 @db.VarChar(36)
+  updatedBy    String?                @db.VarChar(36)
+  createdAt    DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime               @updatedAt @db.Timestamptz(3)
+  project      Project                @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subtask      ProjectSubtask?        @relation(fields: [subtaskId, projectId], references: [id, projectId], onDelete: Restrict)
+  member       ProjectMember          @relation(fields: [memberId, projectId, userId], references: [id, projectId, userId], onDelete: Restrict)
+
+  @@index([projectId, subtaskId, reviewStatus, reportDate, id])
+  @@index([projectId, userId, subtaskId])
+}
+
+// 每次质量填报追加历史；日报量外键同时限定项目来源。
+model ProjectOutputQuality {
+  id                Int                 @id @default(autoincrement())
+  outputReportId    Int
+  dataSource        String              @default("MANUAL") @db.VarChar(16)
+  inspectedQuantity Decimal             @db.Decimal(30, 4)
+  qualifiedQuantity Decimal             @db.Decimal(30, 4)
+  unqualifiedReason String?             @db.VarChar(1000)
+  recordedBy        String              @db.VarChar(36)
+  createdAt         DateTime            @default(now()) @db.Timestamptz(3)
+  report            ProjectOutputReport @relation(fields: [outputReportId], references: [id], onDelete: Restrict)
+
+  @@index([outputReportId, id])
 }

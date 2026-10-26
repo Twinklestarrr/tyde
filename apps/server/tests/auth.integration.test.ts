@@ -1,3 +1,4 @@
+import { PersonnelService } from '../src/modules/personnel/personnel.service.js';
 import { ExamCandidateCommandService } from '../src/modules/entrance-exams/exam-candidate-command.service.js';
 import { ProjectMaterialsService } from '../src/modules/projects/project-materials.service.js';
 import { ExamAutoService } from '../src/modules/entrance-exams/exam-auto.service.js';
@@ -4517,7 +4518,14 @@ test('list organization owners read accepted assignment relations and only fall 
   await db.projectExpertAssignmentOwner.delete({ where: { id: relation.id } });
   await db.projectExpertAssignment.update({
     where: { id: assignment.id },
-    data: { status: 'PENDING_ACCEPTANCE' },
+    data: {
+      status: 'PENDING_ACCEPTANCE',
+      reportedQuantity: 1,
+      actualQuantity: 1,
+      actualDeliveryDate: new Date(f.day),
+      submittedBy: f.manager.user.uid,
+      submittedAt: new Date(),
+    },
   });
   expect((await projectCardsHttp(f.headers)).json().data[0].projectOwners).toEqual([]);
 });
@@ -8750,7 +8758,14 @@ test('expert owner replacement rejects unauthorized targets and rolls all writes
   );
   await db.projectExpertAssignment.update({
     where: { id: f.assignment.id },
-    data: { status: 'PENDING_ACCEPTANCE' },
+    data: {
+      status: 'PENDING_ACCEPTANCE',
+      reportedQuantity: 1,
+      actualQuantity: 1,
+      actualDeliveryDate: new Date(f.day),
+      submittedBy: f.manager.user.uid,
+      submittedAt: new Date(),
+    },
   });
   expect((await f.replace({ projectOwnerUserId: f.individual.user.id })).statusCode).toBe(400);
   await db.projectExpertAssignment.update({
@@ -10482,4 +10497,1421 @@ test('attendance clock: daily/outbox failures roll back original event, daily an
   }
   expect((await f.clock('rollback')).clockType).toBe('CLOCK_IN');
   expect(await db.attendanceClockEvent.count()).toBe(1);
+});
+
+// 10第一批只复验本批；无需重复09已通过的9项。
+async function personnelEntryFixture() {
+  const f = await expertResponseFixture();
+  for (const response of [
+    await f.respond(f.personal.id),
+    await f.respond(
+      f.orgAssignment.id,
+      { decision: 'ACCEPT', projectOwnerUserId: f.owner.user.id },
+      f.owner.headers,
+    ),
+    await f.respond(f.orgAssignment.id),
+  ])
+    expect(response.statusCode, response.body).toBe(200);
+  const members = await db.projectMember.findMany({
+    where: { projectId: f.projectId },
+    orderBy: { id: 'asc' },
+  });
+  const personal = members.find((m) => m.expertAssignmentId === f.personal.id)!;
+  const orgMember = members.find(
+    (m) => m.expertAssignmentId === f.orgAssignment.id && m.userId === f.individual.user.id,
+  )!;
+  const roster = (body = {}, headers = f.manager.headers) =>
+    post('/project-personnel/roster/list', { projectId: f.projectId, ...body }, headers);
+  const save = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/project-personnel/roster/entry/save',
+      {
+        projectId: f.projectId,
+        memberIds: [orgMember.id],
+        entryDecision: 'YES',
+        plannedEntryDate: new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10),
+        ...body,
+      },
+      headers,
+    );
+  return { ...f, personalMember: personal, orgMember, members, roster, save };
+}
+test('personnel entry: roster database filters, current PM reader and concrete organization owner scope isolate history and actions', async () => {
+  const f = await personnelEntryFixture();
+  const all = await f.roster();
+  expect(all.statusCode, all.body).toBe(200);
+  expect(all.json().data.total).toBe(3);
+  const org = await f.roster({
+    accountTypes: ['ORGANIZATION'],
+    responsibleUserIds: [f.owner.user.id],
+    statuses: ['PENDING_CONFIRM'],
+    current: 1,
+    size: 1,
+  });
+  expect(org.json().data).toMatchObject({
+    total: 2,
+    pages: 2,
+    records: [
+      expect.objectContaining({
+        accountType: 'ORGANIZATION',
+        projectOwners: [expect.objectContaining({ userId: f.owner.user.id })],
+        allowedActions: ['SET_ENTRY'],
+      }),
+    ],
+  });
+  expect(
+    (await f.roster({ accountTypes: ['INDIVIDUAL'] }, f.owner.headers)).json().data.total,
+  ).toBe(0);
+  expect((await f.roster({}, f.owner.headers)).json().data.total).toBe(2);
+  expect((await f.roster({}, f.individual.headers)).statusCode).toBe(403);
+  const latest = await db.projectManagerRecruitment.findFirstOrThrow({
+    where: { projectId: f.projectId, status: 'ASSIGNED' },
+    orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
+  });
+  await db.projectManagerRecruitment.update({
+    where: { id: latest.id },
+    data: { expertRecruitmentHandlerUserId: f.owner.user.id },
+  });
+  await post('/auth/switch-role', { role: 'PM' }, f.owner.headers);
+  expect(
+    (await f.roster({}, f.owner.headers))
+      .json()
+      .data.records.every((r: { allowedActions: string[] }) => r.allowedActions.length === 0),
+  ).toBe(true);
+  expect((await f.save({}, f.owner.headers)).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'EXPERT' }, f.owner.headers);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.roster({}, f.owner.headers)).statusCode).toBe(403);
+  expect((await f.save({}, f.owner.headers)).statusCode).toBe(403);
+});
+test('personnel entry: concurrent immediate activation persists once, advances node and opens training without incrementing project version', async () => {
+  const f = await personnelEntryFixture();
+  const project = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const responses = await Promise.all([f.save(), f.save()]);
+  expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  const member = await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } });
+  expect(member).toMatchObject({ status: 'ACTIVE', entryDecision: 'YES' });
+  expect(member.joinedAt).not.toBeNull();
+  expect(await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).toMatchObject({
+    currentNodeCode: 'PRODUCTION_TASK',
+    versionNo: project.versionNo,
+  });
+  expect(
+    await db.projectEventOutbox.count({
+      where: { projectId: f.projectId, eventType: 'PROJECT_MEMBER_ENTRY_CHANGED' },
+    }),
+  ).toBe(1);
+  expect(
+    await db.projectTaskRound.findFirst({
+      where: {
+        projectId: f.projectId,
+        userId: f.individual.user.id,
+        taskType: 'STANDARD_TRAINING',
+        status: 'OPEN',
+      },
+    }),
+  ).not.toBeNull();
+  const own = await post('/expert-assignments/my-tasks', {}, f.individual.headers);
+  expect(own.json().data).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        assignmentId: f.orgAssignment.id,
+        branchNodeCode: 'STANDARD_TRAINING',
+      }),
+    ]),
+  );
+});
+test('personnel entry: future edits, decline finality, due activation and lost membership keep exact eligibility', async () => {
+  const f = await personnelEntryFixture();
+  const future = new Date(Date.now() + 5 * 86400000 + 8 * 3600000).toISOString().slice(0, 10);
+  expect((await f.save({ plannedEntryDate: future })).statusCode).toBe(200);
+  expect(await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).toMatchObject(
+    { status: 'PENDING_ENTRY', joinedAt: null },
+  );
+  expect(
+    (
+      await f.save({
+        memberIds: [f.personalMember.id],
+        entryDecision: 'NO',
+        declineReason: ' 无法参加 ',
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(
+    (await f.save({ memberIds: [f.personalMember.id], plannedEntryDate: future })).statusCode,
+  ).toBe(409);
+  const service = new PersonnelService(db);
+  expect(await service.processDue(new Date(future + 'T00:01:00+08:00'))).toMatchObject({
+    activated: 1,
+    failed: 0,
+  });
+  expect(await service.processDue(new Date(future + 'T00:02:00+08:00'))).toMatchObject({
+    activated: 0,
+    failed: 0,
+  });
+  expect(await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } })).toMatchObject(
+    { status: 'ACTIVE', joinedAt: new Date(future + 'T00:00:00+08:00') },
+  );
+  const before = await db.projectMember.findUniqueOrThrow({
+    where: { id: f.members.find((m) => m.userId === f.owner.user.id)!.id },
+  });
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.save({ memberIds: [before.id] })).statusCode).toBe(409);
+});
+test('personnel entry: mixed batch and outbox fault roll back every member, node, round and snapshot', async () => {
+  const f = await personnelEntryFixture();
+  const snapshot = async () => ({
+    members: await db.projectMember.findMany({
+      where: { projectId: f.projectId },
+      orderBy: { id: 'asc' },
+    }),
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    rounds: await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId },
+      orderBy: { id: 'asc' },
+    }),
+    snapshots: await db.projectRoleNodeSnapshot.findMany({
+      where: { projectId: f.projectId },
+      orderBy: { id: 'asc' },
+    }),
+    events: await db.projectEventOutbox.count(),
+  });
+  const before = await snapshot();
+  expect(
+    (await f.save({ memberIds: [f.orgMember.id, f.personalMember.id] }, f.owner.headers))
+      .statusCode,
+  ).toBe(403);
+  expect(await snapshot()).toEqual(before);
+  const failing = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction((tx) =>
+            fn(
+              new Proxy(tx, {
+                get(t, k) {
+                  if (k === 'projectEventOutbox')
+                    return {
+                      ...t.projectEventOutbox,
+                      create: async () => {
+                        throw new Error('entry outbox fault');
+                      },
+                    };
+                  return Reflect.get(t, k);
+                },
+              }),
+            ),
+          );
+      return Reflect.get(target, key);
+    },
+  });
+  const service = new PersonnelService(failing);
+  await expect(
+    service.saveEntry(
+      {
+        projectId: f.projectId,
+        memberIds: [f.orgMember.id],
+        entryDecision: 'YES',
+        plannedEntryDate: new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10),
+      },
+      {
+        userId: f.manager.user.id,
+        uid: f.manager.user.uid,
+        role: 'PM',
+        sessionId: 'test',
+        clientType: 'desktop',
+      },
+    ),
+  ).rejects.toThrow('entry outbox fault');
+  expect(await snapshot()).toEqual(before);
+  expect((await f.save()).statusCode).toBe(200);
+});
+
+// 10第二批：仅定向 personnel records，不重复第一批已通过项。
+async function personnelRecordsFixture() {
+  const f = await personnelEntryFixture();
+  const attendance = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/project-personnel/attendance/list',
+      { projectId: f.projectId, month: '2026-10', ...body },
+      headers,
+    );
+  const performance = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/project-personnel/performance/list',
+      { projectId: f.projectId, memberId: f.orgMember.id, ...body },
+      headers,
+    );
+  const create = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/project-personnel/performance/create',
+      {
+        projectId: f.projectId,
+        memberId: f.orgMember.id,
+        recordDate: '2026-10-01',
+        content: ' 表现记录 ',
+        ...body,
+      },
+      headers,
+    );
+  async function file(suffix: string, ownerUid = f.manager.user.uid) {
+    const objectKey = `member-performance/2026/10/23/${suffix}.png`;
+    const content = Buffer.from('test-image');
+    await storage.put(objectKey, content, 'image/png');
+    return registry.register(
+      {
+        objectKey,
+        fileName: suffix + '.png',
+        extension: 'png',
+        contentType: 'image/png',
+        fileSize: content.length,
+        fileHash: 'a'.repeat(64),
+      },
+      'MEMBER_PERFORMANCE_ATTACHMENT',
+      'IMAGE',
+      ownerUid,
+    );
+  }
+  return { ...f, attendance, performance, create, file };
+}
+test('personnel records: attendance paginates open members and filters detail status with exact personal and organization identities', async () => {
+  const f = await personnelRecordsFixture();
+  for (const m of [f.orgMember, f.personalMember]) {
+    for (const [date, status] of [
+      ['2026-10-01', 'LATE_EARLY'],
+      ['2026-10-02', 'PRESENT'],
+    ] as const) {
+      const schedule = await db.orgMemberSchedule.create({
+        data: {
+          scopeKey: m.organizationId ?? 'PERSONAL',
+          orgId: m.organizationId,
+          userOrgRelId: m.userOrgRelId,
+          userId: m.userId,
+          scheduleDate: new Date(date),
+          dayType: 'WORK',
+          shiftStartAt: new Date(date + 'T09:00:00Z'),
+          shiftEndAt: new Date(date + 'T18:00:00Z'),
+          createdBy: f.manager.user.uid,
+          updatedBy: f.manager.user.uid,
+        },
+      });
+      await db.orgAttendanceDaily.create({
+        data: {
+          scopeKey: schedule.scopeKey,
+          orgId: m.organizationId,
+          userOrgRelId: m.userOrgRelId,
+          userId: m.userId,
+          attendanceDate: new Date(date),
+          scheduleId: date.endsWith('01') ? null : schedule.id,
+          finalStatus: status,
+          firstClockInAt: new Date(date + 'T09:10:00.123Z'),
+          lastClockOutAt: new Date(date + 'T17:50:00.456Z'),
+          createdBy: f.manager.user.uid,
+          updatedBy: f.manager.user.uid,
+        },
+      });
+    }
+  }
+  const all = await f.attendance({ size: 1 });
+  expect(all.statusCode, all.body).toBe(200);
+  expect(all.json().data).toMatchObject({
+    total: 3,
+    pages: 3,
+    records: [
+      {
+        memberId: f.personalMember.id,
+        summary: { scheduledCount: 2, presentCount: 1, lateCount: 1, earlyLeaveCount: 1 },
+      },
+    ],
+  });
+  const filtered = await f.attendance(
+    { organizationIds: [f.organization.id], attendanceStatuses: ['LATE_EARLY'] },
+    f.owner.headers,
+  );
+  expect(filtered.statusCode, filtered.body).toBe(200);
+  expect(filtered.json().data.total).toBe(2);
+  const row = filtered
+    .json()
+    .data.records.find((r: { memberId: number }) => r.memberId === f.orgMember.id);
+  expect(row).toMatchObject({
+    summary: { scheduledCount: 1, presentCount: 0, lateCount: 1, earlyLeaveCount: 1 },
+    days: [
+      {
+        date: '2026-10-01',
+        firstClockInAt: '2026-10-01 09:10:00.123',
+        lastClockOutAt: '2026-10-01 17:50:00.456',
+      },
+    ],
+  });
+  expect(
+    (await f.attendance({ organizationIds: [f.organization.id], keyword: 'does-not-exist' })).json()
+      .data.total,
+  ).toBe(0);
+  await db.projectMember.update({ where: { id: f.orgMember.id }, data: { status: 'LEFT' } });
+  expect((await f.attendance({}, f.owner.headers)).json().data.total).toBe(1);
+  expect((await f.attendance({}, f.individual.headers)).statusCode).toBe(403);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.attendance({}, f.owner.headers)).statusCode).toBe(403);
+});
+test('personnel records: performance history pagination, date bounds and current PM handler read-only enforce member scope', async () => {
+  const f = await personnelRecordsFixture();
+  const before = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const outbox = await db.projectEventOutbox.count();
+  await db.projectMember.update({ where: { id: f.orgMember.id }, data: { status: 'LEFT' } });
+  for (const date of ['2026-09-30', '2026-10-01', '2026-10-01']) {
+    const result = await f.create({ recordDate: date }, f.owner.headers);
+    expect(result.statusCode, result.body).toBe(200);
+  }
+  const result = await f.performance({
+    recordDateStart: '2026-10-01',
+    recordDateEnd: '2026-10-01',
+    size: 1,
+  });
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json().data).toMatchObject({
+    total: 2,
+    pages: 2,
+    records: [
+      { content: '表现记录', recordDate: '2026-10-01', attachmentIds: [], attachments: [] },
+    ],
+  });
+  const second = await f.performance({ recordDateStart: '2026-10-01', size: 1, current: 2 });
+  expect(result.json().data.records[0].performanceId).toBeGreaterThan(
+    second.json().data.records[0].performanceId,
+  );
+  expect(
+    (await f.performance({ recordDateStart: '2026-10-02', recordDateEnd: '2026-10-01' }))
+      .statusCode,
+  ).toBe(400);
+  expect((await f.create({ recordDate: '2099-01-01' })).statusCode).toBe(400);
+  expect((await f.create({ content: '   ' })).statusCode).toBe(400);
+  expect((await f.performance({ memberId: f.personalMember.id }, f.owner.headers)).statusCode).toBe(
+    403,
+  );
+  expect((await f.create({ memberId: f.personalMember.id }, f.owner.headers)).statusCode).toBe(403);
+  expect((await f.performance({}, f.individual.headers)).statusCode).toBe(403);
+  expect((await f.create({ projectId: f.projectId + 99999 })).statusCode).toBe(404);
+  const manager = await db.projectManagerRecruitment.findFirstOrThrow({
+    where: { projectId: f.projectId, status: 'ASSIGNED' },
+  });
+  await db.projectManagerRecruitment.update({
+    where: { id: manager.id },
+    data: { expertRecruitmentHandlerUserId: f.owner.user.id },
+  });
+  await post('/auth/switch-role', { role: 'PM' }, f.owner.headers);
+  expect((await f.performance({}, f.owner.headers)).statusCode).toBe(200);
+  expect((await f.create({}, f.owner.headers)).statusCode).toBe(403);
+  await db.projectManagerRecruitment.update({
+    where: { id: manager.id },
+    data: { candidateUserId: f.owner.user.id },
+  });
+  expect((await f.performance()).statusCode).toBe(403);
+  expect((await f.create()).statusCode).toBe(403);
+  expect(await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).toEqual(before);
+  expect(await db.projectEventOutbox.count()).toBe(outbox);
+  expect(await db.projectMemberPerformance.count()).toBe(3);
+});
+test('personnel records: attachment claim deduplicates, returns readable metadata and revokes uploader after current responsibilities expire', async () => {
+  const f = await personnelRecordsFixture();
+  const { record, uploadToken } = await f.file('claimed', f.owner.user.uid);
+  const response = await f.create(
+    { attachmentIds: [record.id, record.id], attachmentUploadTokens: { [record.id]: uploadToken } },
+    f.owner.headers,
+  );
+  expect(response.statusCode, response.body).toBe(200);
+  const row = await db.projectMemberPerformance.findFirstOrThrow();
+  expect(row.attachmentIds).toEqual([record.id]);
+  expect(await db.uploadedFile.findUniqueOrThrow({ where: { id: record.id } })).toMatchObject({
+    status: 'CLAIMED',
+    claimedBizType: 'MEMBER_PERFORMANCE_ATTACHMENT',
+    claimedBizId: String(row.id),
+    expiresAt: null,
+  });
+  const listed = await f.performance();
+  expect(listed.json().data.records[0].attachments).toEqual([
+    { fileId: record.id, objectKey: record.objectKey, fileName: record.fileName },
+  ]);
+  expect(JSON.stringify(listed.json())).not.toContain(uploadToken);
+  const read = (headers = f.owner.headers) =>
+    app.inject({
+      url: '/api/v1/files/view?objectKey=' + encodeURIComponent(record.objectKey),
+      headers,
+    });
+  expect((await read()).statusCode).toBe(200);
+  expect((await read(f.manager.headers)).statusCode).toBe(200);
+  expect((await read(f.individual.headers)).statusCode).toBe(403);
+  expect(
+    (
+      await f.create(
+        { attachmentIds: [record.id], attachmentUploadTokens: { [record.id]: uploadToken } },
+        f.owner.headers,
+      )
+    ).statusCode,
+  ).toBe(409);
+  expect(await db.projectMemberPerformance.count()).toBe(1);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await read()).statusCode).toBe(403);
+  expect((await f.performance({}, f.owner.headers)).statusCode).toBe(403);
+});
+test('personnel records: missing wrong-owner expired invalid-token and second-file faults roll back entire performance and claims', async () => {
+  const f = await personnelRecordsFixture();
+  const good = await f.file('good');
+  const bad = await f.file('bad', f.owner.user.uid);
+  const ids = [good.record.id, bad.record.id].sort();
+  // 确保首个文件可认领，第二个才触发错误，验证已认领部分一并回滚。
+  await db.uploadedFile.update({ where: { id: ids[0]! }, data: { ownerUid: f.manager.user.uid } });
+  await db.uploadedFile.update({ where: { id: ids[1]! }, data: { ownerUid: f.owner.user.uid } });
+  const tokens = { [good.record.id]: good.uploadToken, [bad.record.id]: bad.uploadToken };
+  for (const body of [
+    { attachmentIds: ids, attachmentUploadTokens: tokens },
+    { attachmentIds: [good.record.id], attachmentUploadTokens: { [good.record.id]: 'wrong' } },
+    { attachmentIds: ['00000000-0000-4000-8000-000000000099'] },
+  ]) {
+    const result = await f.create(body);
+    expect([400, 403]).toContain(result.statusCode);
+    expect(await db.projectMemberPerformance.count()).toBe(0);
+    expect(await db.uploadedFile.count({ where: { status: 'CLAIMED' } })).toBe(0);
+  }
+  await db.uploadedFile.update({
+    where: { id: good.record.id },
+    data: { ownerUid: f.manager.user.uid, expiresAt: new Date(0) },
+  });
+  expect(
+    (
+      await f.create({
+        attachmentIds: [good.record.id],
+        attachmentUploadTokens: { [good.record.id]: good.uploadToken },
+      })
+    ).statusCode,
+  ).toBe(409);
+  expect(await db.projectMemberPerformance.count()).toBe(0);
+  await db.uploadedFile.update({
+    where: { id: good.record.id },
+    data: { expiresAt: new Date(Date.now() + 3600000) },
+  });
+  const results = await Promise.all([
+    f.create({
+      attachmentIds: [good.record.id],
+      attachmentUploadTokens: { [good.record.id]: good.uploadToken },
+    }),
+    f.create({
+      attachmentIds: [good.record.id],
+      attachmentUploadTokens: { [good.record.id]: good.uploadToken },
+    }),
+  ]);
+  expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  expect(await db.projectMemberPerformance.count()).toBe(1);
+});
+
+// 11第一批：只定向 production subtasks，不重复10已通过项。
+async function productionSubtaskFixture() {
+  const f = await personnelEntryFixture();
+  const activated = await f.save({ memberIds: f.members.map((m) => m.id) });
+  expect(activated.statusCode, activated.body).toBe(200);
+  const create = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/production-tasks/create',
+      {
+        projectId: f.projectId,
+        subtaskName: ' 首批子任务 ',
+        expectedDeliveryDate: '2099-12-31',
+        expectedQuantity: 10.1234,
+        distributionMode: 'DESIGNATED',
+        memberIds: [f.orgMember.id, f.orgMember.id],
+        ...body,
+      },
+      headers,
+    );
+  const list = (body = {}, headers = f.manager.headers) =>
+    post('/production-tasks/list', { projectId: f.projectId, ...body }, headers);
+  const candidates = (body = {}, headers = f.manager.headers) =>
+    post('/production-tasks/members', { projectId: f.projectId, ...body }, headers);
+  return { ...f, create, list, candidates };
+}
+test('production subtasks: eligible candidates require actual entry, original admission and current PM viewer; handler cannot create', async () => {
+  const f = await productionSubtaskFixture();
+  const r = await f.candidates({ keyword: f.individual.user.uid, size: 1 });
+  expect(r.statusCode, r.body).toBe(200);
+  expect(r.json().data).toMatchObject({
+    total: 2,
+    pages: 2,
+    records: [
+      expect.objectContaining({
+        userId: f.individual.user.id,
+        assignmentType: null,
+        assignedAt: null,
+      }),
+    ],
+  });
+  expect((await f.candidates({}, f.handler.headers)).statusCode).toBe(200);
+  expect((await f.create({}, f.handler.headers)).statusCode).toBe(403);
+  expect((await f.candidates({}, f.owner.headers)).statusCode).toBe(403);
+  await db.projectMember.update({
+    where: { id: f.orgMember.id },
+    data: { status: 'PENDING_ENTRY', joinedAt: null, plannedEntryDate: new Date('2099-12-31') },
+  });
+  expect((await f.create()).statusCode).toBe(400);
+  expect((await f.candidates({ keyword: f.individual.user.uid })).json().data.total).toBe(1);
+  await db.projectMember.update({
+    where: { id: f.orgMember.id },
+    data: { status: 'ACTIVE', joinedAt: new Date() },
+  });
+  await db.projectProductionPlan.update({
+    where: { projectId: f.projectId },
+    data: { needWrittenExam: true },
+  });
+  expect((await f.candidates()).json().data.total).toBe(0);
+  expect((await f.create()).statusCode).toBe(400);
+  expect(await db.projectSubtask.count()).toBe(0);
+});
+test('production subtasks: concurrent same-name create inserts once, deduplicates members, snapshots unit and completes first creation once', async () => {
+  const f = await productionSubtaskFixture();
+  const before = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const r = await Promise.all([f.create(), f.create()]);
+  expect(r.map((v) => v.statusCode).sort()).toEqual([200, 409]);
+  expect(await db.projectSubtask.count()).toBe(1);
+  expect(await db.projectSubtaskAssignee.count()).toBe(1);
+  const task = await db.projectSubtask.findFirstOrThrow();
+  expect(task).toMatchObject({
+    subtaskName: '首批子任务',
+    status: 'IN_PROGRESS',
+    distributionMode: 'DESIGNATED',
+    quantityUnit: before.quantityUnit,
+  });
+  expect(Number(task.expectedQuantity)).toBe(10.1234);
+  expect(
+    (await f.create({ subtaskName: '公共池', distributionMode: 'POOL', memberIds: [] })).statusCode,
+  ).toBe(200);
+  expect(
+    await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId, taskType: 'SUBTASK_CREATE' },
+    }),
+  ).toEqual([
+    expect.objectContaining({ status: 'COMPLETED', participated: true, userId: f.manager.user.id }),
+  ]);
+  expect(await db.project.findUnique({ where: { id: f.projectId } })).toMatchObject({
+    versionNo: before.versionNo,
+    currentNodeCode: 'PRODUCTION_TASK',
+  });
+  expect(
+    await db.projectEventOutbox.count({
+      where: { eventType: 'PROJECT_SUBTASK_CHANGED', status: 'PENDING' },
+    }),
+  ).toBe(2);
+  const listed = await f.list({ size: 1 });
+  expect(listed.statusCode, listed.body).toBe(200);
+  expect(listed.json().data).toMatchObject({
+    total: 2,
+    pages: 2,
+    records: [
+      expect.objectContaining({
+        distributionMode: 'POOL',
+        assigneeCount: 0,
+        assigneeNames: [],
+        allowedActions: ['CHECK_DATA'],
+      }),
+    ],
+  });
+});
+test('production subtasks: organization scope, personal report-only list, status/name pagination and responsibility revocation', async () => {
+  const f = await productionSubtaskFixture();
+  for (const body of [
+    {},
+    { subtaskName: '个人子任务', memberIds: [f.personalMember.id] },
+    { subtaskName: '公共池', distributionMode: 'POOL', memberIds: [] },
+  ]) {
+    const r = await f.create(body);
+    expect(r.statusCode, r.body).toBe(200);
+  }
+  expect((await f.list({}, f.handler.headers)).json().data.total).toBe(3);
+  expect((await f.list({}, f.owner.headers)).json().data.total).toBe(2);
+  expect((await f.list({}, f.individual.headers)).json().data.total).toBe(0);
+  expect((await f.list({ keyword: '首批', statuses: ['IN_PROGRESS'] })).json().data).toMatchObject({
+    total: 1,
+    records: [expect.objectContaining({ assigneeCount: 1, assigneeNames: [expect.any(String)] })],
+  });
+  expect((await f.list({ statuses: ['ACCEPTED'] })).json().data.total).toBe(0);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.list({}, f.owner.headers)).statusCode).toBe(403);
+  expect(
+    (await post('/auth/switch-role', { role: 'NAVIGATOR' }, f.individual.headers)).statusCode,
+  ).toBe(200);
+  expect((await f.list({}, f.individual.headers)).statusCode).toBe(403);
+});
+test('production subtasks: stale source mixed batch and outbox faults roll back task, assignees, node, rounds and snapshots', async () => {
+  const f = await productionSubtaskFixture();
+  await db.userOrgRel.update({ where: { id: f.rel.id }, data: { joinStatus: 'LEFT' } });
+  expect((await f.create({ memberIds: [f.personalMember.id, f.orgMember.id] })).statusCode).toBe(
+    400,
+  );
+  expect(await db.projectSubtask.count()).toBe(0);
+  await db.userOrgRel.update({ where: { id: f.rel.id }, data: { joinStatus: 'ACTIVE' } });
+  const { ProductionService } = await import('../src/modules/production/production.service.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  const before = {
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    snapshots: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    outbox: await db.projectEventOutbox.count(),
+  };
+  for (const model of ['projectSubtaskAssignee', 'projectEventOutbox'] as const) {
+    const faulty = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>, options: unknown) =>
+            target.$transaction(
+              (tx) =>
+                fn(
+                  new Proxy(tx, {
+                    get(inner, property) {
+                      if (property === model)
+                        return new Proxy(inner[model], {
+                          get(delegate, operation) {
+                            if (
+                              operation ===
+                              (model === 'projectSubtaskAssignee' ? 'createMany' : 'create')
+                            )
+                              return () => {
+                                throw new Error('injected production');
+                              };
+                            return Reflect.get(delegate, operation);
+                          },
+                        });
+                      return Reflect.get(inner, property);
+                    },
+                  }),
+                ),
+              options as never,
+            );
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      new ProductionService(faulty).create(
+        {
+          projectId: f.projectId,
+          subtaskName: '回滚',
+          expectedDeliveryDate: '2099-12-31',
+          expectedQuantity: 1,
+          distributionMode: 'DESIGNATED',
+          memberIds: [f.orgMember.id],
+        },
+        principal,
+      ),
+    ).rejects.toThrow('injected production');
+    expect(await db.projectSubtask.count()).toBe(0);
+    expect(await db.projectSubtaskAssignee.count()).toBe(0);
+    expect(await db.project.findUnique({ where: { id: f.projectId } })).toEqual(before.project);
+    expect(await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } })).toEqual(before.rounds);
+    expect(await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } })).toEqual(
+      before.snapshots,
+    );
+    expect(await db.projectEventOutbox.count()).toBe(before.outbox);
+  }
+});
+
+// 11第二批：只定向 production output reports，不重复已通过的production subtasks。
+async function productionOutputFixture() {
+  const f = await productionSubtaskFixture();
+  for (const body of [
+    { subtaskName: '报量任务池', distributionMode: 'POOL', memberIds: [] },
+    { subtaskName: '组织指定', memberIds: [f.orgMember.id] },
+  ]) {
+    const r = await f.create(body);
+    expect(r.statusCode, r.body).toBe(200);
+  }
+  const tasks = await db.projectSubtask.findMany({
+    where: { projectId: f.projectId },
+    orderBy: { id: 'asc' },
+  });
+  const pool = tasks[0]!,
+    designated = tasks[1]!;
+  const day = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  const submit = (reports: object[], headers = f.individual.headers) =>
+    post('/production-tasks/report/save', { projectId: f.projectId, reports }, headers);
+  const reports = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/production-tasks/reports',
+      { projectId: f.projectId, subtaskId: pool.id, ...body },
+      headers,
+    );
+  const review = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/production-tasks/report/review',
+      { projectId: f.projectId, subtaskId: pool.id, action: 'VERIFY', ...body },
+      headers,
+    );
+  const correct = (reportId: number, body = {}, headers = f.individual.headers) =>
+    post(
+      '/production-tasks/report/correct',
+      { projectId: f.projectId, reportId, quantity: 3.1234, ...body },
+      headers,
+    );
+  return { ...f, pool, designated, day, submit, reports, review, correct };
+}
+test('production output reports: exact quantity, concurrent daily uniqueness, pool claim, own reported list and original unit snapshot', async () => {
+  const f = await productionOutputFixture();
+  const before = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const item = {
+    memberId: f.personalMember.id,
+    subtaskId: f.pool.id,
+    reportDate: f.day,
+    quantity: '99999999999999999999999999.1234',
+  };
+  const results = await Promise.all([f.submit([item]), f.submit([item])]);
+  expect(results.map((r) => r.statusCode).sort(), results.map((r) => r.body).join('\n')).toEqual([
+    200, 409,
+  ]);
+  const row = await db.projectOutputReport.findFirstOrThrow();
+  expect(row.quantity.toFixed()).toBe(item.quantity);
+  expect(row.quantityUnit).toBe(f.pool.quantityUnit);
+  expect(
+    await db.projectSubtaskAssignee.count({
+      where: { subtaskId: f.pool.id, memberId: f.personalMember.id, assignmentType: 'CLAIMED' },
+    }),
+  ).toBe(1);
+  const own = await f.list({}, f.individual.headers);
+  expect(own.statusCode, own.body).toBe(200);
+  expect(own.json().data.records.map((r: { subtaskId: number }) => r.subtaskId)).toEqual([
+    f.pool.id,
+  ]);
+  const members = await post(
+    '/production-tasks/member-list',
+    { projectId: f.projectId, subtaskId: f.pool.id },
+    f.individual.headers,
+  );
+  expect(members.statusCode, members.body).toBe(200);
+  expect(members.json().data.records).toMatchObject([
+    { assignmentType: 'CLAIMED', memberId: f.personalMember.id },
+  ]);
+  expect((await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).versionNo).toBe(
+    before.versionNo,
+  );
+});
+test('production output reports: reportable and designated permissions, project-level isolation, filtered full totals and collaboration read-only', async () => {
+  const f = await productionOutputFixture();
+  const available = await post(
+    '/production-tasks/reportable-list',
+    { projectId: f.projectId },
+    f.individual.headers,
+  );
+  expect(available.statusCode, available.body).toBe(200);
+  expect(
+    available
+      .json()
+      .data.map((r: { subtaskId: number }) => r.subtaskId)
+      .sort(),
+  ).toEqual([f.pool.id, f.designated.id].sort());
+  expect(
+    (
+      await f.submit([
+        {
+          memberId: f.personalMember.id,
+          subtaskId: f.designated.id,
+          reportDate: f.day,
+          quantity: 1,
+        },
+      ])
+    ).statusCode,
+  ).toBe(403);
+  const result = await f.submit([
+    { memberId: f.personalMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 1.1234 },
+    { memberId: f.orgMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 2 },
+    { memberId: f.personalMember.id, reportDate: f.day, quantity: 4 },
+  ]);
+  expect(result.statusCode, result.body).toBe(200);
+  expect((await f.reports({ size: 1 })).json().data).toMatchObject({
+    totalReportCount: 2,
+    totalQuantity: 3.1234,
+    page: { total: 2, size: 1, pages: 2 },
+  });
+  expect((await f.reports({ subtaskId: null })).json().data).toMatchObject({
+    totalReportCount: 1,
+    totalQuantity: 4,
+  });
+  expect(
+    (
+      await f.reports({
+        keyword: f.individual.user.uid,
+        reviewStatuses: ['PENDING'],
+        reportDateStart: f.day,
+        reportDateEnd: f.day,
+      })
+    ).json().data.totalReportCount,
+  ).toBe(2);
+  expect((await f.reports({}, f.owner.headers)).json().data.totalReportCount).toBe(1);
+  const read = await f.reports({}, f.handler.headers);
+  expect(read.statusCode, read.body).toBe(200);
+  expect(
+    read
+      .json()
+      .data.page.records.every((r: { allowedActions: string[] }) => !r.allowedActions.length),
+  ).toBe(true);
+  expect((await f.review({}, f.handler.headers)).statusCode).toBe(403);
+  expect(
+    (
+      await f.submit(
+        [{ memberId: f.personalMember.id, reportDate: f.day, quantity: 1 }],
+        f.manager.headers,
+      )
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (await f.reports({ reportDateStart: '2026-10-27', reportDateEnd: '2026-10-26' })).statusCode,
+  ).toBe(400);
+  await post('/auth/switch-role', { role: 'NAVIGATOR' }, f.individual.headers);
+  expect((await f.reports({}, f.individual.headers)).statusCode).toBe(403);
+});
+test('production output reports: return, own correction, departed member handoff and scope revocation', async () => {
+  const f = await productionOutputFixture();
+  const save = await f.submit([
+    { memberId: f.orgMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 1 },
+  ]);
+  expect(save.statusCode, save.body).toBe(200);
+  const row = await db.projectOutputReport.findFirstOrThrow();
+  const returned = await f.review({ action: 'RETURN', reportIds: [row.id], reason: '重新核对' });
+  expect(returned.statusCode, returned.body).toBe(200);
+  expect(
+    await db.projectTaskRound.findFirst({
+      where: {
+        projectId: f.projectId,
+        userId: f.individual.user.id,
+        taskType: 'OUTPUT_REPORT_CORRECTION',
+        status: 'OPEN',
+      },
+    }),
+  ).not.toBeNull();
+  const list = await f.list({}, f.individual.headers);
+  expect(list.json().data.records[0]).toMatchObject({
+    pendingReportCount: 1,
+    allowedActions: ['CORRECT_REPORT'],
+  });
+  expect((await f.correct(row.id, {}, f.owner.headers)).statusCode).toBe(403);
+  const fixed = await f.correct(row.id);
+  expect(fixed.statusCode, fixed.body).toBe(200);
+  expect(await db.projectOutputReport.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+    reviewStatus: 'PENDING',
+    returnReason: null,
+    returnedAt: null,
+    returnedBy: null,
+  });
+  const transferred = await f.review({ action: 'RETURN', reportIds: [row.id], reason: '离项转交' });
+  expect(transferred.statusCode, transferred.body).toBe(200);
+  await db.projectMember.update({
+    where: { id: f.orgMember.id },
+    data: { status: 'LEFT', leftAt: new Date() },
+  });
+  expect((await f.correct(row.id)).statusCode).toBe(403);
+  const handed = await f.correct(row.id, {}, f.owner.headers);
+  expect(handed.statusCode, handed.body).toBe(200);
+  const again = await f.review({ action: 'RETURN', reportIds: [row.id], reason: '再修正' });
+  expect(again.statusCode, again.body).toBe(200);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.correct(row.id, {}, f.owner.headers)).statusCode).toBe(403);
+  expect((await f.reports({}, f.owner.headers)).statusCode).toBe(403);
+});
+test('production output reports: specified and all verification enforce managed scope and terminal locking, review race is atomic and silent', async () => {
+  const f = await productionOutputFixture();
+  const save = await f.submit([
+    { memberId: f.personalMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 1 },
+    { memberId: f.orgMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 2 },
+  ]);
+  expect(save.statusCode, save.body).toBe(200);
+  const rows = await db.projectOutputReport.findMany({ orderBy: { id: 'asc' } }),
+    personal = rows.find((r) => r.memberId === f.personalMember.id)!,
+    org = rows.find((r) => r.memberId === f.orgMember.id)!;
+  expect((await f.review({ reportIds: [org.id, personal.id] }, f.owner.headers)).statusCode).toBe(
+    403,
+  );
+  expect(await db.projectOutputReport.count({ where: { reviewStatus: 'PENDING' } })).toBe(2);
+  const before = await db.projectEventOutbox.count();
+  expect((await f.review({}, f.owner.headers)).statusCode).toBe(200);
+  expect(await db.projectEventOutbox.count()).toBe(before);
+  expect(
+    (await db.projectOutputReport.findUniqueOrThrow({ where: { id: org.id } })).reviewStatus,
+  ).toBe('VERIFIED');
+  expect(
+    (await db.projectOutputReport.findUniqueOrThrow({ where: { id: personal.id } })).reviewStatus,
+  ).toBe('PENDING');
+  expect(
+    (
+      await f.submit([
+        { memberId: f.orgMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 9 },
+      ])
+    ).statusCode,
+  ).toBe(409);
+  const results = await Promise.all([
+    f.review({ reportIds: [personal.id] }),
+    f.review({ action: 'RETURN', reportIds: [personal.id], reason: '并发核查' }),
+  ]);
+  expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  expect((await f.review({ reportIds: [org.id] })).statusCode).toBe(409);
+});
+test('production output reports: mixed invalid items and duplicate keys roll back earlier reports and pool claims', async () => {
+  const f = await productionOutputFixture();
+  const first = {
+    memberId: f.personalMember.id,
+    subtaskId: f.pool.id,
+    reportDate: f.day,
+    quantity: 1,
+  };
+  for (const reports of [
+    [first, { ...first, subtaskId: f.designated.id }],
+    [first, first],
+  ]) {
+    const result = await f.submit(reports);
+    expect(result.statusCode, result.body).toBe(reports[0] === reports[1] ? 400 : 403);
+    expect(await db.projectOutputReport.count()).toBe(0);
+    expect(await db.projectSubtaskAssignee.count({ where: { subtaskId: f.pool.id } })).toBe(0);
+  }
+  const result = await f.submit([first, { ...first, reportDate: '2099-12-31' }]);
+  expect(result.statusCode, result.body).toBe(400);
+  expect(await db.projectOutputReport.count()).toBe(0);
+  await db.projectSubtask.update({
+    where: { id: f.pool.id },
+    data: {
+      status: 'PENDING_ACCEPTANCE',
+      reportedQuantity: 1,
+      actualQuantity: 1,
+      actualDeliveryDate: new Date(f.day),
+      submittedBy: f.manager.user.uid,
+      submittedAt: new Date(),
+    },
+  });
+  expect((await f.submit([first])).statusCode).toBe(409);
+});
+test('production output reports: injected report and outbox faults roll back quantity, claims, rounds, snapshots and project', async () => {
+  const f = await productionOutputFixture();
+  const { OutputReportService } =
+    await import('../src/modules/production/output-report.service.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.individual.headers.authorization.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  const before = {
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    snapshots: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    outbox: await db.projectEventOutbox.count(),
+  };
+  for (const model of ['projectOutputReport', 'projectEventOutbox'] as const) {
+    const faulty = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>, options: unknown) =>
+            target.$transaction(
+              (tx) =>
+                fn(
+                  new Proxy(tx, {
+                    get(inner, property) {
+                      if (property === model)
+                        return new Proxy(inner[model], {
+                          get(delegate, operation) {
+                            if (operation === 'create')
+                              return () => {
+                                throw new Error('injected output');
+                              };
+                            return Reflect.get(delegate, operation);
+                          },
+                        });
+                      return Reflect.get(inner, property);
+                    },
+                  }),
+                ),
+              options as never,
+            );
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      new OutputReportService(faulty).save(
+        {
+          projectId: f.projectId,
+          reports: [
+            { memberId: f.personalMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 1 },
+          ],
+        },
+        principal,
+      ),
+    ).rejects.toThrow('injected output');
+    expect(await db.projectOutputReport.count()).toBe(0);
+    expect(await db.projectSubtaskAssignee.count({ where: { subtaskId: f.pool.id } })).toBe(0);
+    expect(await db.project.findUnique({ where: { id: f.projectId } })).toEqual(before.project);
+    expect(await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } })).toEqual(before.rounds);
+    expect(await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } })).toEqual(
+      before.snapshots,
+    );
+    expect(await db.projectEventOutbox.count()).toBe(before.outbox);
+  }
+});
+
+// 11第三批仅定向 production quality acceptance；不重复前两批已过项。
+async function productionQualityFixture() {
+  const f = await productionOutputFixture();
+  const saved = await f.submit([
+    {
+      memberId: f.personalMember.id,
+      subtaskId: f.pool.id,
+      reportDate: f.day,
+      quantity: '7.1234',
+      remark: '个人备注',
+    },
+    {
+      memberId: f.orgMember.id,
+      subtaskId: f.pool.id,
+      reportDate: f.day,
+      quantity: '2.8766',
+      remark: '组织备注',
+    },
+  ]);
+  expect(saved.statusCode, saved.body).toBe(200);
+  const rows = await db.projectOutputReport.findMany({
+    where: { subtaskId: f.pool.id },
+    orderBy: { id: 'asc' },
+  });
+  const personalReport = rows.find((r) => r.memberId === f.personalMember.id)!;
+  const orgReport = rows.find((r) => r.memberId === f.orgMember.id)!;
+  const quality = (items: object[], headers = f.manager.headers, memberId = f.orgMember.id) =>
+    post(
+      '/project-personnel/production/quality/save',
+      { projectId: f.projectId, memberId, reportDate: f.day, items },
+      headers,
+    );
+  const context = (headers = f.manager.headers, memberId = f.orgMember.id) =>
+    post(
+      '/project-personnel/production/quality/context',
+      { projectId: f.projectId, memberId, reportDate: f.day },
+      headers,
+    );
+  const production = (body = {}, headers = f.manager.headers) =>
+    post('/project-personnel/production/list', { projectId: f.projectId, ...body }, headers);
+  const acceptance = (body = {}, headers = f.manager.headers) =>
+    post(
+      '/production-tasks/acceptance/submit',
+      {
+        projectId: f.projectId,
+        subtaskId: f.pool.id,
+        actualQuantity: 10,
+        actualDeliveryDate: '2099-12-31',
+        ...body,
+      },
+      headers,
+    );
+  const acceptanceContext = (headers = f.manager.headers) =>
+    post(
+      '/production-tasks/acceptance/context',
+      { projectId: f.projectId, subtaskId: f.pool.id },
+      headers,
+    );
+  const decision = (body = {}, headers = f.headers) =>
+    post(
+      '/production-tasks/acceptance/review',
+      { projectId: f.projectId, subtaskId: f.pool.id, decision: 'ACCEPT', ...body },
+      headers,
+    );
+  return {
+    ...f,
+    personalReport,
+    orgReport,
+    quality,
+    context,
+    production,
+    acceptance,
+    acceptanceContext,
+    decision,
+  };
+}
+test('production quality acceptance: latest quality aggregation, history placeholders, exact CPD, filters and database pagination', async () => {
+  const f = await productionQualityFixture();
+  const empty = await f.context();
+  expect(empty.statusCode, empty.body).toBe(200);
+  expect(empty.json().data.items).toEqual([
+    expect.objectContaining({ qualityId: null, editable: true }),
+  ]);
+  const r = await f.quality([
+    { outputReportId: f.orgReport.id, inspectedQuantity: 10, qualifiedQuantity: 8 },
+    {
+      outputReportId: f.orgReport.id,
+      inspectedQuantity: 20,
+      qualifiedQuantity: 19,
+      unqualifiedReason: ' 最新 ',
+    },
+  ]);
+  expect(r.statusCode, r.body).toBe(200);
+  expect(
+    (await f.context())
+      .json()
+      .data.items.map((x: { inspectedQuantity: number }) => x.inspectedQuantity),
+  ).toEqual([20, 10]);
+  const list = await f.production({ accountTypes: ['ORGANIZATION'], size: 1 });
+  expect(list.statusCode, list.body).toBe(200);
+  expect(list.json().data).toMatchObject({
+    total: 1,
+    pages: 1,
+    records: [
+      {
+        memberId: f.orgMember.id,
+        quantity: 2.8766,
+        recent7DayCpd: 0.41,
+        inspectedQuantity: 20,
+        qualifiedQuantity: 19,
+        accuracyRate: 95,
+        qualityRecordCount: 2,
+        hasManualQualityEntry: true,
+      },
+    ],
+  });
+  expect((await f.production({ size: 1, current: 2 })).json().data.records).toHaveLength(1);
+  expect((await f.production({ dataSources: ['WORK_SYSTEM'] })).json().data.total).toBe(0);
+  expect(
+    (await f.production({ reportDateStart: '2026-01-01', reportDateEnd: '2026-02-01' })).statusCode,
+  ).toBe(400);
+});
+test('production quality acceptance: concrete organization scope, collaboration read-only, personal denial and leave revocation', async () => {
+  const f = await productionQualityFixture(),
+    item = { outputReportId: f.orgReport.id, inspectedQuantity: 1, qualifiedQuantity: 0 };
+  expect(
+    (await f.production({}, f.owner.headers))
+      .json()
+      .data.records.every(
+        (r: { organizationId: string }) => r.organizationId === f.organization.id,
+      ),
+  ).toBe(true);
+  expect((await f.context(f.owner.headers, f.personalMember.id)).statusCode).toBe(403);
+  expect((await f.production({}, f.individual.headers)).statusCode).toBe(403);
+  expect((await f.quality([item], f.owner.headers)).statusCode).toBe(200);
+  const manager = await db.projectManagerRecruitment.findFirstOrThrow({
+    where: { projectId: f.projectId, status: 'ASSIGNED' },
+  });
+  await db.projectManagerRecruitment.update({
+    where: { id: manager.id },
+    data: { expertRecruitmentHandlerUserId: f.owner.user.id },
+  });
+  await post('/auth/switch-role', { role: 'PM' }, f.owner.headers);
+  expect(
+    (await f.context(f.owner.headers))
+      .json()
+      .data.items.every((x: { editable: boolean }) => !x.editable),
+  ).toBe(true);
+  expect((await f.quality([item], f.owner.headers)).statusCode).toBe(403);
+  expect((await f.acceptanceContext(f.owner.headers)).json().data.canSubmit).toBe(false);
+  expect((await f.acceptance({}, f.owner.headers)).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'EXPERT' }, f.owner.headers);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await f.context(f.owner.headers)).statusCode).toBe(403);
+});
+test('production quality acceptance: mixed quality sources roll back, WORK_SYSTEM blocks manual append and concurrent saves retain history', async () => {
+  const f = await productionQualityFixture(),
+    item = { outputReportId: f.orgReport.id, inspectedQuantity: 1, qualifiedQuantity: 0 };
+  expect(
+    (await f.quality([item, { ...item, outputReportId: f.personalReport.id }])).statusCode,
+  ).toBe(400);
+  expect(await db.projectOutputQuality.count()).toBe(0);
+  const results = await Promise.all([f.quality([item]), f.quality([item])]);
+  expect(results.map((r) => r.statusCode)).toEqual([200, 200]);
+  expect(await db.projectOutputQuality.count()).toBe(2);
+  await db.projectOutputQuality.create({
+    data: { ...item, dataSource: 'WORK_SYSTEM', recordedBy: f.manager.user.uid },
+  });
+  expect(
+    (await f.context()).json().data.items.every((x: { editable: boolean }) => !x.editable),
+  ).toBe(true);
+  expect((await f.quality([item])).statusCode).toBe(403);
+  expect(await db.projectOutputQuality.count()).toBe(3);
+});
+test('production quality acceptance: locked submission gate, exact adjustment, current manager and creator-only NAV review', async () => {
+  const f = await productionQualityFixture();
+  expect((await f.acceptanceContext()).json().data).toMatchObject({
+    canSubmit: false,
+    pendingCount: 2,
+    reportedQuantity: 0,
+  });
+  expect((await f.acceptance()).statusCode).toBe(400);
+  expect((await f.review()).statusCode).toBe(200);
+  expect((await f.acceptanceContext()).json().data).toMatchObject({
+    canSubmit: true,
+    reportedQuantity: 10,
+    pendingCount: 0,
+  });
+  expect((await f.acceptance({ actualQuantity: '10.0001' })).statusCode).toBe(400);
+  const before = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const results = await Promise.all([
+    f.acceptance({ quantityAdjustmentRemark: '强制清空' }),
+    f.acceptance(),
+  ]);
+  expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  const task = await db.projectSubtask.findUniqueOrThrow({ where: { id: f.pool.id } });
+  expect(task).toMatchObject({
+    status: 'PENDING_ACCEPTANCE',
+    acceptanceRound: 1,
+    quantityAdjustmentRemark: null,
+  });
+  expect(task.reportedQuantity?.toFixed()).toBe('10');
+  const list = await f.list({}, f.headers);
+  expect(list.statusCode, list.body).toBe(200);
+  expect(
+    list.json().data.records.find((r: { subtaskId: number }) => r.subtaskId === f.pool.id),
+  ).toMatchObject({
+    actualQuantity: 10,
+    reportedQuantity: 10,
+    allowedActions: ['ACCEPT', 'REJECT'],
+    submittedByName: expect.any(String),
+    submittedAt: expect.any(String),
+  });
+  expect((await f.decision({}, f.manager.headers)).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'NAVIGATOR' }, f.owner.headers);
+  expect((await f.decision({}, f.owner.headers)).statusCode).toBe(403);
+  expect(await db.project.findUnique({ where: { id: f.projectId } })).toEqual(before);
+});
+test('production quality acceptance: rejection, rework round, competing review, terminal quality and report locks', async () => {
+  const f = await productionQualityFixture();
+  expect((await f.review()).statusCode).toBe(200);
+  expect((await f.acceptance()).statusCode).toBe(200);
+  expect((await f.decision({ decision: 'REJECT', rejectReason: '  ' })).statusCode).toBe(400);
+  expect((await f.decision({ decision: 'REJECT', rejectReason: ' 返修 ' })).statusCode).toBe(200);
+  expect(
+    (await f.list())
+      .json()
+      .data.records.find((r: { subtaskId: number }) => r.subtaskId === f.pool.id),
+  ).toMatchObject({
+    status: 'REWORK_REQUIRED',
+    rejectReason: '返修',
+    allowedActions: ['SUBMIT_ACCEPTANCE'],
+  });
+  expect(
+    await db.projectTaskRound.findFirst({
+      where: {
+        projectId: f.projectId,
+        userId: f.manager.user.id,
+        taskType: 'SUBTASK_REWORK_SUBMIT',
+        status: 'OPEN',
+      },
+    }),
+  ).not.toBeNull();
+  expect(
+    (await f.acceptance({ actualQuantity: 11, quantityAdjustmentRemark: '调整' })).statusCode,
+  ).toBe(200);
+  expect(
+    await db.projectRoleNodeSnapshot.findFirst({
+      where: { projectId: f.projectId, userId: f.user.id, perspective: 'NAVIGATOR' },
+    }),
+  ).toMatchObject({ branchNodeCode: 'SUBTASK_REWORK_REVIEW', branchPriority: 90 });
+  const results = await Promise.all([
+    f.decision(),
+    f.decision({ decision: 'REJECT', rejectReason: '竞争' }),
+  ]);
+  expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  let t = await db.projectSubtask.findUniqueOrThrow({ where: { id: f.pool.id } });
+  if (t.status === 'REWORK_REQUIRED') {
+    expect((await f.acceptance()).statusCode).toBe(200);
+    expect((await f.decision()).statusCode).toBe(200);
+  }
+  t = await db.projectSubtask.findUniqueOrThrow({ where: { id: f.pool.id } });
+  expect(t.acceptanceRound).toBeGreaterThanOrEqual(2);
+  expect((await f.acceptanceContext()).json().data.canSubmit).toBe(false);
+  expect((await f.acceptance()).statusCode).toBe(409);
+  expect(
+    (
+      await f.quality([
+        { outputReportId: f.orgReport.id, inspectedQuantity: 1, qualifiedQuantity: 1 },
+      ])
+    ).statusCode,
+  ).toBe(409);
+  expect((await f.correct(f.orgReport.id)).statusCode).toBe(409);
+  expect(
+    await db.projectTaskRound.count({
+      where: {
+        projectId: f.projectId,
+        taskType: { in: ['SUBTASK_ACCEPTANCE', 'SUBTASK_REWORK_REVIEW', 'SUBTASK_REWORK_SUBMIT'] },
+        status: 'OPEN',
+      },
+    }),
+  ).toBe(0);
+});
+test('production quality acceptance: outbox fault rolls back submitted facts, round, snapshot and event', async () => {
+  const f = await productionQualityFixture();
+  expect((await f.review()).statusCode).toBe(200);
+  const { AcceptanceService } = await import('../src/modules/production/acceptance.service.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  const before = {
+    task: await db.projectSubtask.findUnique({ where: { id: f.pool.id } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    snapshots: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    outbox: await db.projectEventOutbox.count(),
+  };
+  const faulty = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>, options: unknown) =>
+          target.$transaction(
+            (tx) =>
+              fn(
+                new Proxy(tx, {
+                  get(inner, prop) {
+                    if (prop === 'projectEventOutbox')
+                      return new Proxy(inner.projectEventOutbox, {
+                        get(delegate, operation) {
+                          if (operation === 'create')
+                            return () => {
+                              throw new Error('injected acceptance');
+                            };
+                          return Reflect.get(delegate, operation);
+                        },
+                      });
+                    return Reflect.get(inner, prop);
+                  },
+                }),
+              ),
+            options as never,
+          );
+      const v = Reflect.get(target, key);
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+  await expect(
+    new AcceptanceService(faulty).submit(
+      {
+        projectId: f.projectId,
+        subtaskId: f.pool.id,
+        actualQuantity: 10,
+        actualDeliveryDate: '2099-12-31',
+      },
+      principal,
+    ),
+  ).rejects.toThrow('injected acceptance');
+  expect(await db.projectSubtask.findUnique({ where: { id: f.pool.id } })).toEqual(before.task);
+  expect(await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } })).toEqual(before.rounds);
+  expect(await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } })).toEqual(
+    before.snapshots,
+  );
+  expect(await db.projectEventOutbox.count()).toBe(before.outbox);
 });

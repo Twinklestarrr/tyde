@@ -1,3 +1,4 @@
+import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
 import { Prisma } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
@@ -83,7 +84,7 @@ export async function queryExpertTasks(
   });
   if (!rows.length) return [];
   const ids = [...new Set(rows.map((r) => r.projectId))];
-  const [members, attempts, exams, managers, creators] = await Promise.all([
+  const [members, attempts, exams, managers, creators, pendingEntries] = await Promise.all([
     tx.projectMember.findMany({
       where: { projectId: { in: ids }, userId: principal.userId },
       orderBy: { id: 'desc' },
@@ -110,6 +111,15 @@ export async function queryExpertTasks(
     }),
     tx.user.findMany({
       where: { uid: { in: [...new Set(rows.map((r) => r.project.createdBy))] } },
+    }),
+    tx.projectMember.findMany({
+      where: {
+        projectId: { in: ids },
+        status: { in: ['PENDING_CONFIRM', 'PENDING_ENTRY'] },
+        entryDecision: null,
+        plannedEntryDate: null,
+      },
+      include: memberInclude,
     }),
   ]);
   const ownersOf = (row: (typeof rows)[number]) =>
@@ -175,7 +185,17 @@ export async function queryExpertTasks(
     if (acceptanceStatus === 'ACCEPTED') {
       // 仅本域已接实来源可展示；其他快照须由10—12回补真值，不能凭旧快照开放动作。
       if (projectOwner)
-        branch = needWrittenExam && enterable && !finishedExam ? 'ENTRANCE_EXAM' : null;
+        branch =
+          needWrittenExam && enterable && !finishedExam
+            ? 'ENTRANCE_EXAM'
+            : pendingEntries.some(
+                  (m) =>
+                    m.expertAssignmentId === row.id &&
+                    m.organizationId === row.organizationId &&
+                    qualifiedForEntry(m, needWrittenExam),
+                )
+              ? 'MEMBER_ENTRY_CONFIRM'
+              : null;
       else if (!acceptedOrganizationOwner)
         branch = member
           ? activeAccess

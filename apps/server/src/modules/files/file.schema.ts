@@ -7,6 +7,7 @@ const text = (description: string, example: string) => ({
   examples: [example],
 });
 export const uploadExample = {
+  fileId: '00000000-0000-4000-8000-000000000001',
   objectKey: 'business-license/2026/10/16/0123456789abcdef0123456789abcdef.png',
   uploadToken: 'a'.repeat(43),
   url: null,
@@ -23,6 +24,12 @@ export const uploadResponse = {
   required: Object.keys(uploadExample),
   examples: [uploadExample],
   properties: {
+    fileId: {
+      type: 'string',
+      format: 'uuid',
+      description: '上传台账UUID；成员表现attachmentIds使用此ID，配合uploadToken认领。',
+      examples: [uploadExample.fileId],
+    },
     objectKey: text(
       '相对于项目 tyde/ 主目录的唯一业务 Key，后续认领、查看或删除原样使用；不是 URL，不含 bucket 名或 tyde/ 前缀。',
       uploadExample.objectKey,

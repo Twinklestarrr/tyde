@@ -1,3 +1,8 @@
+import { productionRoutes } from './modules/production/production.routes.js';
+import { ProductionService } from './modules/production/production.service.js';
+import { PersonnelRecordsService } from './modules/personnel/personnel-records.service.js';
+import { personnelRoutes } from './modules/personnel/personnel.routes.js';
+import { PersonnelService } from './modules/personnel/personnel.service.js';
 import { ExamCandidateCommandService } from './modules/entrance-exams/exam-candidate-command.service.js';
 import { ExamCandidateService } from './modules/entrance-exams/exam-candidate.service.js';
 import { ProjectRecruitmentService } from './modules/projects/project-recruitment.service.js';
@@ -95,6 +100,8 @@ export async function createApp(
       req.url.startsWith(`${API_PREFIX}/project-requesters`) ||
       req.url.startsWith(`${API_PREFIX}/projects/`) ||
       req.url.startsWith(`${API_PREFIX}/expert-assignments/`) ||
+      req.url.startsWith(`${API_PREFIX}/project-personnel/`) ||
+      req.url.startsWith(`${API_PREFIX}/production-tasks/`) ||
       req.url.startsWith(`${API_PREFIX}/entrance-exams/`) ||
       req.url.startsWith(`${API_PREFIX}/integrations/agents/entrance-exam-grading/`);
     const failure = (status: number, code: string, message: string) =>
@@ -135,6 +142,14 @@ export async function createApp(
   await authRoutes(app, auth, config);
   await personalApplicationRoutes(app, new PersonalApplicationService(db), auth, config);
   await attendanceRoutes(app, new AttendanceService(db), auth, config);
+  await personnelRoutes(
+    app,
+    new PersonnelService(db),
+    auth,
+    config,
+    new PersonnelRecordsService(db, files),
+  );
+  await productionRoutes(app, new ProductionService(db), auth, config);
   await expertAssignmentRoutes(app, new ExpertAssignmentService(db), auth, config);
   const gradings = new ExamGradingCommandService(db);
   await examAutoCallbackRoutes(app, gradings, config);

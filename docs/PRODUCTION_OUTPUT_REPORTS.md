@@ -1,0 +1,79 @@
+# 生产报量（11第二批）
+
+> 2026-10-26交接更新：11第三批6项已于10:50:10全部通过，11累计16项集成分批通过，第27所需专用库结构已具备，迁移历史未另查。无需重复迁移或已过项；默认入口已交接12，本轮未执行12。以下旧批次续验安排为历史，当前证据见[质量与验收](PRODUCTION_QUALITY_ACCEPTANCE.md)。
+
+> 2026-10-26第三批更新：095—100已实现、088验收事实及动作已补齐，088现为已实现待验收；下方“尚未开始/部分迁移/验收字段为null”的旧批次状态为历史。当前续做是专用_test库更新第27迁移并仅复验第三批6项，见[质量与验收](PRODUCTION_QUALITY_ACCEPTANCE.md)。前两批10项通过证据保留，无需重复。
+
+## 2026-10-26第二批集成通过（当前续做入口）
+
+2026-10-26最新11第二批集成通过：用户10:30:53仅复验退回修正1项通过（235跳过，共236项，总5.02秒，测试1.66秒），结合10:26:42已过5项，089—094本批6项集成分批全部通过，不是全236项复跑。原RETURN卡片节点约束冲突已解除；本人修正、离项后负责人代修正和离组失权已验证。加第一批4项，11累计10项集成分批通过。第26迁移所需专用库结构已具备，迁移历史未另查，无需当前专用库再次迁移26或重复本批6项/第一批4项/10/09已过项。089—094保留已实现待真实HTTP/部署/完整兼容验收，088仍部分迁移。515单测及修复后12定向/类型/ESLint/build前批证据保留；本轮仅同步用户结果与文档，未重跑测试、修改业务代码或操作数据库。保持11，下次直接095—100质量与验收并回补088验收事实/动作。业务Agent继续mock，完整跨域卡片/日常报量采集/转项审批/实际投递仍归04/12/14，不开始12。
+
+下方退回修复及本机复验命令为历史证据，已完成，不需再执行。
+
+
+## 2026-10-26退回修复（历史）
+
+2026-10-26最新11报量退回修复：用户10:26:42定向6项为5通过/1失败/230跳过（共236项，总9.92秒，测试6.48秒），原本机数据库初始化阻塞解除。唯一失败为首次RETURN写卡片时将OUTPUT_REPORT_CORRECTION轮次码误作branchNodeCode，违反既有ProjectRoleNodeSnapshot_valid节点约束；已映射到旧PRODUCTION_TASK(10)，核查恢复OUTPUT_DATA_REVIEW(70)，清理仅限OUTPUT_REPORT来源，保留其他领域同节点及更高优先级快照。无schema/迁移变更。修复后12项生产/报量/OpenAPI定向通过（10:29:26，总3.25秒），类型/变更ESLint/后端build通过。Agent仅复验失败1项仍在beforeEach因127.0.0.1:5432不可达（235跳过，共236项，10:29:33，总3.49秒），修复后业务断言待本机复验。第26迁移所需专用库结构已具备，迁移历史未另查；无需当前专用库再次迁移26或重复已过5项/第一批4项/10/09。保持11，仅复验return, own correction这1项，通过后095—100及088验收回补。515单测前批证据保留，本次新增1条快照约束回归已含12定向；业务Agent继续mock，未操作开发/部署库，不开始12。
+
+只复验失败1项，从`tyde/`运行：
+
+```sh
+pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'production output reports: return, own correction'
+```
+
+OUTPUT_REPORT_CORRECTION仅作为轮次类型，卡片使用PRODUCTION_TASK（10）；OUTPUT_DATA_REVIEW卡片优先级70。仅清理sourceBizType=OUTPUT_REPORT的本领域快照，不误删其他来源的PRODUCTION_TASK。新增回归直接核对既有迁移中的支线节点约束，未放宽数据库校验。
+
+以下记录为第二批初次实现历史，迁移及六项全量复验命令现已被上述续做入口替代。
+
+
+2026-10-26：API-089—094已接入，保留已实现待验收；088补齐本人已报量来源、退回修正范围、人数及已接入动作，验收事实/动作仍留095—100之后补齐，088继续部分迁移。业务Agent保持mock，未连接真实业务Agent。
+
+## 接口契约
+
+全部为`POST /api/v1/production-tasks/`，沿旧方法/路径和字段名，保持统一Result及原会话/来源隔离，`Cache-Control: no-store`。请求、完整嵌套响应、中文说明、枚举及可校验示例已登记Swagger。
+
+| 后缀 | 行为 |
+| --- | --- |
+| `reportable-list` | projectId；仅EXPERT本人有效、实际入项且原准入成立的成员来源，返回IN_PROGRESS任务池及本人被指定任务；没有有效成员返回空数组。 |
+| `member-list` | projectId、subtaskId、keyword、current、size；校验当前主策略官/协作、本人创建项目的NAV或EXPERT本人指定/认领及职责组织范围，分页展开实际指定或认领人员；空池不虚构人员。 |
+| `reports` | projectId、可空subtaskId、reviewStatuses、keyword、reportDateStart/End、current/size；空subtaskId仅查询项目级，不包含子任务级。按同条件计算全量totalReportCount、totalQuantity、pendingCount、returnedCount及page。按日期、ID倒序。 |
+| `report/save` | projectId及1—100条reports；每条沿用subtaskId、memberId、reportDate、quantity、remark。同批全部成功或回滚；整请求上限512KiB，超限413。 |
+| `report/correct` | projectId、reportId、quantity、remark；仅EXPERT，定位原RETURNED记录修正，不允许替换成员、日期或层级。 |
+| `report/review` | projectId、可空subtaskId、action、reportIds、reason；VERIFY指定ID须全部PENDING，省略/null/空数组只核准当前层级、当前职责内全部PENDING；RETURN须恰好1条和非空原因。 |
+
+- 报量查询：当前主策略官全项目；招募协作负责人只读；有效组织主管和具体接单项目负责人按组织职责范围；普通专家仅本人当前有效成员来源。NAV不参与报量查询/核查。组织关系失效立即撤销组织权限，不借用其他组织职责。
+- 保存仅EXPERT本人或具体接单来源的有效项目负责人代报。组织主管身份本身不授予代报权限。memberId省略时须唯一定位本人有效成员；存在多来源时返回400，须明确memberId，不猜选组织身份。
+- 成员须实际入项、ACTIVE、用户有效、接单有效、组织关系及原准入来源一致，沿10资格函数复核。项目级仅PRODUCTION_TASK，子任务级仅IN_PROGRESS；COMPLETED拒绝写入。任务池首次保存同事务写CLAIMED；指定模式必须预先指定，不能靠报量绕过。
+- 数量允许0，最多26位整数和4位小数，支持JSON数字或精确十进制字符串；大数量建议字符串。作业日期不得晚于上海当天；备注最多1000字；量级单位取原项目/子任务快照。响应沿旧JSON数字格式，超出JavaScript数字精度的数量回读可能舍入，持久化及汇总使用Decimal。
+- 唯一键为项目、层级、成员、作业日期；批内重复400，已有PENDING/VERIFIED拒绝409。RETURNED仅原成员本人具有修正权限时可用save恢复；成员已LEFT/REMOVED或组织离职后由该接单当前有效项目负责人使用correct代修正，主管不能借此代修。已离组的负责人失权。在职在项时不允许负责人代修正。
+- 核准锁定为VERIFIED，不允许保存或修正覆盖；退回写入原因/人/时间，修正恢复PENDING并清空退回信息。指定核查越界整批拒绝；核查竞争只有一个成功，全部核准可空操作幂等。
+- 088普通成员只查看本人真实已报量子任务；组织职责另含转交的退回修正来源；pendingReportCount只计本人当前可修正记录，IN_PROGRESS时提供CORRECT_REPORT。主策略官提供CHECK_DATA，协作只读。验收相关字段仍为null、按钮尚未开放。
+
+## 事务与边界
+
+用户→组织→组织关系→项目锁，事务内重新解析资格与职责；报量、首次认领、OUTPUT_DATA_REVIEW/OUTPUT_REPORT_CORRECTION轮次与本领域快照同事务。较高优先级其他领域快照保留。保存/退回及负责人代修正按报量人去重产生PENDING outbox；核准仅静默重算，不生成通知事件；本人correct静默消解退回待办。整批/模型/outbox异常均回滚。不增加项目versionNo，不推进或回退项目节点。
+
+本批仅维护报量核查/修正轮次及本域快照；完整跨域卡片与每日OUTPUT_REPORT采集/当天撤卡仍归04，转项审批归12，实际通知投递归14。无后台定时器或真实Agent调用。095—100人员日生产、质量记录与验收尚未开始，088仍部分迁移。
+
+## 模型与迁移
+
+新增第26迁移`20261026020000_production_output_reports`，ProjectOutputReport使用可空subtaskId表示项目级，表达式唯一索引COALESCE(subtaskId,0)确保项目级并发去重。复合外键约束同项目子任务和同项目成员/本人，删除RESTRICT；数据库检查非负数量、MANUAL来源、单位、核查状态与审计字段一致性。
+
+Agent未应用迁移，未操作开发/部署数据库。此前用户通过的25所需专用库结构证据保留，不需重跑第一批4项；本批须将专用_test库更新至26再定向运行以下6项。
+
+## 验证及续验
+
+515项单测通过（49文件，2026-10-26 10:21:44，总14.30秒）；11项生产/报量/OpenAPI定向通过（10:19:42，总3.75秒，512KiB用例补齐后的完整515项已覆盖）。类型、变更ESLint、Prisma校验及后端包build通过。
+
+本批6项数据库集成（10:18:34，总6.07秒，230跳过，共236项）全部在beforeEach因Agent环境127.0.0.1:5432不可达停止，业务断言未运行，不称集成通过。未重跑第一批4项或10/09已通过项。
+
+用户本机从`tyde/`运行，仅针对明确允许重置的`.env.test`专用_test库：
+
+```sh
+pnpm db:deploy:test
+pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'production output reports'
+```
+
+迁移命令使用现有_test保护脚本，不清库；集成用例会重置该专用测试库，不可指向开发/部署库。六项覆盖：精确大数量/并发日报量/唯一认领/单位/版本；指定与项目级隔离/全量汇总/协作只读；退回/本人修正/离项转交/离组失权；职责核查/全部核准/终态/竞争/静默通知；混合明细与重复键/非写入状态回滚；注入报量和outbox故障的认领/轮次/快照/项目整事务回滚。
+
+先完成本批定向6项复验，再095—100；保持11，不开始12。真实HTTP、部署及完整兼容仍待验收。

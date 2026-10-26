@@ -21,6 +21,7 @@
     "test": "pnpm --filter @tyde/shared build && vitest run --exclude '**/*.integration.test.ts'",
     "test:integration": "pnpm --filter @tyde/shared build && prisma generate && vitest run tests/auth.integration.test.ts",
     "storage:verify": "tsx --env-file=.env src/verify-oss.ts",
+    "personnel:entries": "tsx --env-file=.env src/personnel-entries.ts",
     "organizations:departures": "tsx --env-file=.env src/organizations-departures.ts",
     "management:grants": "tsx --env-file=.env src/management-grants.ts",
     "exam-auto:mock": "tsx --env-file=.env src/exam-auto-mock.ts"

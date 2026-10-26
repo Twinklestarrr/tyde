@@ -154,7 +154,7 @@ export const expertTasksResponse = {
       '项目主线；历史null回退RECRUIT_PROJECT_MANAGER=招募策略官，PRODUCTION_PLAN=生产计划、ENTRANCE_EXAM=准入考试、STANDARD_TRAINING=标准培训、RECRUIT_EXECUTION_EXPERT=招募专家、PERSONNEL_MANAGEMENT=人员管理、PRODUCTION_TASK=生产、COMPLETED=结项（不推送）。',
     ),
     branchNodeCode: text(
-      '本人支线：ENTRANCE_EXAM=准入考试、STANDARD_TRAINING=标准培训、PRODUCTION_TASK=生产任务；无待办null。按最新成员/交卷及负责人考试开放事实重算。',
+      '本人支线：ENTRANCE_EXAM=准入考试、MEMBER_ENTRY_CONFIRM=负责人确认成员入项时间、STANDARD_TRAINING=标准培训、PRODUCTION_TASK=生产任务；无待办null。按实际接单/准入/成员/交卷及负责人考试开放事实重算。',
       true,
     ),
     accessContext: object('当前分配身份；下游接口独立鉴权。', {
