@@ -102,6 +102,41 @@ export interface ProjectMutation {
   updatedAt: string;
   publishedAt: string | null;
 }
+export interface ProjectManagerCandidate {
+  status: 'CURRENT' | 'RECOMMENDED';
+  userId: string;
+  uid: string;
+  name: string;
+  avatarUrl: string | null;
+  /** 全平台当前 ASSIGNED 任职记录数。 */
+  currentProjectCount: number;
+}
+export interface ProjectManagerRecruitmentInput {
+  projectId: number;
+  candidateUserId: string;
+}
+export interface ProjectManagerRecruitmentResult {
+  recruitmentId: number;
+  projectId: number;
+  recruitmentType: 'INITIAL' | 'REPLACEMENT';
+  assignmentMode: 'DIRECT';
+  status: 'ASSIGNED';
+  manager: ProjectManagerCandidate;
+  currentNodeCode:
+    | 'RECRUIT_PROJECT_MANAGER'
+    | 'PRODUCTION_PLAN'
+    | 'ENTRANCE_EXAM'
+    | 'STANDARD_TRAINING'
+    | 'RECRUIT_EXECUTION_EXPERT'
+    | 'PERSONNEL_MANAGEMENT'
+    | 'PRODUCTION_TASK'
+    | 'COMPLETED'
+    | null;
+  nextStage: ProjectManagerRecruitmentResult['currentNodeCode'];
+  primaryAction: 'CHANGE_PROJECT_MANAGER';
+  /** 上海墙钟时间 yyyy-MM-dd HH:mm:ss，不含时区后缀。 */
+  assignedAt: string;
+}
 export const PROJECT_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
 export const PROJECT_ATTACHMENT_EXTENSIONS = [
   'pdf',
@@ -159,6 +194,15 @@ export interface ProjectApi {
   getCurrentProjectRequester(userId: string): Promise<ProjectRequester>;
   saveProject(input: ProjectSaveInput): Promise<ProjectMutation>;
   getProjectDetail(projectId: number): Promise<WorkbenchProjectDetail>;
+  /** 姓名/昵称筛选；当前任职者同样受关键词影响，返回全部匹配项。 */
+  listProjectManagerCandidates(input: {
+    projectId: number;
+    keyword?: string;
+  }): Promise<ProjectManagerCandidate[]>;
+  /** 直接指派，无幂等键；重复选择当前任职者返回400。 */
+  recruitProjectManager(
+    input: ProjectManagerRecruitmentInput,
+  ): Promise<ProjectManagerRecruitmentResult>;
   uploadProjectAttachment(file: File): Promise<ProjectAttachmentUploadResult>;
   /** 登录鉴权文件代理返回字节，不把敏感 objectKey 当公开 URL。 */
   readProjectAttachment(objectKey: string): Promise<Blob>;

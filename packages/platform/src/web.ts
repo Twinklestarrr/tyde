@@ -33,6 +33,9 @@ import {
   type ProjectDraft,
   type CurrentProjectDraft,
   type ProjectMutation,
+  type ProjectManagerCandidate,
+  type ProjectManagerRecruitmentInput,
+  type ProjectManagerRecruitmentResult,
   type ProjectAttachmentUploadResult,
   type WorkbenchAssignmentDetail,
   type WorkbenchProductionPlan,
@@ -659,6 +662,57 @@ export function createHttpAuth(
     )
       invalidResponse();
     return value as unknown as ProjectMutation;
+  }
+  function projectManagerCandidate(value: unknown): ProjectManagerCandidate {
+    if (
+      !record(value) ||
+      !inEnum(value.status, ['CURRENT', 'RECOMMENDED']) ||
+      !uuid(value.userId) ||
+      !strings(value, ['uid', 'name']) ||
+      !strings(value, ['avatarUrl'], true) ||
+      !integer(value.currentProjectCount)
+    )
+      invalidResponse();
+    return value as unknown as ProjectManagerCandidate;
+  }
+  function projectManagerRecruitment(
+    value: unknown,
+    input: ProjectManagerRecruitmentInput,
+  ): ProjectManagerRecruitmentResult {
+    if (
+      !record(value) ||
+      !integer(value.recruitmentId, 1) ||
+      value.projectId !== input.projectId ||
+      !inEnum(value.recruitmentType, ['INITIAL', 'REPLACEMENT']) ||
+      value.assignmentMode !== 'DIRECT' ||
+      value.status !== 'ASSIGNED' ||
+      !inEnum(
+        value.currentNodeCode,
+        [
+          'RECRUIT_PROJECT_MANAGER',
+          'PRODUCTION_PLAN',
+          'ENTRANCE_EXAM',
+          'STANDARD_TRAINING',
+          'RECRUIT_EXECUTION_EXPERT',
+          'PERSONNEL_MANAGEMENT',
+          'PRODUCTION_TASK',
+          'COMPLETED',
+        ],
+        true,
+      ) ||
+      (value.recruitmentType === 'INITIAL' && value.currentNodeCode !== 'PRODUCTION_PLAN') ||
+      value.nextStage !== value.currentNodeCode ||
+      value.primaryAction !== 'CHANGE_PROJECT_MANAGER' ||
+      !attendanceTime(value.assignedAt)
+    )
+      invalidResponse();
+    const manager = projectManagerCandidate(value.manager);
+    if (
+      manager.status !== 'CURRENT' ||
+      manager.userId.toLowerCase() !== input.candidateUserId.toLowerCase()
+    )
+      invalidResponse();
+    return value as unknown as ProjectManagerRecruitmentResult;
   }
   function projectUploaded(
     value: unknown,
@@ -1578,6 +1632,43 @@ export function createHttpAuth(
       );
       if (data.id !== projectId) invalidResponse();
       return data;
+    },
+    listProjectManagerCandidates: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['projectId', 'keyword']) ||
+        !integer(input.projectId, 1) ||
+        input.projectId > 2147483647 ||
+        (input.keyword !== undefined &&
+          (typeof input.keyword !== 'string' || input.keyword.length > 100))
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目 ID 和不超过 100 字符的姓名或昵称',
+        });
+      const query = new URLSearchParams({ projectId: String(input.projectId) });
+      if (input.keyword?.trim()) query.set('keyword', input.keyword.trim());
+      const data = await request(`/projects/manager-candidates?${query}`, undefined, 'GET', true);
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(projectManagerCandidate);
+    },
+    recruitProjectManager: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['projectId', 'candidateUserId']) ||
+        !integer(input.projectId, 1) ||
+        input.projectId > 2147483647 ||
+        !uuid(input.candidateUserId)
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目 ID 和策略官用户 ID',
+        });
+      // 无幂等键：仅明确401时沿既有会话刷新重试，不重放网络/5xx/409失败。
+      return projectManagerRecruitment(
+        await request('/projects/manager-recruitments', input, 'POST', true),
+        input,
+      );
     },
     uploadProjectAttachment: async (file) => {
       const name = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
