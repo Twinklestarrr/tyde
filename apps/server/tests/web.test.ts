@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
@@ -35,10 +35,8 @@ test('standalone server serves Web with caching while preserving API and Swagger
       expect(response.body).toContain('<title>tyde</title>');
       expect(response.headers['cache-control']).toBe('public, max-age=0, must-revalidate');
       expect(response.headers['x-content-type-options']).toBe('nosniff');
-      expect(
-        (await app.inject({ url, headers: { 'if-none-match': response.headers.etag! } }))
-          .statusCode,
-      ).toBe(304);
+      expect(response.headers.etag).toBeUndefined();
+      expect(response.headers['last-modified']).toBeUndefined();
     }
     for (const extension of ['js', 'css']) {
       const response = await app.inject(`/assets/index-abc123.${extension}`);
@@ -68,6 +66,39 @@ test('standalone server serves Web with caching while preserving API and Swagger
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('same-size HTML deployments with normalized mtimes ignore old browser validators', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tyde-web-version-'));
+  const app = await createApp(config);
+  try {
+    const index = join(root, 'index.html');
+    const modified = new Date('2018-10-20T01:46:40Z');
+    const oldHtml = '<script src="/assets/old123.js"></script>';
+    const newHtml = '<script src="/assets/new456.js"></script>';
+    expect(Buffer.byteLength(newHtml)).toBe(Buffer.byteLength(oldHtml));
+    await writeFile(index, oldHtml);
+    await utimes(index, modified, modified);
+    await registerWeb(app, root);
+    expect((await app.inject('/')).body).toBe(oldHtml);
+    await writeFile(index, newHtml);
+    await utimes(index, modified, modified);
+
+    const oldEtag = `W/"${Buffer.byteLength(oldHtml).toString(16)}-${modified.getTime().toString(16)}"`;
+    for (const url of ['/', '/index.html']) {
+      for (const headers of [
+        { 'if-none-match': oldEtag },
+        { 'if-modified-since': modified.toUTCString() },
+      ]) {
+        const response = await app.inject({ url, headers });
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toBe(newHtml);
+      }
+    }
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 

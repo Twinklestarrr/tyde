@@ -99,6 +99,8 @@ Node 服务端的网络响应使用现有 `undici-types` 显式类型。日历�
 
 Vercel 通过 `src/app.ts` 默认导出的 HTTP server 提供页面和 API，入口注册 `registerWeb` 托管 `public`。`web.ts` 直接枚举固定的 Web 目录，使文件追踪包含 HTML 与动态命名的 JS/CSS。根路径直接返回首页，不依赖 `/` 的平台重写；页面采用 HashRouter，无需全路径 SPA fallback，未知 API 不会变成 HTML 页面。入口 HTML 每次使用前重新验证缓存，Vite 带内容摘要的 `/assets/*` 资源允许长期缓存。Fastify 部署入口约束见 [Vercel Fastify 文档](https://vercel.com/docs/frameworks/backend/fastify)。
 
+2026-10-26 页面更新排查：`pnpm build:vercel` 完整通过；`https://aact.pw` 的 HTML、JS、CSS 与本地当前源码构建逐字节一致。线上 HTML 的修改时间固定为 `2018-10-20T01:46:40Z`，原静态插件按文件大小和修改时间计算 ETag；不同版本 HTML 长度相同时可产生同一验证器，导致浏览器收到 304 后保留旧资源引用。`/`、`/index.html` 现改为显式返回 HTML 正文，不发送 ETag/Last-Modified，也不按旧条件请求返回 304；带摘要资源继续长期缓存。修复需重新部署才在线上生效。回归命令：`pnpm --filter @tyde/server exec vitest run tests/web.test.ts`。未修改数据库、执行迁移或发布部署。
+
 ```text
 同一个 Vercel 项目、同一个域名
   /、/index.html、/assets/* → Fastify Function 提供 Web
