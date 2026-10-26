@@ -323,6 +323,7 @@ async function screenshot(
   page: Page,
   name: string,
   directory = 'artifacts/navigator-projects-audit',
+  fullPage = true,
 ) {
   await mkdir(directory, { recursive: true });
   await expect(page.getByRole('listbox', { includeHidden: true })).toHaveCount(0);
@@ -330,7 +331,7 @@ async function screenshot(
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await page.screenshot({
     path: `${directory}/${name}.png`,
-    fullPage: true,
+    fullPage,
     animations: 'disabled',
   });
 }
@@ -346,7 +347,7 @@ for (const [mode, desktop] of [
     await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '待办项目甲', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: '继续完善', exact: true })).toBeVisible();
-    if (!desktop) await screenshot(page, 'workbench', 'artifacts/project-tabs-audit');
+    if (!desktop) await screenshot(page, 'workbench', 'artifacts/project-dialog-audit');
     await page.getByLabel('筛选当前待办', { exact: true }).fill('没有该项目');
     await expect(page.getByText('没有匹配的待办项目', { exact: true })).toBeVisible();
     await page.getByLabel('筛选当前待办', { exact: true }).fill('PROJECT-501');
@@ -374,14 +375,88 @@ for (const [mode, desktop] of [
       'aria-selected',
       'true',
     );
-    if (!desktop) await screenshot(page, 'project-detail', 'artifacts/project-tabs-audit');
+    for (const name of ['基础信息', '人员画像', '标准配置'])
+      await expect(page.getByRole('region', { name, exact: true })).toHaveCount(0);
+    const detailsButton = page.getByRole('button', { name: '查看项目详情', exact: true });
+    await expect(detailsButton).toBeVisible();
+    if (!desktop) await screenshot(page, 'project-page', 'artifacts/project-dialog-audit');
+    const previousOverflow = await page.evaluate(() => document.body.style.overflow);
+    await detailsButton.click();
+    const dialog = page.getByRole('dialog', { name: '项目详情', exact: true });
+    await expect(dialog).toBeVisible();
+    const basic = dialog.getByRole('region', { name: '基础信息', exact: true });
+    for (const value of [
+      detail.projectName!,
+      detail.projectDescription!,
+      detail.requesterName,
+      '数据处理',
+      '文本标注',
+      '内容分类',
+      '中等',
+      '120.5 条',
+      detail.deadline!,
+      detail.createdAt,
+    ])
+      await expect(basic).toContainText(value);
+    const people = dialog.getByRole('region', { name: '人员画像', exact: true });
+    for (const value of [
+      '3 人',
+      '本科',
+      '兼职',
+      detail.experienceRequirement!,
+      detail.workSummary!,
+      detail.specialRequirement!,
+      detail.mandatoryRequirement!,
+    ])
+      await expect(people).toContainText(value);
+    const standard = dialog.getByRole('region', { name: '标准配置', exact: true });
+    for (const value of [detail.standardContent!, detail.standardLink!, '作业标准.txt'])
+      await expect(standard).toContainText(value);
+    if (!desktop) await screenshot(page, 'opened-dialog', 'artifacts/project-dialog-audit', false);
     const downloaded = page.waitForEvent('download');
-    await page.getByRole('button', { name: '下载', exact: true }).click();
+    await dialog.getByRole('button', { name: '下载', exact: true }).click();
     expect((await downloaded).suggestedFilename()).toBe('作业标准.txt');
     await expect.poll(() => calls('files/view').length).toBe(1);
     expect(calls('files/view')[0]?.query).toEqual({ objectKey });
     expect(calls('files/view')[0]?.headers.cookie).toContain('navigator_session=active');
     expect(await page.locator(`a[href*="project-attachment/"]`).count()).toBe(0);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(detailsButton).toBeFocused();
+    await detailsButton.click();
+    await dialog.getByRole('button', { name: '关闭项目详情', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(detailsButton).toBeFocused();
+    const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+    await page.setViewportSize({ width: 375, height: 812 });
+    await detailsButton.click();
+    await expect(dialog).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
+    const contents = dialog.getByRole('region', { name: '项目详情内容', exact: true });
+    expect(await contents.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
+      true,
+    );
+    expect(await contents.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
+    await contents.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    await expect.poll(() => contents.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(detailsButton).toBeFocused();
+    expect(await page.evaluate(() => document.body.style.overflow)).toBe(previousOverflow);
+    await detailsButton.click();
+    await expect(dialog).toBeVisible();
+    await page.mouse.click(4, 4);
+    await expect(dialog).toHaveCount(0);
+    await expect(detailsButton).toBeFocused();
+    expect(await page.evaluate(() => document.body.style.overflow)).toBe(previousOverflow);
+    await page.setViewportSize(originalViewport);
     const before = calls('projects/list').length;
     await chooseRole(page, '策略官');
     await expect(page).toHaveURL(/#\/$/);

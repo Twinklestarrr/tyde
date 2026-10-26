@@ -310,7 +310,7 @@ for (const [mode, desktop] of [
     expect(calls('manager-recruitments')).toHaveLength(0);
     await tabs.getByRole('tab', { name: '招募策略官', exact: true }).click();
     await expect(section.getByRole('radio', { name: /策略官甲/ })).toBeEnabled();
-    if (!desktop) await screenshot(page, 'manager-first', 'artifacts/project-tabs-audit');
+    if (!desktop) await screenshot(page, 'manager-first', 'artifacts/project-dialog-audit');
     await section.getByRole('radio', { name: /策略官甲/ }).check();
     state.holdWrite = true;
     await section.getByRole('button', { name: '指定策略官', exact: true }).click();
@@ -357,7 +357,18 @@ for (const [mode, desktop] of [
     await section.getByRole('button', { name: '重置', exact: true }).click();
     await section.getByRole('radio', { name: /策略官乙/ }).check();
     state.node = 'ENTRANCE_EXAM';
-    if (!desktop) await screenshot(page, 'replacement-selected', 'artifacts/project-tabs-audit');
+    const beforeDetails = requests.length;
+    const detailsButton = page.getByRole('button', { name: '查看项目详情', exact: true });
+    await detailsButton.click();
+    await page
+      .getByRole('dialog', { name: '项目详情', exact: true })
+      .getByRole('button', { name: '关闭', exact: true })
+      .click();
+    await expect(detailsButton).toBeFocused();
+    await expect(section.getByRole('radio', { name: /策略官乙/ })).toBeChecked();
+    expect(requests).toHaveLength(beforeDetails);
+    expect(calls('manager-recruitments')).toHaveLength(1);
+    if (!desktop) await screenshot(page, 'replacement-selected', 'artifacts/project-dialog-audit');
     await section.getByRole('button', { name: '确认更换', exact: true }).click();
     await confirm(page, true);
     await expect(current).toContainText('策略官乙');

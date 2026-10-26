@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { FileText } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 /** 完整节点仅用于解释服务端状态，不作为各角色共用的操作导航。 */
@@ -28,9 +30,11 @@ const navigatorTabs = [
 export function NavigatorProjectWorkflow({
   currentNodeCode,
   recruitment,
+  onViewDetails,
 }: {
   currentNodeCode: string | null;
   recruitment: ReactNode;
+  onViewDetails: () => void;
 }) {
   return (
     <section aria-label="项目主流程" className="rounded-[16px] border bg-card p-5 sm:p-6">
@@ -41,28 +45,34 @@ export function NavigatorProjectWorkflow({
         </p>
       </div>
       <Tabs defaultValue="RECRUIT_PROJECT_MANAGER">
-        <TabsList
-          aria-label="领航员项目模块"
-          variant="business"
-          className="flex w-full flex-wrap justify-start"
-        >
-          {navigatorTabs.map((code) => (
-            <TabsTrigger
-              key={code}
-              value={code}
-              variant="business"
-              aria-current={code === currentNodeCode ? 'step' : undefined}
-              className="min-h-11 flex-1 sm:flex-none"
-            >
-              {projectNodeLabel(code)}
-              {code === currentNodeCode && (
-                <span aria-hidden className="text-[11px] font-normal text-primary">
-                  当前
-                </span>
-              )}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
+          <TabsList
+            aria-label="领航员项目模块"
+            variant="business"
+            className="mb-0 flex h-auto w-full min-w-0 flex-none flex-wrap justify-start sm:w-auto sm:flex-1"
+          >
+            {navigatorTabs.map((code) => (
+              <TabsTrigger
+                key={code}
+                value={code}
+                variant="business"
+                aria-current={code === currentNodeCode ? 'step' : undefined}
+                className="min-h-11 flex-1 sm:flex-none"
+              >
+                {projectNodeLabel(code)}
+                {code === currentNodeCode && (
+                  <span aria-hidden className="text-[11px] font-normal text-primary">
+                    当前
+                  </span>
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          <Button variant="primaryOutline" size="mobileTouch" onClick={onViewDetails}>
+            <FileText className="size-4" aria-hidden />
+            查看项目详情
+          </Button>
+        </div>
         <TabsContent value="RECRUIT_PROJECT_MANAGER">{recruitment}</TabsContent>
         {navigatorTabs.slice(1).map((code) => (
           <TabsContent
@@ -70,7 +80,7 @@ export function NavigatorProjectWorkflow({
             value={code}
             className="rounded-xl border border-dashed p-5 text-[13px] leading-6 text-muted-foreground"
           >
-            {projectNodeLabel(code)}入口暂未开放，项目资料可在下方查看。
+            {projectNodeLabel(code)}入口暂未开放，可点击“查看项目详情”查看项目资料。
           </TabsContent>
         ))}
       </Tabs>
