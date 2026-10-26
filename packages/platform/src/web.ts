@@ -4,6 +4,8 @@ import {
   OrganizationImportError,
   AVATAR_MAX_BYTES,
   AVATAR_EXTENSIONS,
+  PROJECT_ATTACHMENT_MAX_BYTES,
+  PROJECT_ATTACHMENT_EXTENSIONS,
   BUSINESS_ROLES,
   type AuthApi,
   type ApiFailure,
@@ -25,6 +27,13 @@ import {
   type OrganizationScheduleResult,
   type WorkbenchProject,
   type WorkbenchProjectDetail,
+  type NavigatorProjectCard,
+  type ProjectCategory,
+  type ProjectRequester,
+  type ProjectDraft,
+  type CurrentProjectDraft,
+  type ProjectMutation,
+  type ProjectAttachmentUploadResult,
   type WorkbenchAssignmentDetail,
   type WorkbenchProductionPlan,
   type WorkbenchApplication,
@@ -500,19 +509,24 @@ export function createHttpAuth(
       invalidResponse();
     return value as unknown as WorkbenchProject;
   }
-  function workbenchProjectDetail(value: unknown): WorkbenchProjectDetail {
+  function workbenchProjectDetail(value: unknown): WorkbenchProjectDetail;
+  function workbenchProjectDetail(value: unknown, draft: true): ProjectDraft;
+  function workbenchProjectDetail(
+    value: unknown,
+    draft = false,
+  ): WorkbenchProjectDetail | ProjectDraft {
     if (
       !record(value) ||
       !integer(value.id, 1) ||
       !integer(value.versionNo) ||
-      value.status !== 'PUBLISHED' ||
+      value.status !== (draft ? 'DRAFT' : 'PUBLISHED') ||
+      (draft ? value.creatorName !== null : typeof value.creatorName !== 'string') ||
       !inEnum(value.requesterType, ['INDIVIDUAL', 'ORGANIZATION']) ||
       !strings(value, [
         'projectNo',
         'requesterId',
         'requesterName',
         'creatorUid',
-        'creatorName',
         'createdAt',
         'updatedAt',
       ]) ||
@@ -560,7 +574,121 @@ export function createHttpAuth(
       )
     )
       invalidResponse();
-    return value as unknown as WorkbenchProjectDetail;
+    return value as unknown as WorkbenchProjectDetail | ProjectDraft;
+  }
+  function navigatorProject(value: unknown): NavigatorProjectCard {
+    if (
+      !record(value) ||
+      !integer(value.id, 1) ||
+      !strings(value, [
+        'projectNo',
+        'categoryDisplayName',
+        'statusDescription',
+        'currentNodeCode',
+        'workbenchStatusDescription',
+        'currentActionDescription',
+        'requesterName',
+        'creatorName',
+        'projectManagerStatusDescription',
+        'createdAt',
+        'updatedAt',
+      ]) ||
+      !strings(
+        value,
+        [
+          'projectName',
+          'projectDescription',
+          'categoryLevel1Name',
+          'categoryLevel2Name',
+          'branchNodeCode',
+          'creatorId',
+          'projectManagerId',
+          'projectManagerName',
+          'deadline',
+        ],
+        true,
+      ) ||
+      value.status !== 'PUBLISHED' ||
+      !inEnum(value.workbenchStatus, ['PENDING', 'PROCESSING']) ||
+      !inEnum(value.currentAction, ['RECRUIT_PROJECT_MANAGER', 'VIEW_DETAIL']) ||
+      !booleans(value, ['needAssistGrading']) ||
+      !integer(value.activeExpertCount) ||
+      !integers(value, ['requiredHeadcount'], true) ||
+      !Array.isArray(value.categoryLevel3Names) ||
+      !value.categoryLevel3Names.every((name) => typeof name === 'string') ||
+      !Array.isArray(value.projectOwners) ||
+      !value.projectOwners.every(
+        (owner) =>
+          record(owner) &&
+          strings(owner, ['userId', 'name']) &&
+          strings(owner, ['avatarUrl'], true),
+      )
+    )
+      invalidResponse();
+    return value as unknown as NavigatorProjectCard;
+  }
+  function projectCategory(value: unknown): ProjectCategory {
+    if (
+      !record(value) ||
+      !integer(value.id, 1) ||
+      !strings(value, ['categoryCode', 'categoryName']) ||
+      ![1, 2, 3].includes(Number(value.categoryLevel)) ||
+      typeof value.categoryLevel !== 'number' ||
+      !Number.isSafeInteger(value.sortNo)
+    )
+      invalidResponse();
+    return value as unknown as ProjectCategory;
+  }
+  function currentProjectDraft(value: unknown): CurrentProjectDraft {
+    if (!record(value) || typeof value.hasDraft !== 'boolean') invalidResponse();
+    if (value.hasDraft) workbenchProjectDetail(value.draft, true);
+    else if (value.draft !== null) invalidResponse();
+    return value as unknown as CurrentProjectDraft;
+  }
+  function projectMutation(value: unknown, operation: string): ProjectMutation {
+    const published = operation === 'CREATE_PROJECT';
+    if (
+      !record(value) ||
+      !integer(value.id, 1) ||
+      !integer(value.versionNo) ||
+      !strings(value, ['projectNo', 'updatedAt']) ||
+      value.operation !== operation ||
+      value.status !== (published ? 'PUBLISHED' : 'DRAFT') ||
+      value.currentNodeCode !== (published ? 'RECRUIT_PROJECT_MANAGER' : null) ||
+      (published ? typeof value.publishedAt !== 'string' : value.publishedAt !== null)
+    )
+      invalidResponse();
+    return value as unknown as ProjectMutation;
+  }
+  function projectUploaded(
+    value: unknown,
+    file: File,
+    extension: string,
+  ): ProjectAttachmentUploadResult {
+    if (
+      !record(value) ||
+      !uuid(value.fileId) ||
+      !strings(value, [
+        'objectKey',
+        'uploadToken',
+        'fileName',
+        'extension',
+        'contentType',
+        'fileHash',
+      ]) ||
+      value.url !== null ||
+      value.sensitive !== true ||
+      value.size !== file.size ||
+      value.extension !== extension ||
+      !/^project-attachment\/\d{4}\/\d{2}\/\d{2}\/[a-f0-9]{32}\.[a-z0-9]+$/.test(
+        String(value.objectKey),
+      ) ||
+      !String(value.objectKey).endsWith(`.${extension}`) ||
+      !/^[A-Za-z0-9_-]{43}$/.test(String(value.uploadToken)) ||
+      !/^[a-f0-9]{64}$/.test(String(value.fileHash))
+    )
+      invalidResponse();
+    return value as unknown as ProjectAttachmentUploadResult;
   }
   function workbenchPlan(value: unknown): WorkbenchProductionPlan {
     if (
@@ -1376,6 +1504,141 @@ export function createHttpAuth(
           timeoutMs: 120_000,
         }),
       );
+    },
+    listNavigatorProjects: async () => {
+      const data = await request('/projects/list', undefined, 'GET', true);
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(navigatorProject);
+    },
+    getCurrentProjectDraft: async () =>
+      currentProjectDraft(await request('/projects/draft/current', undefined, 'GET', true)),
+    getProjectCategories: async (input = {}) => {
+      if (
+        (input.categoryLevel !== undefined && ![1, 2, 3].includes(input.categoryLevel)) ||
+        (input.keyword !== undefined && typeof input.keyword !== 'string')
+      )
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目分类条件' });
+      const query = new URLSearchParams({
+        ...(input.categoryLevel !== undefined
+          ? { categoryLevel: String(input.categoryLevel) }
+          : {}),
+        ...(input.keyword !== undefined ? { keyword: input.keyword } : {}),
+      });
+      const data = await request(
+        `/project-categories${query.size ? `?${query}` : ''}`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(projectCategory);
+    },
+    getCurrentProjectRequester: async (userId) => {
+      if (!uuid(userId))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的本人用户 ID' });
+      const data = await request(
+        `/project-requesters/INDIVIDUAL/${encodeURIComponent(userId)}/backfill`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (
+        !record(data) ||
+        data.requesterType !== 'INDIVIDUAL' ||
+        data.requesterId !== userId ||
+        typeof data.requesterName !== 'string' ||
+        data.orgId !== null ||
+        data.orgVerifyStatus !== null
+      )
+        invalidResponse();
+      return data as unknown as ProjectRequester;
+    },
+    saveProject: async (input) => {
+      if (
+        !inEnum(input.operation, ['SAVE_DRAFT', 'CREATE_PROJECT']) ||
+        (input.versionNo != null && !attendanceVersion(input.versionNo)) ||
+        (input.requesterType != null && input.requesterType !== 'INDIVIDUAL') ||
+        (input.requesterId != null && !uuid(input.requesterId))
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '项目操作、需求方或草稿版本不合法',
+        });
+      // 接口不提供幂等键：仅沿用明确401后的会话刷新，不重放网络/5xx/409失败。
+      return projectMutation(
+        await request('/projects/create', input, 'POST', true),
+        input.operation,
+      );
+    },
+    getProjectDetail: async (projectId) => {
+      if (!integer(projectId, 1) || projectId > 2147483647)
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+      const data = workbenchProjectDetail(
+        await request(`/projects/${projectId}`, undefined, 'GET', true),
+      );
+      if (data.id !== projectId) invalidResponse();
+      return data;
+    },
+    uploadProjectAttachment: async (file) => {
+      const name = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
+      const extension = name.includes('.') ? name.split('.').at(-1)!.toLowerCase() : '';
+      if (!(PROJECT_ATTACHMENT_EXTENSIONS as readonly string[]).includes(extension) || !file.size)
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请选择支持类型的非空项目附件',
+        });
+      if (file.size > PROJECT_ATTACHMENT_MAX_BYTES)
+        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '项目附件最大 50 MiB' });
+      const body = new FormData();
+      body.append('bizType', 'PROJECT_ATTACHMENT');
+      body.append('category', 'PROJECT_ATTACHMENT');
+      body.append('file', file);
+      return projectUploaded(
+        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+        file,
+        extension,
+      );
+    },
+    readProjectAttachment: async (objectKey) => {
+      if (
+        typeof objectKey !== 'string' ||
+        objectKey.length > 512 ||
+        !objectKey.startsWith('project-attachment/') ||
+        /[\\\p{Cc}]/u.test(objectKey) ||
+        objectKey.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目附件对象 Key',
+        });
+      return (await request(
+        `/files/view?${new URLSearchParams({ objectKey })}`,
+        undefined,
+        'GET',
+        true,
+        {
+          decode: async (response) => {
+            if (!response.ok) await read(response);
+            const type = response.headers.get('Content-Type')?.split(';')[0]?.trim();
+            if (
+              !inEnum(type, [
+                'application/octet-stream',
+                'application/pdf',
+                'image/jpeg',
+                'image/png',
+                'image/gif',
+                'image/bmp',
+                'image/webp',
+              ])
+            )
+              invalidResponse();
+            const blob = await response.blob();
+            if (!blob.size) invalidResponse();
+            return blob;
+          },
+          timeoutMs: 60_000,
+        },
+      )) as Blob;
     },
     getMyExpertProjects: async (keyword) => {
       if (keyword !== undefined && keyword.length > 100)
