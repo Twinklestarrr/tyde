@@ -74,7 +74,7 @@ export function ProfileExpertContent({
   showProjects: boolean;
   onSectionChange: (section: 'overview' | 'projects' | 'attendance' | 'organization') => void;
 }) {
-  const [assignmentId, setAssignmentId] = useState<number | null>(null);
+  const [projectId, setProjectId] = useState<number | null>(null);
   const [attendanceMonth, setAttendanceMonth] = useState<string>();
   const scope = profileScope(user);
   return (
@@ -84,7 +84,7 @@ export function ProfileExpertContent({
           user={user}
           showProjects={showProjects}
           onProjects={(id) => {
-            setAssignmentId(id ?? null);
+            setProjectId(id ?? null);
             onSectionChange('projects');
           }}
           onAttendance={(month) => {
@@ -96,7 +96,7 @@ export function ProfileExpertContent({
       </TabsContent>
       {showProjects && (
         <TabsContent value="projects" className="m-0 min-w-0">
-          <ExpertProjects key={scope.join(':')} user={user} initialAssignmentId={assignmentId} />
+          <ExpertProjects key={scope.join(':')} user={user} initialProjectId={projectId} />
         </TabsContent>
       )}
       <TabsContent value="attendance" className="m-0 min-w-0">
@@ -111,25 +111,30 @@ export function ProfileExpertContent({
 
 function ExpertProjects({
   user,
-  initialAssignmentId = null,
+  initialProjectId = null,
 }: {
   user: AuthUser;
-  initialAssignmentId?: number | null;
+  initialProjectId?: number | null;
 }) {
   const cache = useQueryClient();
   const [keyword, setKeyword] = useState('');
   const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState<number | null>(initialAssignmentId);
+  const [selectedId, setSelectedId] = useState<number | null>(initialProjectId);
   const projects = useQuery({
     queryKey: [...profileScope(user), 'projects', search],
     queryFn: () => readProfile(api.getMyExpertProjects(search || undefined), cache),
   });
   const selectedProject = projects.isSuccess
-    ? projects.data.find((project) => project.assignmentId === selectedId)
+    ? projects.data.find((project) => project.projectId === selectedId)
     : undefined;
   const detail = useQuery({
-    queryKey: [...profileScope(user), 'project-detail', selectedProject?.assignmentId],
-    queryFn: () => readProfile(api.getExpertAssignmentDetail(selectedProject!.assignmentId), cache),
+    queryKey: [
+      ...profileScope(user),
+      'project-detail',
+      selectedProject?.assignmentId,
+      selectedProject?.movementId,
+    ],
+    queryFn: () => readProfile(api.getExpertAssignmentDetail(selectedProject!), cache),
     enabled: !!selectedProject,
   });
   function submit(event: FormEvent) {
@@ -181,11 +186,11 @@ function ExpertProjects({
       {projects.isSuccess && projects.data.length > 0 && (
         <ul aria-label="我的项目列表" className="grid min-w-0 gap-[10px] sm:grid-cols-2">
           {projects.data.map((project) => (
-            <li key={project.assignmentId} className="min-w-0">
+            <li key={project.projectId} className="min-w-0">
               <button
                 type="button"
-                aria-pressed={selectedId === project.assignmentId}
-                onClick={() => setSelectedId(project.assignmentId)}
+                aria-pressed={selectedId === project.projectId}
+                onClick={() => setSelectedId(project.projectId)}
                 className="flex min-h-[100px] w-full min-w-0 flex-col items-start gap-[6px] rounded-[8px] border p-[14px] text-left text-[13px] leading-[20px] transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-primary aria-pressed:bg-accent"
               >
                 <span className="max-w-full break-words font-semibold [overflow-wrap:anywhere]">

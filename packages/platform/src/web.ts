@@ -26,6 +26,10 @@ import {
   type OrganizationSchedulesResult,
   type OrganizationScheduleResult,
   type WorkbenchProject,
+  type ExpertTask,
+  type ExpertProjectOwnerCandidate,
+  type ExpertTaskResponse,
+  type WorkbenchProjectSource,
   type WorkbenchProjectDetail,
   type NavigatorProjectCard,
   type StrategistProjectCard,
@@ -502,10 +506,90 @@ export function createHttpAuth(
         (typeof value[key] === 'number' && Number.isFinite(value[key])) ||
         (nullable && value[key] === null),
     );
+  const expertAcceptanceStatuses = [
+    'PENDING_ACCEPTANCE',
+    'ACCEPTED',
+    'REJECTED',
+    'CANCELLED',
+    'REPLACED',
+  ];
+  function expertTask(value: unknown): ExpertTask {
+    if (!record(value)) invalidResponse();
+    const basic = value.basicInfo;
+    const validId = (id: unknown) => integer(id, 1) && Number(id) <= 2147483647;
+    if (
+      !(value.sourceBizType === 'EXPERT_ASSIGNMENT'
+        ? validId(value.assignmentId) &&
+          value.movementId === null &&
+          value.sourceBizId === value.assignmentId
+        : value.sourceBizType === 'PROJECT_MEMBER_TRANSFER' &&
+          value.assignmentId === null &&
+          validId(value.movementId) &&
+          value.sourceBizId === value.movementId) ||
+      !record(basic) ||
+      !validId(basic.projectId) ||
+      !strings(basic, ['requesterName', 'creatorName', 'assignedAt']) ||
+      !strings(
+        basic,
+        [
+          'projectName',
+          'projectDescription',
+          'projectManagerName',
+          'categoryLevel1Name',
+          'categoryLevel2Name',
+          'deadline',
+          'organizationName',
+          'projectOwnerName',
+          'projectOwnerAvatarUrl',
+        ],
+        true,
+      ) ||
+      !['creatorId', 'projectManagerId', 'organizationId', 'projectOwnerUserId'].every(
+        (key) => basic[key] === null || uuid(basic[key]),
+      ) ||
+      !inEnum(basic.subjectType, ['INDIVIDUAL', 'ORGANIZATION']) ||
+      !Array.isArray(basic.categoryLevel3Names) ||
+      !basic.categoryLevel3Names.every((name) => typeof name === 'string') ||
+      !numbers(basic, ['productionRequirement'], true) ||
+      !integers(basic, ['operatorHeadcount', 'inspectorHeadcount'], true) ||
+      !Array.isArray(basic.projectOwners) ||
+      !basic.projectOwners.every(
+        (owner) =>
+          record(owner) &&
+          (owner.userId === null || uuid(owner.userId)) &&
+          strings(owner, ['name']) &&
+          strings(owner, ['avatarUrl'], true),
+      ) ||
+      !inEnum(value.acceptanceStatus, expertAcceptanceStatuses) ||
+      !booleans(value, ['needWrittenExam']) ||
+      !strings(value, ['currentNodeCode']) ||
+      !strings(value, ['branchNodeCode'], true) ||
+      !record(value.accessContext) ||
+      !booleans(value.accessContext, [
+        'projectOwner',
+        'acceptedOrganizationOwner',
+        'canViewOrganizationData',
+      ]) ||
+      !record(value.operations) ||
+      !booleans(value.operations, ['canAccept', 'canReject', 'canReportOutput'])
+    )
+      invalidResponse();
+    return value as unknown as ExpertTask;
+  }
+  function workbenchProjectSource(
+    value: unknown,
+  ): value is WorkbenchProjectSource & Record<string, unknown> {
+    return (
+      record(value) &&
+      (value.assignmentId === null) !== (value.movementId === null) &&
+      integer(value.assignmentId ?? value.movementId, 1) &&
+      Number(value.assignmentId ?? value.movementId) <= 2147483647
+    );
+  }
   function workbenchProject(value: unknown): WorkbenchProject {
     if (
       !record(value) ||
-      !integer(value.assignmentId, 1) ||
+      !workbenchProjectSource(value) ||
       !integer(value.projectId, 1) ||
       !strings(value, ['requesterName', 'currentNodeCode']) ||
       !strings(value, ['projectName'], true) ||
@@ -994,10 +1078,15 @@ export function createHttpAuth(
       invalidResponse();
     return value as unknown as WorkbenchProductionPlan;
   }
-  function workbenchAssignment(value: unknown, assignmentId: number): WorkbenchAssignmentDetail {
+  function workbenchAssignment(
+    value: unknown,
+    source: WorkbenchProjectSource,
+  ): WorkbenchAssignmentDetail {
     if (
       !record(value) ||
-      value.assignmentId !== assignmentId ||
+      !workbenchProjectSource(value) ||
+      value.assignmentId !== source.assignmentId ||
+      value.movementId !== source.movementId ||
       !strings(value, ['currentNodeCode'], true) ||
       !Array.isArray(value.availableOperations) ||
       !value.availableOperations.every((operation) => operation === 'VIEW_DETAIL')
@@ -1982,6 +2071,99 @@ export function createHttpAuth(
         },
       )) as Blob;
     },
+    getMyExpertTasks: async (input = {}) => {
+      if (
+        !record(input) ||
+        (input.keyword != null &&
+          (typeof input.keyword !== 'string' || input.keyword.length > 100)) ||
+        [input.acceptanceStatus, input.status].some(
+          (status) => status != null && !inEnum(status, expertAcceptanceStatuses),
+        ) ||
+        (input.acceptanceStatus != null &&
+          input.status != null &&
+          input.acceptanceStatus !== input.status)
+      )
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目筛选条件' });
+      const data = await request('/expert-assignments/my-tasks', input, 'POST', true);
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(expertTask);
+    },
+    getExpertProjectOwnerCandidates: async (assignmentId) => {
+      if (!integer(assignmentId, 1) || assignmentId > 2147483647)
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配 ID' });
+      const data = await request(
+        `/expert-assignments/project-owner-candidates?${new URLSearchParams({ assignmentId: String(assignmentId) })}`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (
+        !Array.isArray(data) ||
+        !data.every(
+          (candidate) =>
+            record(candidate) &&
+            uuid(candidate.userId) &&
+            strings(candidate, ['uid', 'name']) &&
+            strings(candidate, ['avatarUrl'], true) &&
+            inEnum(candidate.position, ['OWNER', 'ADMIN', 'MEMBER']) &&
+            typeof candidate.projectOwner === 'boolean',
+        ) ||
+        new Set(data.map((candidate) => candidate.userId)).size !== data.length
+      )
+        invalidResponse();
+      return data as ExpertProjectOwnerCandidate[];
+    },
+    respondExpertTask: async (input) => {
+      const validId = (id: unknown) => integer(id, 1) && Number(id) <= 2147483647;
+      if (
+        !record(input) ||
+        !onlyKeys(input, [
+          'assignmentId',
+          'movementId',
+          'decision',
+          'projectOwnerUserIds',
+          'rejectReason',
+        ]) ||
+        (input.assignmentId == null) === (input.movementId == null) ||
+        (input.assignmentId != null && !validId(input.assignmentId)) ||
+        (input.movementId != null && !validId(input.movementId)) ||
+        !inEnum(input.decision, ['ACCEPT', 'REJECT']) ||
+        (input.rejectReason !== undefined &&
+          (typeof input.rejectReason !== 'string' || input.rejectReason.length > 500)) ||
+        (input.decision === 'REJECT' && !input.rejectReason?.trim()) ||
+        (input.projectOwnerUserIds !== undefined &&
+          (!Array.isArray(input.projectOwnerUserIds) ||
+            !input.projectOwnerUserIds.every(uuid) ||
+            new Set(input.projectOwnerUserIds).size > 20 ||
+            (input.movementId != null && input.projectOwnerUserIds.length > 0)))
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的接单来源、负责人或拒绝原因',
+        });
+      const data = await request('/expert-assignments/respond', input, 'POST', true);
+      if (
+        !record(data) ||
+        (input.assignmentId != null
+          ? data.assignmentId !== input.assignmentId ||
+            !(data.movementId === null || validId(data.movementId))
+          : data.assignmentId !== null || data.movementId !== input.movementId) ||
+        !inEnum(data.status, ['ACCEPTED', 'REJECTED']) ||
+        !inEnum(data.memberStatus, ['ACCEPTED', 'REJECTED'], true) ||
+        (data.memberStatus ?? data.status) !==
+          (input.decision === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED') ||
+        !inEnum(data.nextAction, [
+          'NONE',
+          'VIEW_RESULT',
+          'MANAGE_PROJECT_MEMBERS',
+          'TAKE_ENTRANCE_EXAM',
+          'WAIT_ENTRY_CONFIRMATION',
+        ]) ||
+        !integer(data.notifiedMemberCount)
+      )
+        invalidResponse();
+      return data as unknown as ExpertTaskResponse;
+    },
     getMyExpertProjects: async (keyword) => {
       if (keyword !== undefined && keyword.length > 100)
         throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '项目关键字最多 100 字符' });
@@ -1990,17 +2172,18 @@ export function createHttpAuth(
       if (!Array.isArray(data)) invalidResponse();
       return data.map(workbenchProject);
     },
-    getExpertAssignmentDetail: async (assignmentId) => {
-      if (!integer(assignmentId, 1) || assignmentId > 2147483647)
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配 ID' });
+    getExpertAssignmentDetail: async (input) => {
+      const source = typeof input === 'number' ? { assignmentId: input, movementId: null } : input;
+      if (!workbenchProjectSource(source))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配或转项 ID' });
+      const query = new URLSearchParams(
+        source.assignmentId === null
+          ? { movementId: String(source.movementId) }
+          : { assignmentId: String(source.assignmentId) },
+      );
       return workbenchAssignment(
-        await request(
-          `/expert-assignments/detail?${new URLSearchParams({ assignmentId: String(assignmentId) })}`,
-          undefined,
-          'GET',
-          true,
-        ),
-        assignmentId,
+        await request(`/expert-assignments/detail?${query}`, undefined, 'GET', true),
+        source,
       );
     },
     listMyApplications: async (input) =>

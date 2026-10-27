@@ -57,6 +57,7 @@ const scheduled = {
 };
 const project = {
   assignmentId: 23,
+  movementId: null,
   projectId: 17,
   projectName: null,
   requesterName: '测试需求方',
@@ -66,6 +67,7 @@ const project = {
 };
 const detail = {
   assignmentId: 23,
+  movementId: null,
   projectDetail: {
     id: 17,
     projectNo: 'P202610210001',
@@ -684,6 +686,45 @@ for (const desktop of [false, true]) {
     }
   });
 
+  test(`${mode} transferred projects preserve their movement source through list and detail reads`, async (t) => {
+    const transferred = [7, 8].map((movementId) => ({
+      ...project,
+      assignmentId: null,
+      movementId,
+      projectId: 20 + movementId,
+      admissionStatus: 'PASSED',
+      currentNodeCode: 'STANDARD_TRAINING',
+    }));
+    const transferredDetails = transferred.map((row) => ({
+      ...detail,
+      assignmentId: null,
+      movementId: row.movementId,
+      projectDetail: { ...detail.projectDetail, id: row.projectId },
+    }));
+    const { api, calls } = adapter(t, desktop, ({ path }) => {
+      if (path.endsWith('/my-projects')) return result([project, ...transferred]);
+      const movementId = new URL(path, 'http://fixture.test').searchParams.get('movementId');
+      return result(transferredDetails.find((row) => String(row.movementId) === movementId));
+    });
+    const projects = await api.getMyExpertProjects();
+    assert.deepEqual(projects, [project, ...transferred]);
+    for (let index = 0; index < transferred.length; index++)
+      assert.deepEqual(
+        await api.getExpertAssignmentDetail(projects[index + 1]),
+        transferredDetails[index],
+      );
+    assert.deepEqual(
+      calls.map(({ path }) => path),
+      [
+        '/api/v1/expert-assignments/my-projects',
+        '/api/v1/expert-assignments/detail?movementId=7',
+        '/api/v1/expert-assignments/detail?movementId=8',
+      ],
+    );
+    assert.ok(calls.every((call) => call.method === 'GET'));
+    assert.ok(calls.every((call) => call.credentials === (desktop ? 'include' : 'same-origin')));
+  });
+
   test(`${mode} personal read failures remain errors without automatic request replay`, async (t) => {
     let status = 403;
     const { api, calls } = adapter(t, desktop, () => {
@@ -876,6 +917,18 @@ test('personal read parsers reject incomplete nested data rather than filling mi
     },
     () => api.getMyExpertProjects(),
   );
+  for (const source of [
+    { assignmentId: null, movementId: null },
+    { assignmentId: 23, movementId: 7 },
+    { assignmentId: 23, movementId: undefined },
+    { assignmentId: 0, movementId: null },
+    { assignmentId: null, movementId: 2147483648 },
+  ])
+    await check(
+      [project],
+      (data) => Object.assign(data[0], source),
+      () => api.getMyExpertProjects(),
+    );
   await check(
     detail,
     (data) => {
@@ -883,6 +936,16 @@ test('personal read parsers reject incomplete nested data rather than filling mi
     },
     () => api.getExpertAssignmentDetail(23),
   );
+  for (const source of [
+    { assignmentId: null, movementId: 8 },
+    { assignmentId: 23, movementId: null },
+    { assignmentId: 23, movementId: 7 },
+  ])
+    await check(
+      detail,
+      (data) => Object.assign(data, source),
+      () => api.getExpertAssignmentDetail({ assignmentId: null, movementId: 7 }),
+    );
   await check(
     detail,
     (data) => {
@@ -956,6 +1019,13 @@ test('personal read parsers reject incomplete nested data rather than filling mi
   const before = calls.length;
   await assert.rejects(api.getExpertAssignmentDetail(0), (error) => error.status === 400);
   await assert.rejects(api.getExpertAssignmentDetail(2147483648), (error) => error.status === 400);
+  for (const source of [
+    { assignmentId: null, movementId: null },
+    { assignmentId: 23, movementId: 7 },
+    { assignmentId: null, movementId: 0 },
+    { assignmentId: null, movementId: 2147483648 },
+  ])
+    await assert.rejects(api.getExpertAssignmentDetail(source), (error) => error.status === 400);
   await assert.rejects(api.getMyExpertProjects('a'.repeat(101)), (error) => error.status === 400);
   await assert.rejects(api.getMyAttendance({ month: '2026-13' }), (error) => error.status === 400);
   await assert.rejects(

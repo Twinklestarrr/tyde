@@ -138,6 +138,7 @@ function unscheduledAttendance(
 }
 const assignmentFixture: WorkbenchAssignmentDetail = {
   assignmentId: 41,
+  movementId: null,
   currentNodeCode: 'PRODUCTION_PLAN',
   availableOperations: ['VIEW_DETAIL'],
   projectDetail: {
@@ -590,6 +591,7 @@ for (const [mode, desktop] of [
     state.projectsStatus = 200;
     state.projects.push({
       assignmentId: 41,
+      movementId: null,
       projectId: 501,
       projectName: '真实范围内项目',
       requesterName: '联调需求方',
@@ -683,6 +685,7 @@ test('个人主页同屏排列项目、年度考勤、能力与申请，桌面�
   state.presentDate = '2026-10-02';
   state.projects = Array.from({ length: 5 }, (_, index) => ({
     assignmentId: 41 + index,
+    movementId: null,
     projectId: 501 + index,
     projectName: `主页布局项目 ${index + 1}`,
     requesterName: '联调需求方',
@@ -851,6 +854,7 @@ test('selectedRole 为空时读取后端 role，切回专家后重读项目以�
   state.projects = [
     {
       assignmentId: 41,
+      movementId: null,
       projectId: 501,
       projectName: '角色切换前项目',
       requesterName: '联调需求方',

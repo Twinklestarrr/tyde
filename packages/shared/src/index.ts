@@ -18,6 +18,7 @@ export * from './auth.js';
 export * from './organizations.js';
 export * from './workbench.js';
 export * from './projects.js';
+export * from './expert-tasks.js';
 import type {
   BusinessLicenseUploadResult,
   OrganizationApi,
@@ -25,6 +26,7 @@ import type {
 } from './organizations.js';
 import type { WorkbenchApi } from './workbench.js';
 import type { ProjectApi } from './projects.js';
+import type { ExpertTasksApi } from './expert-tasks.js';
 
 /** 登录令牌由平台适配器保管，页面只接收登录状态或注册指引。 */
 export interface Authenticated {
@@ -95,7 +97,7 @@ export interface ImageUploadResult {
 }
 export type AvatarUploadResult = ImageUploadResult;
 export type OrganizationLogoUploadResult = ImageUploadResult;
-export interface AuthApi extends OrganizationApi, WorkbenchApi, ProjectApi {
+export interface AuthApi extends OrganizationApi, WorkbenchApi, ProjectApi, ExpertTasksApi {
   health(): Promise<{ status: string }>;
   sendCode(input: SmsSendInput): Promise<string>;
   login(input: LoginInput): Promise<void>;
