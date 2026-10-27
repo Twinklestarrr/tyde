@@ -352,6 +352,8 @@ Web 通过 `API_PROXY_TARGET`（shell 优先于 `apps/web/.env.local`）选择�
 Git 的 `pre-commit` 先通过 `scripts/check-commit-policy.mjs` 检查整个暂存索引的路径和文本，再用 lint-staged 只读检查暂存文件的 ESLint / Prettier；`commit-msg` 检查提交信息。规则默认读取仓库根目录已被 Git 忽略的 `commit-policy.json`，也可通过 `TYDE_COMMIT_POLICY_FILE` 指定其他本机文件，`terms` 为非空字符串数组；默认文件缺失时跳过受限内容检查，不影响其他开发者提交及 ESLint / Prettier 校验，现存配置无效、规则为空或显式指定文件缺失时拒绝提交。词表仅用于本机，不随 Git 分发，不得暂存或提交。自动守卫仅覆盖字面匹配和可解码文本；`pnpm-lock.yaml` 的 `packages` 下 `resolution.integrity` 仅对算法、长度与 Base64 格式均合法的摘要载荷避免随机字面误报，其余原文照常检查。二进制内容、编码变体及依赖来源仍须执行上面的完整交付核查。安装入口为 `scripts/install-hooks.mjs`，生产 / CI / 无 Git 的部署目录跳过；全量类型检查和业务测试不在提交钩子中执行。
 修改后按影响范围验证；认证改动关注双端恢复/退出、过期、重放、限流与并发。测试位置：`tests/security.test.mjs`、`apps/server/tests/`、`tests/e2e/`。
 
+测试进程清理：启动前记录已有服务与本轮创建的进程、子进程和端口。每轮测试结束（包括失败和中断）必须关闭自己启动的预览、测试服务及专用浏览器/Electron进程，并复查端口已释放；除非用户明确要求保留，不留下常驻测试进程。只清理本轮自启进程，不泛杀同名进程，不停止用户原有服务或数据库。
+
 ## 按需补充上下文
 
 先按上面的入口读取本次需求涉及的文件，无需常规全仓扫描或加载完整设计。
