@@ -71,8 +71,13 @@ export function ProjectCreatePage({ user }: { user: AuthUser }) {
     refetchOnReconnect: false,
   });
   const categories = useQuery({
-    queryKey: ['project-categories', user.id, 'NAVIGATOR'],
-    queryFn: () => api.getProjectCategories(),
+    queryKey: ['project-categories', user.id, 'NAVIGATOR', [1, 2, 3]],
+    queryFn: async () =>
+      (
+        await Promise.all(
+          ([1, 2, 3] as const).map((categoryLevel) => api.getProjectCategories({ categoryLevel })),
+        )
+      ).flat(),
     retry: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -84,7 +89,9 @@ export function ProjectCreatePage({ user }: { user: AuthUser }) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-  const failure = draft.error ?? categories.error ?? requester.error;
+  // 类型重读不卸载表单；已有数据时的读取失败在类型区域提示。
+  const failure =
+    draft.error ?? requester.error ?? (categories.data === undefined ? categories.error : null);
   if (failure)
     return (
       <PageRecovery
@@ -103,7 +110,6 @@ export function ProjectCreatePage({ user }: { user: AuthUser }) {
     !categories.data ||
     !requester.data ||
     draft.isFetching ||
-    categories.isFetching ||
     requester.isFetching
   )
     return (
@@ -117,6 +123,9 @@ export function ProjectCreatePage({ user }: { user: AuthUser }) {
       user={user}
       initialDraft={draft.data}
       categories={categories.data}
+      categoriesLoading={categories.isFetching}
+      categoriesError={categories.error}
+      onReloadCategories={() => void categories.refetch()}
       requesterName={requester.data.requesterName}
     />
   );
@@ -127,11 +136,17 @@ function ProjectCreateForm({
   user,
   initialDraft,
   categories,
+  categoriesLoading,
+  categoriesError,
+  onReloadCategories,
   requesterName,
 }: {
   user: AuthUser;
   initialDraft: CurrentProjectDraft;
   categories: ProjectCategory[];
+  categoriesLoading: boolean;
+  categoriesError: unknown;
+  onReloadCategories: () => void;
   requesterName: string;
 }) {
   const cache = useQueryClient();
@@ -516,6 +531,9 @@ function ProjectCreateForm({
                 form={form}
                 step={step}
                 categories={categories}
+                categoriesLoading={categoriesLoading}
+                categoriesError={categoriesError}
+                onReloadCategories={onReloadCategories}
                 requesterName={requesterName}
                 creatorName={user.nickname ? `${user.nickname}（${user.realName}）` : user.realName}
               />

@@ -1,5 +1,8 @@
 import { Controller, type UseFormReturn } from 'react-hook-form';
 import type { ProjectCategory } from '@tyde/shared';
+import { ErrorNotice } from '@/components/ErrorNotice';
+import { Alert } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
@@ -17,6 +20,9 @@ interface ProjectCreateFieldsProps {
   form: UseFormReturn<ProjectCreateValues>;
   step: number;
   categories: ProjectCategory[];
+  categoriesLoading: boolean;
+  categoriesError: unknown;
+  onReloadCategories: () => void;
   requesterName: string;
   creatorName: string;
 }
@@ -26,10 +32,16 @@ export function ProjectCreateFields({
   form,
   step,
   categories,
+  categoriesLoading,
+  categoriesError,
+  onReloadCategories,
   requesterName,
   creatorName,
 }: ProjectCreateFieldsProps) {
   const errors = form.formState.errors;
+  const missingCategories = ['一级', '二级', '三级'].filter(
+    (_, index) => !categories.some((item) => item.categoryLevel === index + 1),
+  );
 
   /** 保持单行、多行字段的标签、说明和错误关联一致。 */
   function text(
@@ -140,6 +152,24 @@ export function ProjectCreateFields({
         <>
           {text('projectName', '项目名称', { required: true, maxLength: 128 })}
           {text('projectDescription', '项目描述', { multiline: true })}
+          <div className="flex flex-wrap items-center justify-between gap-[8px]">
+            <p className="text-[13px] text-muted-foreground">各级项目类型独立选择。</p>
+            <Button
+              variant="outline"
+              size="account"
+              loading={categoriesLoading}
+              onClick={onReloadCategories}
+            >
+              重新读取项目类型
+            </Button>
+          </div>
+          <ErrorNotice error={categoriesError} />
+          {missingCategories.length > 0 && (
+            <Alert>
+              {missingCategories.join('、')}项目类型暂无可选项，请联系管理员维护后重新读取。
+              已填写内容可先保存为草稿。
+            </Alert>
+          )}
           <div className="grid gap-[20px] sm:grid-cols-2">
             {select(
               'categoryLevel1Id',

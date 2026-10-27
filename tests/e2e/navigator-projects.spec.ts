@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import type {
   AuthUser,
   NavigatorProjectCard,
+  ProjectCategory,
   ProjectDraft,
   ProjectSaveInput,
   WorkbenchProjectDetail,
@@ -123,6 +124,11 @@ const draftFixture = (): ProjectDraft => ({
   creatorName: null,
   currentNodeCode: null,
 });
+const categoryFixtures: ProjectCategory[] = [
+  { id: 1, categoryCode: 'DATA', categoryName: '数据处理', categoryLevel: 1, sortNo: 0 },
+  { id: 2, categoryCode: 'TEXT', categoryName: '文本标注', categoryLevel: 2, sortNo: 0 },
+  { id: 3, categoryCode: 'CLASS', categoryName: '内容分类', categoryLevel: 3, sortNo: 0 },
+];
 interface RequestLog {
   path: string;
   method: string;
@@ -147,6 +153,9 @@ async function backend(page: Page, desktop = false) {
     user: structuredClone(user),
     projects: [structuredClone(card)],
     draft: null as ProjectDraft | null,
+    categories: structuredClone(categoryFixtures),
+    categoriesStatus: 200,
+    holdCategories: false,
     listStatus: 200,
     draftStatus: 200,
     detailStatus: 200,
@@ -158,6 +167,7 @@ async function backend(page: Page, desktop = false) {
   };
   const requests: RequestLog[] = [];
   let releaseSave: (() => Promise<void>) | undefined;
+  const pendingCategoryRequests: (() => void)[] = [];
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -207,18 +217,23 @@ async function backend(page: Page, desktop = false) {
           currentProjectCount: 0,
         },
       ]);
-    if (path === '/api/v1/project-categories')
+    if (path === '/api/v1/project-categories') {
+      if (state.holdCategories)
+        await new Promise<void>((resolve) => {
+          pendingCategoryRequests.push(resolve);
+        });
       return reply(
-        [
-          { id: 1, categoryCode: 'DATA', categoryName: '数据处理', categoryLevel: 1, sortNo: 0 },
-          { id: 2, categoryCode: 'TEXT', categoryName: '文本标注', categoryLevel: 2, sortNo: 0 },
-          { id: 3, categoryCode: 'CLASS', categoryName: '内容分类', categoryLevel: 3, sortNo: 0 },
-        ].filter(
-          (category) =>
-            !url.searchParams.has('categoryLevel') ||
-            String(category.categoryLevel) === url.searchParams.get('categoryLevel'),
-        ),
+        state.categoriesStatus === 200
+          ? state.categories.filter(
+              (category) =>
+                !url.searchParams.has('categoryLevel') ||
+                String(category.categoryLevel) === url.searchParams.get('categoryLevel'),
+            )
+          : null,
+        state.categoriesStatus,
+        '项目类型读取暂不可用',
       );
+    }
     if (path === `/api/v1/project-requesters/INDIVIDUAL/${userId}/backfill`)
       return reply({
         requesterType: 'INDIVIDUAL',
@@ -306,6 +321,11 @@ async function backend(page: Page, desktop = false) {
     state,
     requests,
     calls,
+    releaseCategories: () => {
+      if (!pendingCategoryRequests.length) throw new Error('没有等待中的项目类型读取');
+      state.holdCategories = false;
+      for (const release of pendingCategoryRequests.splice(0)) release();
+    },
     releaseSave: async () => {
       if (!releaseSave) throw new Error('没有等待中的项目写入');
       await releaseSave();
@@ -478,6 +498,168 @@ for (const [mode, desktop] of [
     );
     expect(storage).not.toContain('project-attachment/');
     expect(storage).not.toContain('u'.repeat(43));
+  });
+
+  test(`${mode} 项目类型首次失败可重试，空字典与缺级别可保存草稿并读取最新选项`, async ({
+    page,
+  }) => {
+    const { state, calls, requests } = await backend(page, desktop);
+    state.categories = [];
+    state.categoriesStatus = 503;
+    await page.goto(`${origin}/#/projects/create`);
+    await expect(
+      page.getByRole('heading', { name: '暂时无法加载项目创建资料', exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText('项目类型读取暂不可用', { exact: true })).toBeVisible();
+    await expect.poll(() => calls('project-categories').length).toBe(3);
+    expect(calls('projects/create')).toHaveLength(0);
+    state.categoriesStatus = 200;
+    await page.getByRole('button', { name: '重试', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '创建项目', exact: true })).toBeVisible();
+    await expect(page.getByText(/一级、二级、三级项目类型暂无可选项/)).toBeVisible();
+    if (!desktop) {
+      const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+      await page.setViewportSize({ width: 375, height: 812 });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await screenshot(page, 'project-categories-empty-mobile');
+      await page.setViewportSize(originalViewport);
+    }
+    await page.getByLabel(/^项目名称/).fill('等待配置项目类型的草稿');
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await expect(page.getByText('草稿已保存。', { exact: true })).toBeVisible();
+    expect(calls('projects/create')[0]?.body).toMatchObject({
+      operation: 'SAVE_DRAFT',
+      projectName: '等待配置项目类型的草稿',
+      categoryLevel1Id: null,
+      categoryLevel2Id: null,
+      categoryLevel3Ids: [],
+    });
+
+    const beforeRefresh = requests.length;
+    state.categories = categoryFixtures.filter((category) => category.categoryLevel === 1);
+    await page.getByRole('button', { name: '重新读取项目类型', exact: true }).click();
+    await expect(page.getByText(/二级、三级项目类型暂无可选项/)).toBeVisible();
+    await expect(page.getByLabel(/^项目名称/)).toHaveValue('等待配置项目类型的草稿');
+    await select(page, '一级项目类型', '数据处理');
+    state.categories = [
+      ...structuredClone(categoryFixtures),
+      { id: 4, categoryCode: 'REVIEW', categoryName: '内容核对', categoryLevel: 3, sortNo: 1 },
+    ];
+    await page.getByRole('button', { name: '重新读取项目类型', exact: true }).click();
+    await expect(page.getByText(/项目类型暂无可选项/)).toHaveCount(0);
+    await expect(page.getByRole('combobox', { name: /^一级项目类型/ })).toContainText('数据处理');
+    await select(page, '二级项目类型', '文本标注');
+    for (const name of ['内容分类', '内容核对']) {
+      await page
+        .getByRole('group', { name: '三级项目类型', exact: true })
+        .getByText(name, { exact: true })
+        .click();
+      await expect(page.getByRole('checkbox', { name, exact: true })).toBeChecked();
+    }
+    expect(requests.slice(beforeRefresh).map(({ path, method }) => `${method} ${path}`)).toEqual(
+      Array(6).fill('GET /api/v1/project-categories'),
+    );
+    expect(calls('projects/create')).toHaveLength(1);
+    const categoryRequests = calls('project-categories');
+    expect(categoryRequests).toHaveLength(12);
+    for (let offset = 0; offset < categoryRequests.length; offset += 3)
+      expect(
+        categoryRequests
+          .slice(offset, offset + 3)
+          .map(({ query }) => query)
+          .sort((left, right) => Number(left.categoryLevel) - Number(right.categoryLevel)),
+      ).toEqual([{ categoryLevel: '1' }, { categoryLevel: '2' }, { categoryLevel: '3' }]);
+    expect(calls('project-categories')[0]?.headers.cookie).toContain('navigator_session=active');
+
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await expect.poll(() => calls('projects/create').length).toBe(2);
+    expect(calls('projects/create')[1]?.body).toMatchObject({
+      operation: 'SAVE_DRAFT',
+      projectName: '等待配置项目类型的草稿',
+      categoryLevel1Id: 1,
+      categoryLevel2Id: 2,
+      categoryLevel3Ids: [3, 4],
+    });
+    await expect(page.getByText('草稿已保存。', { exact: true })).toBeVisible();
+  });
+
+  test(`${mode} 项目类型重读失败保留旧选项、输入和步骤，恢复读取不产生项目写入`, async ({
+    page,
+  }) => {
+    const { state, calls, requests, releaseCategories } = await backend(page, desktop);
+    state.draft = draftFixture();
+    await page.goto(`${origin}/#/projects/create`);
+    await page.getByLabel(/^项目名称/).fill('分类重读期间未保存的草稿');
+    const beforeRefresh = requests.length;
+    state.categoriesStatus = 503;
+    state.holdCategories = true;
+    const refresh = page.getByRole('button', { name: '重新读取项目类型', exact: true });
+    await refresh.click();
+    await expect(refresh).toBeDisabled();
+    await expect(page.getByLabel(/^项目名称/)).toHaveValue('分类重读期间未保存的草稿');
+    await page.getByRole('button', { name: '下一步', exact: true }).click();
+    await page.getByLabel(/^需求人数/).fill('9');
+    await expect.poll(() => calls('project-categories').length).toBe(6);
+    releaseCategories();
+    await expect(page.locator('legend')).toHaveText('人员画像');
+    await expect(page.getByLabel(/^需求人数/)).toHaveValue('9');
+    await page.getByRole('button', { name: '上一步', exact: true }).click();
+    await expect(page.getByText('项目类型读取暂不可用', { exact: true })).toBeVisible();
+    await expect(page.getByLabel(/^项目名称/)).toHaveValue('分类重读期间未保存的草稿');
+    await expect(page.getByRole('combobox', { name: /^一级项目类型/ })).toContainText('数据处理');
+    await expect(page.getByRole('combobox', { name: /^二级项目类型/ })).toContainText('文本标注');
+    await expect(page.getByRole('checkbox', { name: '内容分类', exact: true })).toBeChecked();
+
+    state.categoriesStatus = 200;
+    state.categories = categoryFixtures.map((category) => ({
+      ...category,
+      categoryName: category.id === 1 ? '更新后的数据处理' : category.categoryName,
+    }));
+    state.holdCategories = true;
+    await refresh.click();
+    await expect(refresh).toBeDisabled();
+    await page.getByRole('button', { name: '下一步', exact: true }).click();
+    await expect.poll(() => calls('project-categories').length).toBe(9);
+    releaseCategories();
+    await expect(page.locator('legend')).toHaveText('人员画像');
+    await expect(page.getByLabel(/^需求人数/)).toHaveValue('9');
+    await page.getByRole('button', { name: '上一步', exact: true }).click();
+    await expect(page.getByText('项目类型读取暂不可用', { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel(/^项目名称/)).toHaveValue('分类重读期间未保存的草稿');
+    await expect(page.getByRole('combobox', { name: /^一级项目类型/ })).toContainText(
+      '更新后的数据处理',
+    );
+    await expect(page.getByRole('checkbox', { name: '内容分类', exact: true })).toBeChecked();
+    expect(requests.slice(beforeRefresh).map(({ path, method }) => `${method} ${path}`)).toEqual(
+      Array(6).fill('GET /api/v1/project-categories'),
+    );
+    const categoryRequests = calls('project-categories');
+    expect(categoryRequests).toHaveLength(9);
+    for (let offset = 0; offset < categoryRequests.length; offset += 3)
+      expect(
+        categoryRequests
+          .slice(offset, offset + 3)
+          .map(({ query }) => query)
+          .sort((left, right) => Number(left.categoryLevel) - Number(right.categoryLevel)),
+      ).toEqual([{ categoryLevel: '1' }, { categoryLevel: '2' }, { categoryLevel: '3' }]);
+    expect(calls('projects/create')).toHaveLength(0);
+    expect(calls('files/upload')).toHaveLength(0);
+
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+    await expect(page.getByText('草稿已保存。', { exact: true })).toBeVisible();
+    expect(calls('projects/create')).toHaveLength(1);
+    expect(calls('projects/create')[0]?.body).toMatchObject({
+      operation: 'SAVE_DRAFT',
+      projectName: '分类重读期间未保存的草稿',
+      categoryLevel1Id: 1,
+      categoryLevel2Id: 2,
+      categoryLevel3Ids: [3],
+      requiredHeadcount: 9,
+      versionNo: 7,
+      attachments: [{ id: 81, sortNo: 0 }],
+    });
   });
 }
 
