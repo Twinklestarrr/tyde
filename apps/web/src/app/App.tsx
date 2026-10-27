@@ -27,6 +27,8 @@ import { PageRecovery } from '../components/PageRecovery';
 import { NavigatorProjectsPage } from '../modules/projects/NavigatorProjectsPage';
 import { ProjectCreatePage } from '../modules/projects/ProjectCreatePage';
 import { ProjectDetailPage } from '../modules/projects/ProjectDetailPage';
+import { StrategistProjectsPage } from '../modules/projects/StrategistProjectsPage';
+import { StrategistProjectPage } from '../modules/projects/StrategistProjectPage';
 
 /** 离开注册资料页后销毁一次性凭证；布局由匹配路由决定。 */
 function RootLayout() {
@@ -130,6 +132,8 @@ function HomePage() {
   const session = useSession();
   if (session.data && (session.data.selectedRole ?? session.data.role) === 'NAVIGATOR')
     return <NavigatorProjectsPage key={session.data.id} user={session.data} />;
+  if (session.data && (session.data.selectedRole ?? session.data.role) === 'PM')
+    return <StrategistProjectsPage key={session.data.id} user={session.data} />;
   return session.data && <WelcomePage user={session.data} />;
 }
 
@@ -141,6 +145,31 @@ function NavigatorProjectsRoute() {
   return (
     session.data && (
       <NavigatorProjectsPage key={session.data.id} user={session.data} created={created} />
+    )
+  );
+}
+
+function StrategistProjectsRoute() {
+  const session = useSession();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'PM')
+    return <Navigate to="/" replace />;
+  return session.data && <StrategistProjectsPage key={session.data.id} user={session.data} />;
+}
+
+function StrategistProjectRoute() {
+  const session = useSession();
+  const { projectId } = strategistProjectRoute.useParams();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'PM')
+    return <Navigate to="/" replace />;
+  if (!/^[1-9]\d*$/.test(projectId) || Number(projectId) > 2_147_483_647)
+    return <PageRecovery title="项目地址无效" description="请返回工作台，重新选择项目。" />;
+  return (
+    session.data && (
+      <StrategistProjectPage
+        key={`${session.data.id}:${projectId}`}
+        user={session.data}
+        projectId={Number(projectId)}
+      />
     )
   );
 }
@@ -234,6 +263,18 @@ const projectCreateRoute = createRoute({
   component: NavigatorProjectCreateRoute,
   errorComponent: () => <PageRecovery />,
 });
+const strategistProjectsRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/strategist/projects',
+  component: StrategistProjectsRoute,
+  errorComponent: () => <PageRecovery />,
+});
+const strategistProjectRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/strategist/projects/$projectId',
+  component: StrategistProjectRoute,
+  errorComponent: () => <PageRecovery />,
+});
 const projectDetailRoute = createRoute({
   getParentRoute: () => workspaceRoute,
   path: '/projects/$projectId',
@@ -286,6 +327,8 @@ const router = createRouter({
       projectsRoute,
       projectCreateRoute,
       projectDetailRoute,
+      strategistProjectsRoute,
+      strategistProjectRoute,
       organizationRoute,
       organizationCreateRoute,
     ]),

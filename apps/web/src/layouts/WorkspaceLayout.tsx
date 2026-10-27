@@ -21,7 +21,10 @@ import { useWorkspaceView, workspaceViewOptions, type WorkspaceView } from './Wo
 /** 登录后的公共顶栏，Web 与 Electron 使用相同导航和账户入口。 */
 export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: AuthUser }>) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const workbenchActive = pathname === '/' || pathname.startsWith('/projects');
+  const workbenchActive =
+    pathname === '/' ||
+    pathname.startsWith('/projects') ||
+    pathname.startsWith('/strategist/projects');
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);

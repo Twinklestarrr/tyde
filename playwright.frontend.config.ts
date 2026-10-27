@@ -14,6 +14,7 @@ export default defineConfig({
     'workspace-views.spec.ts',
     'navigator-projects.spec.ts',
     'project-manager.spec.ts',
+    'production-plan.spec.ts',
   ],
   workers: 1,
   timeout: 30_000,

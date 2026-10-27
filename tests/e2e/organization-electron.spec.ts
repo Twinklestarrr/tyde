@@ -152,6 +152,8 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
       }
       if (!record.cookie) return void reply(null, 401);
       if (path === '/api/v1/users/me') return void reply(user);
+      if (path === '/api/v1/projects/manager/list' && request.method === 'GET')
+        return void reply([]);
       if (path === '/api/v1/auth/switch-role') {
         const role = body?.role as AuthUser['role'];
         if (!user.roles.includes(role)) return void reply(null, 403);
@@ -269,8 +271,8 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
     ).toBeVisible();
     await page.getByRole('combobox', { name: '当前角色', exact: true }).click();
     await page.getByRole('option', { name: '策略官', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '策略官工作台', exact: true })).toBeVisible();
-    await expect(page.getByText('工作台功能尚未接入', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+    await expect(page.getByText('暂无待办项目', { exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: '组织管理', exact: true })).toHaveCount(0);
     await page.getByRole('combobox', { name: '当前角色', exact: true }).click();
     await page.getByRole('option', { name: '执行专家', exact: true }).click();

@@ -273,6 +273,7 @@ async function backend(page: Page, desktop: boolean) {
       });
       return reply(state.user);
     }
+    if (path === '/api/v1/projects/manager/list' && request.method() === 'GET') return reply([]);
     if (path === '/api/v1/auth/switch-role' && request.method() === 'POST') {
       if (state.switchStatus !== 200)
         return reply(null, state.switchStatus, {}, '角色切换暂不可用');
@@ -505,7 +506,7 @@ for (const [mode, desktop] of [
     await expect(page.getByRole('heading', { name: '我的组织', exact: true })).toBeVisible();
     await chooseDesktop(page, '策略官');
     await expect(page).toHaveURL(/#\/$/);
-    await expect(page.getByRole('heading', { name: '策略官工作台', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
     await page.reload();
     await expect(selector).toContainText('策略官');
     const switches = requests.filter((request) => request.path === '/api/v1/auth/switch-role');
@@ -543,7 +544,7 @@ for (const [mode, desktop] of [
     await page.goto(`${origin}/#/`);
     const selector = page.getByRole('combobox', { name: '当前角色', exact: true });
     await expect(selector).toContainText('策略官');
-    await expect(page.getByRole('heading', { name: '策略官工作台', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
     await selector.click();
     await expect(page.getByRole('option', { name: '领航员', exact: true })).toHaveCount(0);
     await page.getByRole('option', { name: '执行专家', exact: true }).click();
