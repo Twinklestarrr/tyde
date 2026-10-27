@@ -10,6 +10,8 @@ import { MemberImportService } from '../src/modules/organizations/member-import.
 import { organizationUpdateResponse } from '../src/modules/organizations/organization.schema.js';
 import { exitResponse } from '../src/modules/organizations/approval.schema.js';
 import { importExample } from '../src/modules/organizations/import.schema.js';
+import { ProjectManagerService } from '../src/modules/projects/project-manager.service.js';
+import { managerRecruitResult } from '../src/modules/projects/project-manager.schema.js';
 
 const environment = {
   APP_ENV: 'test',
@@ -28,6 +30,59 @@ const tokens = {
   expiresIn: 2592000,
 };
 afterEach(() => vi.restoreAllMocks());
+
+test('desktop Cookie project recruitment reaches its service while unknown sources are rejected', async () => {
+  const identity = {
+    userId: '00000000-0000-4000-8000-000000000001',
+    uid: 'test-user',
+    sessionId: 'session',
+    role: 'NAVIGATOR' as const,
+    clientType: 'web' as const,
+  };
+  const authenticate = vi.spyOn(AuthService.prototype, 'authenticate').mockResolvedValue(identity);
+  const recruit = vi
+    .spyOn(ProjectManagerService.prototype, 'recruit')
+    .mockResolvedValue(managerRecruitResult.examples[0] as never);
+  const app = await createApp(config, new PrismaClient());
+  const payload = {
+    projectId: 3001,
+    candidateUserId: '00000000-0000-4000-8000-000000000002',
+  };
+  try {
+    for (const origin of config.desktopOrigins) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/manager-recruitments',
+        headers: {
+          origin,
+          'x-tyde-client': 'web',
+          cookie: `tyde_session=${tokens.accessToken}`,
+        },
+        payload,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(recruit).toHaveBeenLastCalledWith(payload, identity);
+      expect(authenticate).toHaveBeenLastCalledWith(tokens.accessToken, 'web');
+    }
+    recruit.mockClear();
+    authenticate.mockClear();
+    const blocked = await app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/manager-recruitments',
+      headers: {
+        origin: 'https://untrusted.example',
+        'x-tyde-client': 'web',
+        cookie: `tyde_session=${tokens.accessToken}`,
+      },
+      payload,
+    });
+    expect(blocked.statusCode).toBe(403);
+    expect(recruit).not.toHaveBeenCalled();
+    expect(authenticate).not.toHaveBeenCalled();
+  } finally {
+    await app.close();
+  }
+});
 
 test('desktop origin configuration is exact and restricted to the app or loopback development', () => {
   expect(readConfig({ ...environment, DESKTOP_ORIGINS: undefined }).desktopOrigins).toEqual([
