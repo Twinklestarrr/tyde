@@ -341,6 +341,7 @@ Agent 独立入口：`pnpm dev:agent`（3002）、`pnpm dev:agent-web`（3003）
 | 提交校验              | `pnpm prepare` 安装 Husky；`pnpm check:staged` 检查索引；`pnpm check:message <文件>` 检查提交信息 |
 | 核心 / 服务端单测     | `pnpm test:core`、`pnpm test`                                                                     |
 | 前端双端契约回归      | `pnpm test:frontend`，验证开发/生产真实请求契约与 Web/Electron 会话，使用隔离接口替身，无需数据库 |
+| 已接入功能一键回归    | `pnpm test:features`：核心/客户端契约、后端单测、Web/Electron 构建和全部前端回归；不连接数据库    |
 | 数据库集成 / 双端 E2E | `pnpm test:integration`、`pnpm test:e2e`，环境准备见 README                                       |
 | 构建                  | `pnpm build:web`、`pnpm build:server`、`pnpm build:electron`、`pnpm build:vercel`                 |
 | 打包                  | `pnpm package:web`、`pnpm package:server`、`pnpm package:mac`、`pnpm package:win`                 |
@@ -359,6 +360,8 @@ Git 的 `pre-commit` 先通过 `scripts/check-commit-policy.mjs` 检查整个暂
 修改后按影响范围验证；认证改动关注双端恢复/退出、过期、重放、限流与并发。测试位置：`tests/security.test.mjs`、`apps/server/tests/`、`tests/e2e/`。
 
 测试进程清理：启动前记录已有服务与本轮创建的进程、子进程和端口。每轮测试结束（包括失败和中断）必须关闭自己启动的预览、测试服务及专用浏览器/Electron进程，并复查端口已释放；除非用户明确要求保留，不留下常驻测试进程。只清理本轮自启进程，不泛杀同名进程，不停止用户原有服务或数据库。
+
+`pnpm test:features` 复用现有测试，不安装新依赖、不调用数据库初始化/迁移/清理、真实业务 Agent 或部署命令。测试前要求 5176/5177 空闲；失败或 Ctrl+C 后仅清理本次启动的后代进程（核对 PID 出生时间），不按端口杀用户进程。日志、页面 JSON、失败截图/trace 及汇总报告保存到 `artifacts/feature-tests/<本次运行>/`，`artifacts/feature-tests/latest.json` 指向最近结果。失败阻断后续阶段并返回非零退出码，未运行、跳过及重试后通过如实记录；真实后端/专用库联调继续使用独立配置，不混入默认回归。
 
 ## 按需补充上下文
 
