@@ -16,6 +16,7 @@
     "verify:local": "node scripts/verify-local.mjs",
     "test:e2e": "playwright test",
     "test:frontend": "pnpm build:web && pnpm --filter @tyde/electron build && playwright test --config playwright.frontend.config.ts",
+    "test:features": "node scripts/test-features.mjs",
     "test:packaged": "playwright test --config playwright.packaged.config.ts",
     "db:local:start": "node scripts/postgres-local.mjs start",
     "db:local:stop": "node scripts/postgres-local.mjs stop",

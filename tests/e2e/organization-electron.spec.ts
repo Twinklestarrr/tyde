@@ -358,10 +358,16 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
     expect(preflights).toContain('/api/v1/organizations/member-imports/generate');
     expect(preflights).not.toContain(`/api/v1/organizations?orgId=${orgId}`);
   } finally {
-    await app?.close();
-    await new Promise<void>((accept, reject) =>
-      server.close((error) => (error ? reject(error) : accept())),
-    );
-    await rm(profile, { recursive: true, force: true });
+    try {
+      await app?.close();
+    } finally {
+      try {
+        await new Promise<void>((accept, reject) =>
+          server.close((error) => (error ? reject(error) : accept())),
+        );
+      } finally {
+        await rm(profile, { recursive: true, force: true });
+      }
+    }
   }
 });

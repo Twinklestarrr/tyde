@@ -810,9 +810,15 @@ for (const [mode, origin] of [
       expect(backend.preflights).toContain('/api/v1/auth/sms/send');
       expect(backend.preflights).not.toContain('/api/v1/users/me');
     } finally {
-      await app?.close();
-      await backend.close();
-      await rm(profile, { recursive: true, force: true });
+      try {
+        await app?.close();
+      } finally {
+        try {
+          await backend.close();
+        } finally {
+          await rm(profile, { recursive: true, force: true });
+        }
+      }
     }
   });
 }
