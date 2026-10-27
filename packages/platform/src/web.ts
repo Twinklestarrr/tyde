@@ -28,6 +28,9 @@ import {
   type WorkbenchProject,
   type WorkbenchProjectDetail,
   type NavigatorProjectCard,
+  type StrategistProjectCard,
+  type ProjectProductionPlan,
+  type ProjectProductionPlanInput,
   type ProjectCategory,
   type ProjectRequester,
   type ProjectDraft,
@@ -630,6 +633,238 @@ export function createHttpAuth(
       invalidResponse();
     return value as unknown as NavigatorProjectCard;
   }
+  function strategistProject(value: unknown): StrategistProjectCard {
+    navigatorProject(value);
+    if (!record(value) || !booleans(value, ['primaryProjectManager', 'expertRecruitmentHandler']))
+      invalidResponse();
+    return value as unknown as StrategistProjectCard;
+  }
+  const projectNodes = [
+    'RECRUIT_PROJECT_MANAGER',
+    'PRODUCTION_PLAN',
+    'ENTRANCE_EXAM',
+    'STANDARD_TRAINING',
+    'RECRUIT_EXECUTION_EXPERT',
+    'PERSONNEL_MANAGEMENT',
+    'PRODUCTION_TASK',
+    'COMPLETED',
+  ];
+  const projectPlanId = (value: unknown) => integer(value, 1) && Number(value) <= 2147483647;
+  const projectPlanDate = (value: unknown): value is string => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith('0000'))
+      return false;
+    const date = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  };
+  const planNumber = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0;
+  const planDecimal = (value: unknown) => {
+    if (!planNumber(value) || Number(value) >= 1e16) return false;
+    const [coefficient = '', exponent = '0'] = String(value).toLowerCase().split('e');
+    return (coefficient.split('.')[1]?.length ?? 0) - Number(exponent) <= 4;
+  };
+  function projectJson(value: unknown, ancestors = new Set<object>()): boolean {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if ((!record(value) && !Array.isArray(value)) || ancestors.has(value)) return false;
+    if (
+      !Array.isArray(value) &&
+      Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null
+    )
+      return false;
+    ancestors.add(value);
+    const valid = Object.values(value).every((item) => projectJson(item, ancestors));
+    ancestors.delete(value);
+    return valid;
+  }
+  function validateProductionPlanInput(value: ProjectProductionPlanInput) {
+    if (
+      !record(value) ||
+      !onlyKeys(value, [
+        'operatorHeadcount',
+        'operatorCpd',
+        'inspectorHeadcount',
+        'inspectorCpd',
+        'needWrittenExam',
+        'maxActiveExamCount',
+        'needInterview',
+        'extJson',
+        'crowds',
+        'stages',
+      ]) ||
+      !projectPlanId(value.operatorHeadcount) ||
+      !planDecimal(value.operatorCpd) ||
+      (value.inspectorHeadcount == null) !== (value.inspectorCpd == null) ||
+      (value.inspectorHeadcount != null && !projectPlanId(value.inspectorHeadcount)) ||
+      (value.inspectorCpd != null && !planDecimal(value.inspectorCpd)) ||
+      (value.maxActiveExamCount != null && !projectPlanId(value.maxActiveExamCount)) ||
+      (value.needWrittenExam != null && typeof value.needWrittenExam !== 'boolean') ||
+      (value.needInterview != null && typeof value.needInterview !== 'boolean') ||
+      (value.extJson !== undefined && !projectJson(value.extJson)) ||
+      !Array.isArray(value.crowds) ||
+      value.crowds.length < 1 ||
+      value.crowds.length > 50 ||
+      !value.crowds.every(
+        (crowd) =>
+          record(crowd) &&
+          onlyKeys(crowd, ['crowdName', 'profileRequirement']) &&
+          typeof crowd.crowdName === 'string' &&
+          Boolean(crowd.crowdName.trim()) &&
+          crowd.crowdName.length <= 100 &&
+          typeof crowd.profileRequirement === 'string' &&
+          Boolean(crowd.profileRequirement.trim()),
+      ) ||
+      !Array.isArray(value.stages) ||
+      value.stages.length < 1 ||
+      value.stages.length > 50 ||
+      !value.stages.every(
+        (stage) =>
+          record(stage) &&
+          onlyKeys(stage, [
+            'stageName',
+            'startDate',
+            'endDate',
+            'workdayCount',
+            'workdayCountSource',
+            'operatorHeadcount',
+            'operatorCpd',
+            'accuracyRate',
+          ]) &&
+          typeof stage.stageName === 'string' &&
+          Boolean(stage.stageName.trim()) &&
+          stage.stageName.length <= 100 &&
+          projectPlanDate(stage.startDate) &&
+          projectPlanDate(stage.endDate) &&
+          stage.endDate >= stage.startDate &&
+          (stage.workdayCountSource == null ||
+            inEnum(stage.workdayCountSource, ['AUTO', 'MANUAL'])) &&
+          (stage.workdayCountSource !== 'MANUAL' || projectPlanId(stage.workdayCount)) &&
+          (stage.workdayCount == null || projectPlanId(stage.workdayCount)) &&
+          projectPlanId(stage.operatorHeadcount) &&
+          (stage.operatorCpd == null || planDecimal(stage.operatorCpd)) &&
+          (stage.accuracyRate == null ||
+            (planDecimal(stage.accuracyRate) && stage.accuracyRate <= 100)),
+      )
+    )
+      throw new ApiError(400, {
+        code: 'VALIDATION_ERROR',
+        message: '生产计划参数不完整，请检查人数、产能、人群、阶段日期和有效天数',
+      });
+  }
+  function productionPlan(
+    value: unknown,
+    projectId: number,
+    confirmed = false,
+  ): ProjectProductionPlan {
+    if (
+      !record(value) ||
+      !booleans(value, ['hasPlan', 'editable', 'needWrittenExam', 'needInterview']) ||
+      value.projectId !== projectId ||
+      !inEnum(value.currentNodeCode, projectNodes, true) ||
+      !projectPlanId(value.maxActiveExamCount) ||
+      !strings(value, ['confirmedBy', 'confirmedAt'], true) ||
+      !projectJson(value.extJson) ||
+      !record(value.projectReference) ||
+      !numbers(value.projectReference, ['projectQuantity'], true) ||
+      !strings(
+        value.projectReference,
+        [
+          'quantityUnit',
+          'deadline',
+          'experienceRequirement',
+          'workSummary',
+          'specialRequirement',
+          'mandatoryRequirement',
+        ],
+        true,
+      ) ||
+      (value.projectReference.requiredHeadcount !== null &&
+        !projectPlanId(value.projectReference.requiredHeadcount)) ||
+      !inEnum(
+        value.projectReference.educationRequirement,
+        ['PHD', 'MASTER', 'BACHELOR', 'COLLEGE', 'BELOW_COLLEGE'],
+        true,
+      ) ||
+      !inEnum(
+        value.projectReference.employmentType,
+        ['FULL_TIME', 'PART_TIME', 'UNLIMITED'],
+        true,
+      ) ||
+      (value.inspectorHeadcount === null) !== (value.inspectorCpd === null) ||
+      (value.inspectorHeadcount !== null && !projectPlanId(value.inspectorHeadcount)) ||
+      (value.inspectorCpd !== null && !planNumber(value.inspectorCpd)) ||
+      !Array.isArray(value.crowds) ||
+      !value.crowds.length ||
+      value.crowds.length > 50 ||
+      !Array.isArray(value.stages) ||
+      !value.stages.length ||
+      value.stages.length > 50
+    )
+      invalidResponse();
+    const hasPlan = value.hasPlan;
+    if (
+      (confirmed && !hasPlan) ||
+      (hasPlan
+        ? !projectPlanId(value.id) ||
+          value.editable !== false ||
+          !projectPlanId(value.operatorHeadcount) ||
+          !planNumber(value.operatorCpd) ||
+          !planNumber(value.totalExpectedOutput) ||
+          typeof value.confirmedBy !== 'string' ||
+          !attendanceTime(value.confirmedAt) ||
+          value.nextStage !== (value.needWrittenExam ? 'ENTRANCE_EXAM' : 'STANDARD_TRAINING')
+        : value.id !== null ||
+          value.operatorHeadcount !== null ||
+          value.operatorCpd !== null ||
+          value.inspectorHeadcount !== null ||
+          value.inspectorCpd !== null ||
+          value.totalExpectedOutput !== null ||
+          value.confirmedBy !== null ||
+          value.confirmedAt !== null ||
+          value.nextStage !== null) ||
+      !value.crowds.every(
+        (crowd, index) =>
+          record(crowd) &&
+          crowd.sequenceNo === index + 1 &&
+          (hasPlan
+            ? projectPlanId(crowd.id) && strings(crowd, ['crowdName', 'profileRequirement'])
+            : crowd.id === null && strings(crowd, ['crowdName', 'profileRequirement'], true)),
+      ) ||
+      !value.stages.every(
+        (stage, index) =>
+          record(stage) &&
+          stage.sequenceNo === index + 1 &&
+          strings(stage, ['stageName'], !hasPlan) &&
+          inEnum(stage.workdayCountSource, ['AUTO', 'MANUAL'], !hasPlan) &&
+          (hasPlan
+            ? projectPlanId(stage.id) &&
+              projectPlanDate(stage.startDate) &&
+              projectPlanDate(stage.endDate) &&
+              stage.endDate >= stage.startDate &&
+              projectPlanId(stage.naturalDayCount) &&
+              projectPlanId(stage.workdayCount) &&
+              projectPlanId(stage.operatorHeadcount) &&
+              planNumber(stage.operatorCpd) &&
+              planNumber(stage.expectedOutput) &&
+              (stage.accuracyRate === null ||
+                (planNumber(stage.accuracyRate) && Number(stage.accuracyRate) <= 100))
+            : [
+                'id',
+                'startDate',
+                'endDate',
+                'naturalDayCount',
+                'workdayCount',
+                'operatorHeadcount',
+                'operatorCpd',
+                'accuracyRate',
+                'expectedOutput',
+              ].every((field) => stage[field] === null)),
+      )
+    )
+      invalidResponse();
+    return value as unknown as ProjectProductionPlan;
+  }
   function projectCategory(value: unknown): ProjectCategory {
     if (
       !record(value) ||
@@ -686,20 +921,7 @@ export function createHttpAuth(
       !inEnum(value.recruitmentType, ['INITIAL', 'REPLACEMENT']) ||
       value.assignmentMode !== 'DIRECT' ||
       value.status !== 'ASSIGNED' ||
-      !inEnum(
-        value.currentNodeCode,
-        [
-          'RECRUIT_PROJECT_MANAGER',
-          'PRODUCTION_PLAN',
-          'ENTRANCE_EXAM',
-          'STANDARD_TRAINING',
-          'RECRUIT_EXECUTION_EXPERT',
-          'PERSONNEL_MANAGEMENT',
-          'PRODUCTION_TASK',
-          'COMPLETED',
-        ],
-        true,
-      ) ||
+      !inEnum(value.currentNodeCode, projectNodes, true) ||
       (value.recruitmentType === 'INITIAL' && value.currentNodeCode !== 'PRODUCTION_PLAN') ||
       value.nextStage !== value.currentNodeCode ||
       value.primaryAction !== 'CHANGE_PROJECT_MANAGER' ||
@@ -1564,6 +1786,11 @@ export function createHttpAuth(
       if (!Array.isArray(data)) invalidResponse();
       return data.map(navigatorProject);
     },
+    listStrategistProjects: async () => {
+      const data = await request('/projects/manager/list', undefined, 'GET', true);
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(strategistProject);
+    },
     getCurrentProjectDraft: async () =>
       currentProjectDraft(await request('/projects/draft/current', undefined, 'GET', true)),
     getProjectCategories: async (input = {}) => {
@@ -1632,6 +1859,30 @@ export function createHttpAuth(
       );
       if (data.id !== projectId) invalidResponse();
       return data;
+    },
+    getProjectProductionPlan: async (projectId) => {
+      if (!projectPlanId(projectId))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+      return productionPlan(
+        await request(`/projects/production-plan?projectId=${projectId}`, undefined, 'GET', true),
+        projectId,
+      );
+    },
+    confirmProjectProductionPlan: async (projectId, input) => {
+      if (!projectPlanId(projectId))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+      validateProductionPlanInput(input);
+      // 此确认只能执行一次；只沿用明确401后的刷新，不重放网络/5xx/409结果。
+      return productionPlan(
+        await request(
+          `/projects/production-plan/confirm?projectId=${projectId}`,
+          input,
+          'POST',
+          true,
+        ),
+        projectId,
+        true,
+      );
     },
     listProjectManagerCandidates: async (input) => {
       if (

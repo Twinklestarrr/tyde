@@ -48,6 +48,94 @@ export interface NavigatorProjectCard {
   createdAt: string;
   updatedAt: string;
 }
+/** 服务端策略官本人待办；协作负责人可读，不等于全部任职历史。 */
+export interface StrategistProjectCard extends NavigatorProjectCard {
+  primaryProjectManager: boolean;
+  expertRecruitmentHandler: boolean;
+}
+export type ProjectJsonValue =
+  null | boolean | number | string | ProjectJsonValue[] | { [key: string]: ProjectJsonValue };
+export interface ProjectProductionStageInput {
+  stageName: string;
+  startDate: string;
+  endDate: string;
+  workdayCount?: number | null;
+  workdayCountSource?: 'AUTO' | 'MANUAL' | null;
+  operatorHeadcount: number;
+  operatorCpd?: number | null;
+  accuracyRate?: number | null;
+}
+/** 完整计划，只能确认一次；不保存草稿，projectId放URL查询参数。 */
+export interface ProjectProductionPlanInput {
+  operatorHeadcount: number;
+  operatorCpd: number;
+  inspectorHeadcount?: number | null;
+  inspectorCpd?: number | null;
+  needWrittenExam?: boolean | null;
+  maxActiveExamCount?: number | null;
+  needInterview?: boolean | null;
+  extJson?: ProjectJsonValue;
+  crowds: { crowdName: string; profileRequirement: string }[];
+  stages: ProjectProductionStageInput[];
+}
+export interface ProjectProductionCrowd {
+  id: number | null;
+  sequenceNo: number;
+  crowdName: string | null;
+  profileRequirement: string | null;
+}
+export interface ProjectProductionStage {
+  id: number | null;
+  sequenceNo: number;
+  stageName: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  naturalDayCount: number | null;
+  workdayCount: number | null;
+  workdayCountSource: 'AUTO' | 'MANUAL' | null;
+  operatorHeadcount: number | null;
+  operatorCpd: number | null;
+  accuracyRate: number | null;
+  /** 服务端DECIMAL计算后返回JSON number，极大数可能超出安全整数精度。 */
+  expectedOutput: number | null;
+}
+export interface ProjectProductionPlan {
+  hasPlan: boolean;
+  editable: boolean;
+  id: number | null;
+  projectId: number;
+  currentNodeCode: ProjectManagerRecruitmentResult['currentNodeCode'];
+  operatorHeadcount: number | null;
+  operatorCpd: number | null;
+  inspectorHeadcount: number | null;
+  inspectorCpd: number | null;
+  needWrittenExam: boolean;
+  maxActiveExamCount: number;
+  needInterview: boolean;
+  /** 服务端精确汇总后按现有JSON数值契约返回，不在客户端重新计算覆盖。 */
+  totalExpectedOutput: number | null;
+  confirmedBy: string | null;
+  /** 上海墙钟时间 yyyy-MM-dd HH:mm:ss。 */
+  confirmedAt: string | null;
+  /** 计划目标阶段；补做时实际currentNodeCode可以更靠后。 */
+  nextStage: 'ENTRANCE_EXAM' | 'STANDARD_TRAINING' | null;
+  extJson: ProjectJsonValue;
+  projectReference: Pick<
+    WorkbenchProjectDetail,
+    | 'projectQuantity'
+    | 'quantityUnit'
+    | 'deadline'
+    | 'requiredHeadcount'
+    | 'educationRequirement'
+    | 'employmentType'
+    | 'experienceRequirement'
+    | 'workSummary'
+    | 'specialRequirement'
+    | 'mandatoryRequirement'
+  >;
+  crowds: ProjectProductionCrowd[];
+  stages: ProjectProductionStage[];
+}
 export type ProjectDraft = Omit<WorkbenchProjectDetail, 'status' | 'creatorName'> & {
   status: 'DRAFT';
   creatorName: null;
@@ -186,6 +274,7 @@ export interface ProjectAttachmentUploadResult {
 }
 export interface ProjectApi {
   listNavigatorProjects(): Promise<NavigatorProjectCard[]>;
+  listStrategistProjects(): Promise<StrategistProjectCard[]>;
   getCurrentProjectDraft(): Promise<CurrentProjectDraft>;
   getProjectCategories(input?: {
     categoryLevel?: 1 | 2 | 3;
@@ -194,6 +283,11 @@ export interface ProjectApi {
   getCurrentProjectRequester(userId: string): Promise<ProjectRequester>;
   saveProject(input: ProjectSaveInput): Promise<ProjectMutation>;
   getProjectDetail(projectId: number): Promise<WorkbenchProjectDetail>;
+  getProjectProductionPlan(projectId: number): Promise<ProjectProductionPlan>;
+  confirmProjectProductionPlan(
+    projectId: number,
+    input: ProjectProductionPlanInput,
+  ): Promise<ProjectProductionPlan>;
   /** 姓名/昵称筛选；当前任职者同样受关键词影响，返回全部匹配项。 */
   listProjectManagerCandidates(input: {
     projectId: number;
