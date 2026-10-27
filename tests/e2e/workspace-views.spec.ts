@@ -1,4 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
+import { expertTaskExample } from '../../apps/server/src/modules/expert/expert-task.schema';
+import { projectCardExample } from '../../apps/server/src/modules/projects/project-list.schema';
 import type {
   AuthUser,
   WorkbenchAssignmentDetail,
@@ -208,6 +210,10 @@ async function backend(page: Page, desktop: boolean) {
     signedIn: true,
     user: structuredClone(userFixture),
     projects: [] as WorkbenchProject[],
+    tasks: [] as unknown[],
+    tasksStatus: 200,
+    navigatorProjects: [] as unknown[],
+    strategistProjects: [] as unknown[],
     projectsStatus: 200,
     detailStatus: 403,
     attendanceStatus: 200,
@@ -274,7 +280,15 @@ async function backend(page: Page, desktop: boolean) {
       });
       return reply(state.user);
     }
-    if (path === '/api/v1/projects/manager/list' && request.method() === 'GET') return reply([]);
+    if (path === '/api/v1/projects/manager/list' && request.method() === 'GET')
+      return reply(state.strategistProjects);
+    if (path === '/api/v1/expert-assignments/my-tasks' && request.method() === 'POST')
+      return reply(
+        state.tasksStatus === 200 ? state.tasks : null,
+        state.tasksStatus,
+        {},
+        state.tasksStatus === 200 ? undefined : '待办读取暂不可用',
+      );
     if (path === '/api/v1/auth/switch-role' && request.method() === 'POST') {
       if (state.switchStatus !== 200)
         return reply(null, state.switchStatus, {}, '角色切换暂不可用');
@@ -304,7 +318,8 @@ async function backend(page: Page, desktop: boolean) {
         'Set-Cookie': 'view_session=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/',
       });
     }
-    if (path === '/api/v1/projects/list' && request.method() === 'GET') return reply([]);
+    if (path === '/api/v1/projects/list' && request.method() === 'GET')
+      return reply(state.navigatorProjects);
     if (path === '/api/v1/projects/draft/current' && request.method() === 'GET')
       return reply({ hasDraft: false, draft: null });
     if (path === '/api/v1/expert-assignments/my-projects' && request.method() === 'GET')
@@ -316,7 +331,15 @@ async function backend(page: Page, desktop: boolean) {
       );
     if (path === '/api/v1/expert-assignments/detail' && request.method() === 'GET')
       return reply(
-        state.detailStatus === 200 ? assignmentFixture : null,
+        state.detailStatus === 200
+          ? url.searchParams.has('movementId')
+            ? {
+                ...assignmentFixture,
+                assignmentId: null,
+                movementId: Number(url.searchParams.get('movementId')),
+              }
+            : assignmentFixture
+          : null,
         state.detailStatus,
         {},
         state.detailStatus === 200 ? undefined : '当前分配无访问权限',
@@ -407,13 +430,116 @@ for (const [mode, desktop] of [
   ['Web 生产', false],
   ['Electron 运行配置', true],
 ] as const) {
+  test(`三角色项目联调 ${mode} 非空列表、专家身份、搜索重试与转入详情`, async ({ page }) => {
+    const { state, requests } = await backend(page, desktop);
+    state.user.role = 'NAVIGATOR';
+    state.user.selectedRole = 'NAVIGATOR';
+    state.user.organization!.position = 'OWNER';
+    state.navigatorProjects = [{ ...projectCardExample, projectName: '领航员联调项目' }];
+    state.strategistProjects = [
+      {
+        ...projectCardExample,
+        projectName: '策略官联调项目',
+        primaryProjectManager: true,
+        expertRecruitmentHandler: false,
+      },
+    ];
+    const basicInfo = {
+      ...expertTaskExample.basicInfo,
+      projectId: 501,
+      subjectType: 'ORGANIZATION',
+      organizationId: state.user.organization!.id,
+      organizationName: '联调组织',
+    };
+    state.tasks = [
+      {
+        ...expertTaskExample,
+        assignmentId: 41,
+        sourceBizId: 41,
+        basicInfo: { ...basicInfo, projectName: '组织负责项目' },
+        accessContext: {
+          projectOwner: true,
+          acceptedOrganizationOwner: true,
+          canViewOrganizationData: true,
+        },
+      },
+      {
+        ...expertTaskExample,
+        assignmentId: null,
+        movementId: 7,
+        sourceBizType: 'PROJECT_MEMBER_TRANSFER',
+        sourceBizId: 7,
+        basicInfo: {
+          ...basicInfo,
+          projectName: '个人转入项目',
+          subjectType: 'INDIVIDUAL',
+          organizationId: null,
+          organizationName: null,
+        },
+      },
+    ];
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${origin}/#/`);
+    await expect(page.getByRole('heading', { name: '领航员联调项目', exact: true })).toBeVisible();
+    await chooseDesktop(page, '策略官');
+    await expect(page.getByRole('heading', { name: '策略官联调项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '领航员联调项目', exact: true })).toHaveCount(0);
+    await chooseDesktop(page, '执行专家');
+    await expect(page.getByRole('heading', { name: '组织负责项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '个人转入项目', exact: true })).toBeVisible();
+    expect(requests.find((request) => request.path.endsWith('/my-tasks'))?.body).toEqual({});
+    expect(requests.filter((request) => request.path.endsWith('/my-projects'))).toHaveLength(0);
+    await page.screenshot({
+      path: `artifacts/workbench-expert-${desktop ? 'desktop' : 'web'}.png`,
+      fullPage: true,
+    });
+    state.detailStatus = 200;
+    await page
+      .getByRole('article')
+      .filter({ hasText: '组织负责项目' })
+      .getByRole('button', { name: '查看项目', exact: true })
+      .click();
+    await expect(page.getByRole('dialog', { name: '项目详情', exact: true })).toBeVisible();
+    expect(requests.filter((request) => request.path.endsWith('/detail')).at(-1)?.query).toEqual({
+      assignmentId: '41',
+    });
+    await page.getByRole('button', { name: '关闭项目详情', exact: true }).click();
+    await page
+      .getByRole('article')
+      .filter({ hasText: '个人转入项目' })
+      .getByRole('button', { name: '查看项目', exact: true })
+      .click();
+    await expect(page.getByRole('dialog', { name: '项目详情', exact: true })).toBeVisible();
+    expect(requests.filter((request) => request.path.endsWith('/detail')).at(-1)?.query).toEqual({
+      movementId: '7',
+    });
+    await page.getByRole('button', { name: '关闭项目详情', exact: true }).click();
+    state.tasksStatus = 503;
+    await page.getByRole('button', { name: '刷新项目', exact: true }).click();
+    await expect(page.getByText('待办读取暂不可用', { exact: true })).toBeVisible();
+    await expect(page.getByText('暂无待办项目', { exact: true })).toHaveCount(0);
+    state.tasksStatus = 200;
+    state.tasks = [];
+    await page.getByRole('button', { name: '重试读取项目', exact: true }).click();
+    await expect(page.getByText('暂无待办项目', { exact: true })).toBeVisible();
+    await page.getByRole('searchbox', { name: '筛选当前待办', exact: true }).fill(' 转入 & 标注 ');
+    await page.getByRole('button', { name: '查询项目', exact: true }).click();
+    await expect
+      .poll(() => requests.filter((request) => request.path.endsWith('/my-tasks')).at(-1)?.body)
+      .toEqual({ keyword: '转入 & 标注' });
+    await expect(page.getByText('没有匹配的待办项目', { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 375, height: 812 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+
   test(`会话角色 ${mode} 真实切换、跨页面和刷新保持，组织仅执行专家可访问`, async ({ page }) => {
     const { state, requests, sessionResponses } = await backend(page, desktop);
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${origin}/#/`);
-    await expect(
-      page.getByRole('heading', { name: '欢迎，视图联调员', exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
     const selector = page.getByRole('combobox', { name: '当前角色', exact: true });
     await expect(selector).toContainText('执行专家');
     await expect(
@@ -840,6 +966,7 @@ test('当前角色移动账户菜单具备明确选中状态，320/375px均无�
         (request.method === 'GET' &&
           ['/api/v1/users/me', ...expertReadPaths].includes(request.path)) ||
         (request.method === 'POST' && request.path === '/api/v1/users/me/applications') ||
+        (request.method === 'POST' && request.path === '/api/v1/expert-assignments/my-tasks') ||
         (request.method === 'POST' && request.path === '/api/v1/auth/switch-role'),
     ),
   ).toBe(true);

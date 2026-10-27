@@ -120,6 +120,12 @@ async function webBackend(page: Page) {
       case '/api/v1/auth/logout':
         state.signedIn = false;
         return reply(null, { 'Set-Cookie': 'fixture_session=; Max-Age=0; HttpOnly; Path=/' });
+      case '/api/v1/expert-assignments/my-tasks':
+        expect(request.method()).toBe('POST');
+        expect(request.postDataJSON()).toEqual({});
+        return state.signedIn && request.headers().cookie?.includes('fixture_session=active')
+          ? reply([])
+          : reject(401, '请先登录');
       default:
         return reject(503, '调用了未约定的接口');
     }
@@ -145,10 +151,8 @@ async function fillRegistration(page: Page) {
   await page.getByLabel(/^身份证号/).fill('11010119900101001X');
   await page.getByLabel(/^邮箱/).fill('sample@example.com');
 }
-async function expectWelcome(page: Page) {
-  await expect(
-    page.getByRole('heading', { name: '欢迎，' + user.nickname, exact: true }),
-  ).toBeVisible();
+async function expectWorkspace(page: Page) {
+  await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '账户菜单', exact: true })).toBeVisible();
 }
 function expectNoLegacyRequests(requests: RequestRecord[]) {
@@ -177,10 +181,18 @@ async function sessionRead(page: Page, action: () => Promise<unknown>, failed = 
   // 网络 Promise 完成后，React Query 的通知仍需执行零延时定时器。
   await page.clock.runFor(50);
 }
+const sessionReads = (requests: RequestRecord[]) =>
+  requests.filter(({ method, path }) => method === 'GET' && path === '/api/v1/users/me');
 function expectSessionReads(requests: RequestRecord[]) {
-  expect(requests.length).toBeGreaterThan(0);
+  expect(sessionReads(requests).length).toBeGreaterThan(0);
   expect(
-    requests.every(({ method, path }) => method === 'GET' && path === '/api/v1/users/me'),
+    requests.every(
+      ({ method, path, body }) =>
+        (method === 'GET' && path === '/api/v1/users/me') ||
+        (method === 'POST' &&
+          path === '/api/v1/expert-assignments/my-tasks' &&
+          JSON.stringify(body) === '{}'),
+    ),
   ).toBe(true);
 }
 
@@ -265,7 +277,7 @@ for (const [mode, origin] of [
     state.smsStatus = 200;
     await page.getByRole('textbox', { name: '验证码', exact: true }).fill('268519');
     await page.getByRole('button', { name: '继续', exact: true }).click();
-    await expectWelcome(page);
+    await expectWorkspace(page);
     expect(requests.filter(({ path }) => path.endsWith('/sms/send'))).toHaveLength(0);
     expect(
       requests.filter(({ path }) => path.endsWith('/sms/login')).map(({ body }) => body),
@@ -274,7 +286,7 @@ for (const [mode, origin] of [
       { phone, code: '268519' },
     ]);
     await page.reload();
-    await expectWelcome(page);
+    await expectWorkspace(page);
     await page.getByRole('button', { name: '账户菜单', exact: true }).click();
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
     await expect(page).toHaveURL(/#\/auth$/);
@@ -305,7 +317,7 @@ for (const [mode, origin] of [
     await expect(input).toHaveAttribute('type', 'password');
     await input.fill(password);
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expectWelcome(page);
+    await expectWorkspace(page);
     expect(requests.find(({ path }) => path.endsWith('/auth/login'))?.body).toEqual({
       account: phone,
       password,
@@ -381,7 +393,7 @@ for (const [mode, origin] of [
     expect(storage).not.toContain(registrationToken);
   });
 
-  test(`Web ${mode} 会话恢复503显示重试，恢复后进入欢迎页`, async ({ page }) => {
+  test(`Web ${mode} 会话恢复503显示重试，恢复后进入项目工作台`, async ({ page }) => {
     const { state, requests } = await webBackend(page);
     await pauseClock(page);
     state.signedIn = true;
@@ -396,10 +408,10 @@ for (const [mode, origin] of [
       page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
     ).toBeVisible();
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toHaveCount(0);
-    expect(requests).toHaveLength(1);
+    expect(sessionReads(requests)).toHaveLength(1);
     await sessionRead(page, () => page.getByRole('button', { name: '重试', exact: true }).click());
     await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
-    expect(requests).toHaveLength(2);
+    expect(sessionReads(requests)).toHaveLength(2);
     state.currentNetworkFailure = true;
     await sessionRead(
       page,
@@ -409,12 +421,12 @@ for (const [mode, origin] of [
     await expect(
       page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
     ).toBeVisible();
-    expect(requests).toHaveLength(3);
+    expect(sessionReads(requests)).toHaveLength(3);
     state.currentNetworkFailure = false;
     state.currentStatus = 200;
     await sessionRead(page, () => page.getByRole('button', { name: '重试', exact: true }).click());
-    await expectWelcome(page);
-    expect(requests).toHaveLength(4);
+    await expectWorkspace(page);
+    expect(sessionReads(requests)).toHaveLength(4);
     expectSessionReads(requests);
   });
 
@@ -433,7 +445,7 @@ for (const [mode, origin] of [
       page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
     ).toBeVisible();
     await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
-    expect(requests).toHaveLength(1);
+    expect(sessionReads(requests)).toHaveLength(1);
 
     state.currentNetworkFailure = false;
     state.currentStatus = 503;
@@ -442,14 +454,14 @@ for (const [mode, origin] of [
       page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
     ).toBeVisible();
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toHaveCount(0);
-    expect(requests).toHaveLength(2);
+    expect(sessionReads(requests)).toHaveLength(2);
 
     state.currentStatus = 200;
     await sessionRead(page, () => page.clock.runFor(3_000));
-    await expectWelcome(page);
-    expect(requests).toHaveLength(3);
+    await expectWorkspace(page);
+    expect(sessionReads(requests)).toHaveLength(3);
     await page.clock.runFor(9_000);
-    expect(requests).toHaveLength(3);
+    expect(sessionReads(requests)).toHaveLength(3);
     expectSessionReads(requests);
   });
 
@@ -461,14 +473,14 @@ for (const [mode, origin] of [
     await expect(
       page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
     ).toBeVisible();
-    expect(requests).toHaveLength(1);
+    expect(sessionReads(requests)).toHaveLength(1);
     state.currentStatus = 401;
     await sessionRead(page, () => page.clock.runFor(3_000));
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
     await expect(page).toHaveURL(/#\/auth$/);
-    expect(requests).toHaveLength(2);
+    expect(sessionReads(requests)).toHaveLength(2);
     await page.clock.runFor(9_000);
-    expect(requests).toHaveLength(2);
+    expect(sessionReads(requests)).toHaveLength(2);
     expectSessionReads(requests);
   });
 
@@ -485,9 +497,9 @@ for (const [mode, origin] of [
         page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
       ).toBeVisible();
       await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
-      expect(requests).toHaveLength(1);
+      expect(sessionReads(requests)).toHaveLength(1);
       await page.clock.runFor(9_000);
-      expect(requests).toHaveLength(1);
+      expect(sessionReads(requests)).toHaveLength(1);
       expectSessionReads(requests);
     });
   }
@@ -612,6 +624,12 @@ async function desktopBackend(origin = 'http://127.0.0.1:5177') {
           return reply(null, {
             'Set-Cookie': 'fixture_session=; Max-Age=0; HttpOnly; SameSite=None; Secure; Path=/',
           });
+        case '/api/v1/expert-assignments/my-tasks':
+          expect(request.method).toBe('POST');
+          expect(JSON.parse(raw)).toEqual({});
+          return state.signedIn && request.headers.cookie?.includes('fixture_session=active')
+            ? reply([])
+            : reject();
         default:
           return response
             .writeHead(503, headers)
@@ -692,7 +710,7 @@ for (const [mode, origin] of [
       expect(backend.requests.filter(({ path }) => path.endsWith('/auth/login'))).toHaveLength(0);
       await page.getByLabel(/^密码\s*\*?\s*$/).fill(password);
       await page.getByRole('button', { name: '登录', exact: true }).click();
-      await expectWelcome(page);
+      await expectWorkspace(page);
       const cookies = await app.evaluate(
         ({ BrowserWindow }, url) =>
           BrowserWindow.getAllWindows()[0]!.webContents.session.cookies.get({ url }),
@@ -727,7 +745,11 @@ for (const [mode, origin] of [
         sandbox: true,
         nodeIntegration: false,
       });
-      await page.getByRole('link', { name: '个人中心', exact: true }).click();
+      await page.getByRole('button', { name: '账户菜单', exact: true }).click();
+      await page
+        .getByRole('navigation', { name: '账户选项', exact: true })
+        .getByRole('link', { name: '个人中心', exact: true })
+        .click();
       await page.getByRole('button', { name: '编辑资料', exact: true }).click();
       await page.getByLabel('个人简介', { exact: true }).fill('桌面真实资料');
       const writesBefore = backend.requests.filter(({ method }) => method === 'POST').length;
@@ -755,12 +777,16 @@ for (const [mode, origin] of [
       await page.getByRole('button', { name: '退出登录', exact: true }).click();
       await expect(page).toHaveURL(/#\/auth$/);
       await smsLogin(page);
-      await expectWelcome(page);
+      await expectWorkspace(page);
       await app.close();
       app = await launch();
       page = await app.firstWindow();
-      await expectWelcome(page);
-      await page.getByRole('link', { name: '个人中心', exact: true }).click();
+      await expectWorkspace(page);
+      await page.getByRole('button', { name: '账户菜单', exact: true }).click();
+      await page
+        .getByRole('navigation', { name: '账户选项', exact: true })
+        .getByRole('link', { name: '个人中心', exact: true })
+        .click();
       await page.getByRole('tab', { name: '账户安全', exact: true }).click();
       await page.getByLabel(/^新密码\s*\*?\s*$/).fill('Changed123!');
       await page.getByLabel(/^确认新密码\s*\*?\s*$/).fill('Changed123!');
@@ -814,11 +840,11 @@ test('Electron DEV 会话503自动恢复为401，进入登录页后停止轮询'
     await expect(
       page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
     ).toBeVisible();
-    expect(backend.requests).toHaveLength(1);
+    expect(sessionReads(backend.requests)).toHaveLength(1);
     backend.state.currentStatus = 200;
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
     await page.waitForTimeout(3500);
-    expect(backend.requests).toHaveLength(2);
+    expect(sessionReads(backend.requests)).toHaveLength(2);
     expectSessionReads(backend.requests);
     expect(backend.preflights).toEqual([]);
   } finally {
@@ -855,7 +881,7 @@ test('Electron DEV 已登录会话503自动恢复为200，成功后停止轮询�
     await page.getByLabel(/^手机号/).fill(phone);
     await page.getByLabel(/^密码\s*\*?\s*$/).fill(password);
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expectWelcome(page);
+    await expectWorkspace(page);
     backend.state.currentStatus = 503;
     const beforeRecovery = backend.requests.length;
     await page.reload();
@@ -863,17 +889,17 @@ test('Electron DEV 已登录会话503自动恢复为200，成功后停止轮询�
       page.getByRole('heading', { name: '暂时无法加载账户资料', exact: true }),
     ).toBeVisible();
     await expect(page.getByRole('button', { name: '重试', exact: true })).toBeEnabled();
-    expect(backend.requests.slice(beforeRecovery)).toHaveLength(1);
+    expect(sessionReads(backend.requests.slice(beforeRecovery))).toHaveLength(1);
     backend.state.currentStatus = 200;
-    await expectWelcome(page);
+    await expectWorkspace(page);
     await expect(page).toHaveURL(/#\/$/);
-    expect(backend.requests.slice(beforeRecovery)).toHaveLength(2);
+    expect(sessionReads(backend.requests.slice(beforeRecovery))).toHaveLength(2);
     await page.waitForTimeout(3500);
     await expect(page).toHaveURL(/#\/$/);
     const recoveryRequests = backend.requests.slice(beforeRecovery);
-    expect(recoveryRequests).toHaveLength(2);
+    expect(sessionReads(recoveryRequests)).toHaveLength(2);
     expectSessionReads(recoveryRequests);
-    expect(recoveryRequests.every(({ client }) => client === undefined)).toBe(true);
+    expect(sessionReads(recoveryRequests).every(({ client }) => client === undefined)).toBe(true);
     expect(backend.preflights).not.toContain('/api/v1/users/me');
   } finally {
     try {
@@ -1069,7 +1095,7 @@ for (const [mode, width, action] of [
     await loaded;
     if (action === '返回首页') {
       await expect(page).toHaveURL(/#\/$/);
-      await expectWelcome(page);
+      await expectWorkspace(page);
     } else {
       await expect(page).toHaveURL(/#\/profile$/);
       await expect(page.getByRole('tablist', { name: '个人中心设置', exact: true })).toBeVisible();
@@ -1123,7 +1149,7 @@ test('页面错误恢复 DEV 工作台角色上下文异常展示独立恢复页
   await page.getByRole('button', { name: '返回首页', exact: true }).click();
   await loaded;
   await expect(page).toHaveURL(/#\/$/);
-  await expectWelcome(page);
+  await expectWorkspace(page);
   expect(state.signedIn).toBe(true);
   expect(
     requests.filter(({ path }) => ['/api/v1/auth/logout', '/api/v1/auth/login'].includes(path)),

@@ -152,6 +152,10 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
       }
       if (!record.cookie) return void reply(null, 401);
       if (path === '/api/v1/users/me') return void reply(user);
+      if (path === '/api/v1/expert-assignments/my-tasks' && request.method === 'POST') {
+        expect(body).toEqual({});
+        return void reply([]);
+      }
       if (path === '/api/v1/projects/manager/list' && request.method === 'GET')
         return void reply([]);
       if (path === '/api/v1/auth/switch-role') {
@@ -266,9 +270,7 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
     await page.getByLabel(/^手机号/).fill(phone);
     await page.getByLabel(/^密码\s*\*?\s*$/).fill(password);
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expect(
-      page.getByRole('heading', { name: `欢迎，${user.nickname}`, exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
     await page.getByRole('combobox', { name: '当前角色', exact: true }).click();
     await page.getByRole('option', { name: '策略官', exact: true }).click();
     await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();

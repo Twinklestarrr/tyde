@@ -15,7 +15,6 @@ import { WorkspaceLayout } from '../layouts/WorkspaceLayout';
 import { WorkspaceViewProvider } from '../layouts/WorkspaceView';
 import { LoginPage } from '../modules/auth/LoginPage';
 import { RegisterPage } from '../modules/auth/RegisterPage';
-import { WelcomePage } from '../modules/auth/WelcomePage';
 import { ProfilePage } from '../modules/profile/ProfilePage';
 import { OrganizationPage } from '../modules/organizations/OrganizationPage';
 import { OrganizationCreatePage } from '../modules/organizations/OrganizationCreatePage';
@@ -29,6 +28,7 @@ import { ProjectCreatePage } from '../modules/projects/ProjectCreatePage';
 import { ProjectDetailPage } from '../modules/projects/ProjectDetailPage';
 import { StrategistProjectsPage } from '../modules/projects/StrategistProjectsPage';
 import { StrategistProjectPage } from '../modules/projects/StrategistProjectPage';
+import { ExpertProjectsPage } from '../modules/projects/ExpertProjectsPage';
 
 /** 离开注册资料页后销毁一次性凭证；布局由匹配路由决定。 */
 function RootLayout() {
@@ -134,7 +134,7 @@ function HomePage() {
     return <NavigatorProjectsPage key={session.data.id} user={session.data} />;
   if (session.data && (session.data.selectedRole ?? session.data.role) === 'PM')
     return <StrategistProjectsPage key={session.data.id} user={session.data} />;
-  return session.data && <WelcomePage user={session.data} />;
+  return session.data && <ExpertProjectsPage key={session.data.id} user={session.data} />;
 }
 
 function NavigatorProjectsRoute() {

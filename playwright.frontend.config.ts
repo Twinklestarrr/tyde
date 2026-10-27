@@ -15,6 +15,7 @@ export default defineConfig({
     'navigator-projects.spec.ts',
     'project-manager.spec.ts',
     'production-plan.spec.ts',
+    'expert-actions.spec.ts',
   ],
   workers: 1,
   timeout: 30_000,
