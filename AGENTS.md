@@ -183,7 +183,7 @@ pnpm Workspace Monorepo，TypeScript + ESM，当前有 5 个应用、3 个共享
 
 个人中心按参考图保留个人主页层级，复杂写操作通过顶层业务页签进入对应模块。`ProfileAttendance.tsx` 保留月历、汇总与节假日布局，并明确显示个人/组织排班范围；仅服务端 `canBatchSchedule` 为 true 的无有效组织专家可自助排班，组织成员在此查看本人班次；有效主管/管理员可点击“管理组织排班”直达 `/organization?tab=schedules`，普通成员不显示管理入口。组织排班的写操作由组织管理页承接。`ProfileAttendanceDialogs.tsx` 按服务端逐日权限提供个人批量排班、请假时段、考勤修正、主管/管理员本人直接修正及待审撤回。排班同草稿手动重试复用幂等键，改变内容更换键；申请用日考勤版本，撤回用流程版本，409 必须显式重读，失败保留草稿。“组织与申请”直接复用 `OrganizationEdit`，仅 ACTIVE 主管读取完整组织资料后可修改简介与 Logo 图片；与侧栏共用组织查询缓存，保存后同步摘要并刷新组织管理及会话，写成功回读失败提示手动重读。`ProfileApplicationWithdrawal.tsx` 仅撤回本人待审考勤申请；退出组织复用既有 `SelfDeparture`，主管须先转让，退出流程不提供撤回。成功写入与后续读取错误分别展示，不自动重放写入；已有会话回读失败保留资料表单。三角色均显示真实组织身份摘要，专家业务及组织入口仍受真实会话角色限制。个人中心及组织排班批次仅前端/shared 客户端 DTO/platform 适配和隔离测试；2026-10-23 Logo 后续修改同时补后端认领与释放，未修改 Prisma、迁移或操作数据库。
 
-页面恢复：`app/App.tsx` 使用无路径工作台父路由，将会话边界、`WorkspaceViewProvider`、公共布局和业务 Outlet 绑定到同一匹配链；登录/注册独立包裹认证布局，不根据先行更新的 location 切换工作台 Provider。`PageRecovery.tsx` 为页面异常提供温和提示、返回首页和重试；业务页异常保留公共顶栏，根/布局异常使用独立品牌恢复页，不向用户展示技术异常。返回首页保留 Cookie 并刷新首页，重试实际刷新当前页面，不调用退出或重放写请求。首次账户读取失败复用恢复界面并只重查读取；已有资料读取失败将错误放在工作台内容内，保留草稿及原轮询/401策略。开发热更新仅通过 `import.meta.hot.data` 复用 Context 对象身份，真实角色与缺失 Provider 校验保持原逻辑。
+页面恢复：`app/App.tsx` 使用无路径工作台父路由，将会话边界、`WorkspaceViewProvider`、公共布局和业务 Outlet 绑定到同一匹配链；登录/注册独立包裹认证布局，不根据先行更新的 location 切换工作台 Provider。`PageRecovery.tsx` 为页面异常提供温和提示、返回首页和重试；业务页异常保留公共顶栏，根/布局异常使用独立品牌恢复页，不向用户展示技术异常。返回首页保留 Cookie 并刷新首页，重试实际刷新当前页面，不调用退出或重放写请求。首次账户读取失败自动替换路由返回首页并立即重查一次，不再显示错误卡片或要求点击；仍失败时每3秒只重查账户读取，成功或401停止，不整页刷新循环。已有资料读取失败将错误放在工作台内容内，保留草稿及原轮询/401策略。开发热更新仅通过 `import.meta.hot.data` 复用 Context 对象身份，真实角色与缺失 Provider 校验保持原逻辑。
 
 Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:test:memory` 显式开启，每 10 秒记录进程指标与主进程内存到 userData，最多保留两份各 1 MiB 日志。普通开发默认关闭，安装包不启用。原 20 GB 报告尚未现场复现，短时验证不能视为泄漏修复；详见 [排查记录](docs/ELECTRON_MEMORY_INVESTIGATION.md)。
 
@@ -201,6 +201,8 @@ Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:te
 
 策略官准入考试：`StrategistExamPanel.tsx` 在原六个 Tab 中接入准入情况和考试管理，项目卡片的考试节点直达 `?tab=ENTRANCE_EXAM`。创建/编辑、当前配置、考试名单及历史阅卷均使用弹框，沿用现有主题；`entrance-exam-form.ts` 校验多卷题目、精确均分、上海截止时间和多轮判卷，编辑携带当前版本号，保留旧应试绑定。服务端筛选分页、准入与实际入项分开；主策略官资格通过现有阅卷人候选读取核验，协作只读。`EntranceExamGradingWorkspace.tsx` 根据历史绑定轮次人工判定正确/错误，提供模拟自动阅卷重试与人工补偿；实际历史阅卷人资格由提交接口核验，403保持只读。人工阅卷按当前16KiB请求体上限在HTTP前拒绝超限，保留输入供缩短意见或总结；不更改后端限制。未知写结果、409及成功后回读失败锁定旧动作，显式读取核实，不自动重发；未保存内容保护Tab/路由/角色切换。仅新增shared客户端考试类型和platform HTTP适配，不改认证DTO、后端或数据库。当前后端不支持重考配置和远程文档解析，页面如实说明；考试POST来源校验尚未包含桌面来源，影响实际Electron配置/名单/阅卷读取及写入，本批不修改后端或绕过校验，隔离桌面契约测试不能代替真实HTTP验收。下一模块仍须用户确认。
 
+三级项目类型：`ProjectCategoryMultiSelect.tsx` 对齐参考页面的可搜索多选下拉，支持连续复选、已选标签移除和清空、Esc/外部点击关闭；沿用三级独立字典与数字 ID，最多20项，不增加父级联动或依赖。桌面与375px页面、草稿回读和提交使用同一字段。
+
 ## 模块边界与入口
 
 组织管理界面由 `OrganizationPage.tsx` 提供横向组织摘要与全宽工作区；`OrganizationMembers.tsx` 使用常用筛选工具栏、可折叠高级筛选和七列表格，成员身份/联系方式与入离组时间聚合，右侧操作列固定。`OrganizationApprovals.tsx` 使用同一面板风格和结构化审批卡片。筛选仍使用后端既有参数并在服务端分页，折叠后保留已应用数量；不引入当前页过滤或推造统计。成员导入弹框提供“粘贴或填写 / 上传表格”两种方式：`OrganizationImportTable.tsx` 以公共 Input/Select/Button 组成五列表格，支持 Excel/WPS 多行多列粘贴、逐格编辑、增删行及服务端字段错误定位；超过 500 行或 5 列整次拒绝，不静默截断。手机号手输最多 11 位数字，单格或整表粘贴非法字符/超长号码时整次拒绝并保留原稿；人员属性与组织角色使用公共下拉选择，入组日期使用公共 Input 的原生日期选择器；姓名按后端规则最多 64 个 Unicode 字符。手动编辑、单格和整表粘贴统一校验各字段，英文枚举自动转换为中文选项；提交前逐行检查所有字段的格式/必填及手机号同批重复，错误定位至单元格。文件入口复用 `FileUploadField`，提供拖放区域、文件卡片、更换/移除；CSV/XLS/XLSX 仍直接通过原 multipart 接口导入，前端不解析 Excel。Logo、头像和营业执照也统一使用该公共上传交互，不再单独渲染原生文件控件。
@@ -208,7 +210,7 @@ Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:te
 | 路径                                    | 职责与关键入口                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/web/src`                          | 唯一业务 UI。`app/App.tsx` 管理 TanStack Router Hash 路由、认证入口与个人资料页；`app/providers/index.tsx` 配置 React Query；`components/ui/` 为 shadcn 基础组件，`styles/global.css` 定义 Tailwind 主题；`modules/auth/` 放认证页面                                                                                                                                                                                               |
-| `apps/web/src/services/api.ts`          | 页面调用入口，直接复用 `platform.auth`，开发/生产均真实 HTTP，无用户或资料写入 mock；`hooks/useSession.ts` 通过 React Query 管理会话，仅网络/5xx 自动重查读取，不重放写入。                                                                                                                                                                                                                                                        |
+| `apps/web/src/services/api.ts`          | 页面调用入口，直接复用 `platform.auth`，开发/生产均真实 HTTP，无用户或资料写入 mock；`hooks/useSession.ts` 通过 React Query 管理会话，首次无资料时自动重查，已有资料仅网络/5xx 自动重查读取，不重放写入。                                                                                                                                                                                                                          |
 | `packages/platform/src`                 | 双端适配。`web.ts` 提供双端共用 HTTP 适配器，`index.ts` 为桌面注入可信 API 源和跨源 Cookie 策略，通过 `capabilities` 声明实际已实现的平台能力                                                                                                                                                                                                                                                                                      |
 | `packages/shared/src`                   | 唯一后端认证 DTO/schema 在 `auth.ts`；API 常量、错误类型、页面 AuthApi 与仅含公开运行配置的 bridge 契约在 `index.ts`；IPC 通道在 `ipc.ts`                                                                                                                                                                                                                                                                                          |
 | `apps/electron/src`                     | `main/index.ts` 启动与静态资源协议；`main/windows.ts` 安全窗口；`preload/index.ts` 暴露受限 bridge；`main/ipc/index.ts` 校验来源并返回公开 API 源                                                                                                                                                                                                                                                                                  |
@@ -334,19 +336,19 @@ React 页面 → services/api → packages/platform
 
 Agent 独立入口：`pnpm dev:agent`（3002）、`pnpm dev:agent-web`（3003）；`pnpm build:agent`、`pnpm build:agent-web`、`pnpm typecheck:agent`、`pnpm test:agent`。界面通过 `/agent-api` 代理访问 Agent 服务，配置及生产反向代理要求见各应用 README。现有 `dev:local`、`build:electron`、`build:vercel`、`test` 与 `db:*` 仍为业务链路，尚未装配 Agent 或执行其迁移。
 
-| 场景                  | 命令                                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------------------- |
-| 首次准备              | `pnpm install`，配置 `apps/server/.env` 并确认目标库已应用现有迁移                                |
-| 本地一键开发          | `pnpm dev:local`：按 `.env` 启动已有本机数据库、本机后端及 Electron；远程库跳过数据库启动         |
-| 开发（分别启动）      | `pnpm dev:server`、`pnpm dev:web`、`pnpm dev:electron`                                            |
-| 静态检查              | `pnpm typecheck`、`pnpm lint`、`pnpm format:check`                                                |
-| 提交校验              | `pnpm prepare` 安装 Husky；`pnpm check:staged` 检查索引；`pnpm check:message <文件>` 检查提交信息 |
-| 核心 / 服务端单测     | `pnpm test:core`、`pnpm test`                                                                     |
-| 前端双端契约回归      | `pnpm test:frontend`，验证开发/生产真实请求契约与 Web/Electron 会话，使用隔离接口替身，无需数据库 |
-| 已接入功能一键回归    | `pnpm test:features`：核心/客户端契约、后端单测、Web/Electron 构建和全部前端回归；不连接数据库    |
-| 数据库集成 / 双端 E2E | `pnpm test:integration`、`pnpm test:e2e`，环境准备见 README                                       |
-| 构建                  | `pnpm build:web`、`pnpm build:server`、`pnpm build:electron`、`pnpm build:vercel`                 |
-| 打包                  | `pnpm package:web`、`pnpm package:server`、`pnpm package:mac`、`pnpm package:win`                 |
+| 场景                  | 命令                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 首次准备              | `pnpm install`，配置 `apps/server/.env` 并确认目标库已应用现有迁移                                         |
+| 本地一键开发          | `pnpm dev:local`：按 `.env` 启动已有本机数据库、本机后端及 Electron；远程库跳过数据库启动                  |
+| 开发（分别启动）      | `pnpm dev:server`、`pnpm dev:web`、`pnpm dev:electron`                                                     |
+| 静态检查              | `pnpm typecheck`、`pnpm lint`、`pnpm format:check`                                                         |
+| 提交校验              | `pnpm prepare` 安装 Husky；`pnpm check:staged` 检查索引；`pnpm check:message <文件>` 检查提交信息          |
+| 核心 / 服务端单测     | `pnpm test:core`、`pnpm test`                                                                              |
+| 前端双端契约回归      | `pnpm test:frontend`，验证开发/生产真实请求契约与 Web/Electron 会话，使用隔离接口替身，无需数据库          |
+| 已接入功能一键回归    | `pnpm test:features`：核心/客户端契约、后端单测、Web/Electron 页面及独立 Agent 构建/隔离回归；不连接数据库 |
+| 数据库集成 / 双端 E2E | `pnpm test:integration`、`pnpm test:e2e`，环境准备见 README                                                |
+| 构建                  | `pnpm build:web`、`pnpm build:server`、`pnpm build:electron`、`pnpm build:vercel`                          |
+| 打包                  | `pnpm package:web`、`pnpm package:server`、`pnpm package:mac`、`pnpm package:win`                          |
 
 `pnpm build:server` 统一构建 Web 到 `apps/server/public` 并构建后端；`pnpm package:server` 将两者放进同一个后端包。独立入口 `main.ts` 与 Vercel 入口 `app.ts` 均通过 `web.ts` 托管页面；本地未构建 Web 时仅提供 API。HTTPS 部署可使用 `deploy/nginx-server.conf.example` 将全部路径转发至后端。
 
@@ -363,7 +365,7 @@ Git 的 `pre-commit` 先通过 `scripts/check-commit-policy.mjs` 检查整个暂
 
 测试进程清理：启动前记录已有服务与本轮创建的进程、子进程和端口。每轮测试结束（包括失败和中断）必须关闭自己启动的预览、测试服务及专用浏览器/Electron进程，并复查端口已释放；除非用户明确要求保留，不留下常驻测试进程。只清理本轮自启进程，不泛杀同名进程，不停止用户原有服务或数据库。
 
-`pnpm test:features` 复用现有测试，不安装新依赖、不调用数据库初始化/迁移/清理、真实业务 Agent 或部署命令。测试前要求 5176/5177 空闲；失败或 Ctrl+C 后仅清理本次启动的后代进程（核对 PID 出生时间），不按端口杀用户进程。日志、页面 JSON、失败截图/trace 及汇总报告保存到 `artifacts/feature-tests/<本次运行>/`，`artifacts/feature-tests/latest.json` 指向最近结果。失败阻断后续阶段并返回非零退出码，未运行、跳过及重试后通过如实记录；真实后端/专用库联调继续使用独立配置，不混入默认回归。
+`pnpm test:features` 复用现有测试，不安装新依赖、不调用数据库初始化/迁移/清理、真实模型或部署命令。包含独立 Agent 契约、构建与服务/前端单测；Agent 服务测试显式排除 `.integration.test.ts` 并移除测试数据库环境变量，不能直接套用会匹配数据库文件的普通测试 glob。测试前要求 5176/5177 空闲；失败或 Ctrl+C 后仅清理本次启动的后代进程（核对 PID 出生时间），不按端口杀用户进程。日志、页面 JSON、失败截图/trace 及汇总报告保存到 `artifacts/feature-tests/<本次运行>/`，`artifacts/feature-tests/latest.json` 指向最近结果。失败或页面报告无效阻断后续阶段并返回非零退出码，未运行、跳过及重试后通过如实记录；真实后端/专用库联调继续使用独立配置，不混入默认回归。当前页面已实现功能与未开放边界见 [功能清单](docs/IMPLEMENTED_FEATURES.md)。
 
 ## 按需补充上下文
 

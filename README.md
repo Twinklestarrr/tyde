@@ -203,7 +203,9 @@ Vercel 使用同一个后端项目统一发布页面与 API。Root Directory 保
 pnpm test:features
 ```
 
-依次运行核心与客户端接口契约、后端单元测试、Web/Electron 构建和全部已接入页面回归，覆盖认证、个人中心、组织、排班及三角色项目功能。使用隔离 HTTP 替身，不连接数据库，不清库或迁移，不调用真实业务 Agent。需要现有依赖及 Playwright Chromium；5176/5177 被占用时会停止并提示，不关闭用户已有服务。结束、失败或 Ctrl+C 时清理本次自启进程。运行日志、汇总 JSON、页面报告和失败截图/trace 保存到 `artifacts/feature-tests/<本次运行>/`，最近结果入口为 `artifacts/feature-tests/latest.json`；失败时返回非零退出码。真实后端/专用库联调仍单独运行。
+依次运行核心与客户端接口契约、后端单元测试、Web/Electron 构建和全部已接入页面回归，再检查独立 Agent 契约、构建及服务/前端单元测试。业务页面覆盖认证、个人中心、组织、排班、三角色项目、生产计划及策略官准入考试管理与阅卷；完整范围和未开放模块见 [当前已实现功能](docs/IMPLEMENTED_FEATURES.md)。
+
+默认使用隔离 HTTP 替身和模拟模型，显式排除 Agent 数据库集成，不连接数据库、不清库或迁移、不调用真实模型。使用 `.nvmrc` 指定的 Node.js 24.19.0、pnpm 11.23.0、现有依赖及 Playwright Chromium；5176/5177 被占用时会停止并提示，不关闭用户已有服务。结束、失败或 Ctrl+C 时清理本次自启进程。运行日志、汇总 JSON、页面报告和失败截图/trace 保存到 `artifacts/feature-tests/<本次运行>/`，最近结果入口为 `artifacts/feature-tests/latest.json`；任一阶段失败或页面报告无效时停止后续阶段并返回非零退出码。跳过及重试后通过按实际数量记录；真实后端、OSS、专用库、真实模型和部署联调单独验收。
 
 按需执行单项检查：
 
