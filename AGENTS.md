@@ -197,7 +197,9 @@ Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:te
 
 项目详情交互修正：`ProjectDetailsDialog.tsx` 承接原基础信息、人员画像、标准配置和鉴权附件，入口位于 `NavigatorProjectWorkflow` 的 Tab 行右侧“查看项目详情”，不增加详情 Tab、不在主页面平铺。复用已读取详情，不新增业务请求；弹框固定头尾、正文独立滚动，支持右上/底部关闭、Esc及遮罩关闭，关闭恢复入口焦点与背景滚动。父流程及招募面板保持挂载，打开/关闭不清空候选选择、不改变当前Tab、不发写请求。下载仍复用鉴权文件代理，不改变API或数据库。
 
-策略官生产计划：PM 首页及 `/strategist/projects` 通过 `GET /projects/manager/list` 读取当前任职待办，不代表完整历史；`StrategistProjectPage.tsx` 的 `/strategist/projects/$projectId` 按真实 PM 会话与后端关系鉴权，提供策略官六个 Tab，仅生产计划本批接入，详情继续通过按钮弹框查看。`ProductionPlanPanel.tsx` 与 `production-plan-form.ts` 接现有 GET `/projects/production-plan` 和 POST `/projects/production-plan/confirm`，projectId 均在 URL query。主策略官未确认且 editable=true 才可写，协作负责人和已确认计划只读，无草稿 API；自动有效天数只统计周一至周五，不扣节假日，阶段 CPD 可空继承计划值，未确认产出仅作估算，确认后使用服务端产出。确认后停留当前模块并刷新待办和详情；冲突或未知结果显式回读核实，不重发已成功确认。离开 Tab、路由及角色切换保护未保存内容，缓存按账号、角色、项目隔离。本批不纳入用户已有创建页、README 和 NAV 测试改动，不改后端或数据库，测试后清理自启进程；下一功能仍须用户确认。
+策略官生产计划：PM 首页及 `/strategist/projects` 通过 `GET /projects/manager/list` 读取当前任职待办，不代表完整历史；`StrategistProjectPage.tsx` 的 `/strategist/projects/$projectId` 按真实 PM 会话与后端关系鉴权，提供策略官六个 Tab，已接入生产计划和准入考试，详情继续通过按钮弹框查看。`ProductionPlanPanel.tsx` 与 `production-plan-form.ts` 接现有 GET `/projects/production-plan` 和 POST `/projects/production-plan/confirm`，projectId 均在 URL query。主策略官未确认且 editable=true 才可写，协作负责人和已确认计划只读，无草稿 API；自动有效天数只统计周一至周五，不扣节假日，阶段 CPD 可空继承计划值，未确认产出仅作估算，确认后使用服务端产出。确认后停留当前模块并刷新待办和详情；冲突或未知结果显式回读核实，不重发已成功确认。离开 Tab、路由及角色切换保护未保存内容，缓存按账号、角色、项目隔离。本批不纳入用户已有创建页、README 和 NAV 测试改动，不改后端或数据库，测试后清理自启进程；下一功能仍须用户确认。
+
+策略官准入考试：`StrategistExamPanel.tsx` 在原六个 Tab 中接入准入情况和考试管理，项目卡片的考试节点直达 `?tab=ENTRANCE_EXAM`。创建/编辑、当前配置、考试名单及历史阅卷均使用弹框，沿用现有主题；`entrance-exam-form.ts` 校验多卷题目、精确均分、上海截止时间和多轮判卷，编辑携带当前版本号，保留旧应试绑定。服务端筛选分页、准入与实际入项分开；主策略官资格通过现有阅卷人候选读取核验，协作只读。`EntranceExamGradingWorkspace.tsx` 根据历史绑定轮次人工判定正确/错误，提供模拟自动阅卷重试与人工补偿；实际历史阅卷人资格由提交接口核验，403保持只读。人工阅卷按当前16KiB请求体上限在HTTP前拒绝超限，保留输入供缩短意见或总结；不更改后端限制。未知写结果、409及成功后回读失败锁定旧动作，显式读取核实，不自动重发；未保存内容保护Tab/路由/角色切换。仅新增shared客户端考试类型和platform HTTP适配，不改认证DTO、后端或数据库。当前后端不支持重考配置和远程文档解析，页面如实说明；考试POST来源校验尚未包含桌面来源，影响实际Electron配置/名单/阅卷读取及写入，本批不修改后端或绕过校验，隔离桌面契约测试不能代替真实HTTP验收。下一模块仍须用户确认。
 
 ## 模块边界与入口
 
