@@ -8,6 +8,8 @@ import { AuthError } from '../auth/auth.error.js';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { ManagementService } from '../management/management.service.js';
 import { projectTime } from './project-time.js';
+import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
 import {
   collectManagementTasks,
   managementTaskTypes,
@@ -318,6 +320,9 @@ export class ProjectProductionPlanService {
           managementTaskTypes,
           now,
         );
+        // 后补计划会改变准入资格；先同步全部真实来源及遗留独立轮次，再仲裁展示卡片。
+        await refreshOwnerProgress(tx, projectId, null, now);
+        await refreshManagementCardSnapshots(tx, projectId, now);
         // 旧确认动作publishRealtimeEvent=false；轮次原子结算，但不额外写通知事件。
         return this.response(updated, plan, true);
       });

@@ -9,6 +9,7 @@ import { movementTasks, projectOwners, syncSnapshots } from './personnel-movemen
 import { reconcileTaskRounds } from '../projects/project-task-rounds.js';
 import { applyMovement } from './personnel-movement-effective.js';
 import { todayText } from './personnel-domain.js';
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
 
 export const transferInclude = {
   member: { include: memberInclude },
@@ -349,14 +350,10 @@ export async function changeWithProgress<T>(
       ['MEMBER_MOVEMENT_APPROVAL'],
       now,
     );
-    await tx.projectRoleNodeSnapshot.deleteMany({
-      where: {
-        projectId: id,
-        sourceBizType: 'PROJECT_MEMBER_MOVEMENT',
-        branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL',
-      },
-    });
-    await syncSnapshots(tx, id, after, now);
+    // 流程推进可能打开目标考试，也可能恢复/撤销本人来源；独立轮次不能只随卡片更新。
+    // 交接和撤回不计完成；保留另一项目仍有效的培训/考试来源及历史轮次。
+    await refreshOwnerProgress(tx, id, [m.userId], now);
+    const cards = await syncSnapshots(tx, id, after, now);
     await tx.projectEventOutbox.create({
       data: {
         projectId: id,
@@ -365,6 +362,7 @@ export async function changeWithProgress<T>(
         actorUserId: actor,
         payload: {
           schemaVersion: 1,
+          ...cards,
           movementIds: [m.id],
           sourceProjectId: m.sourceProjectId,
           targetProjectId: m.targetProjectId,

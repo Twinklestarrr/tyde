@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
 import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
 import { Prisma, type PrismaClient, type Project, type ProjectMember } from '@prisma/client';
 import { AuthError } from '../auth/auth.error.js';
@@ -237,45 +239,10 @@ export class ProjectMaterialsService {
             },
           });
       }
-      // 只刷新本人的履约进度；其他领域的高优先级支线由04完整重算。
-      // 重复确认仍重读最新成员事实，修复陈旧快照；不为历史成员生成当前进度。
-      const latest = await tx.projectMember.findFirst({
-        where: { projectId: id, userId: principal.userId },
-        orderBy: { id: 'desc' },
-      });
-      if (latest?.id === member.id && project.currentNodeCode !== 'COMPLETED') {
-        const perspective =
-          assignment?.subjectType === 'ORGANIZATION' ? 'EXPERT_MEMBER' : 'EXPERT_INDIVIDUAL';
-        const old = await tx.projectRoleNodeSnapshot.findUnique({
-          where: {
-            projectId_userId_perspective: { projectId: id, userId: principal.userId, perspective },
-          },
-        });
-        if (
-          !old ||
-          ['ENTRANCE_EXAM', 'STANDARD_TRAINING', 'PRODUCTION_TASK'].includes(old.branchNodeCode)
-        ) {
-          const data = {
-            branchNodeCode: 'PRODUCTION_TASK',
-            branchPriority: 10,
-            sourceBizType: 'PROJECT_MEMBER',
-            sourceBizId: member.id,
-            sourceEventAt: member.standardTrainingConfirmedAt ?? now,
-            calculatedAt: now,
-          };
-          await tx.projectRoleNodeSnapshot.upsert({
-            where: {
-              projectId_userId_perspective: {
-                projectId: id,
-                userId: principal.userId,
-                perspective,
-              },
-            },
-            create: { projectId: id, userId: principal.userId, perspective, ...data },
-            update: data,
-          });
-        }
-      }
+      // 完整采集后统一仲裁，避免覆盖其他真实来源，也清理已失效的高优先级卡片。
+      // 确认/材料更新沿原动作保持静默，不新增通知事件。
+      await refreshOwnerProgress(tx, id, [principal.userId], now);
+      await refreshManagementCardSnapshots(tx, id, now);
       return {
         ...(await this.response(tx, project, principal, false)),
         readConfirmationTransitioned: transitioned,
@@ -360,7 +327,10 @@ export class ProjectMaterialsService {
         ['MAIN_STANDARD_TRAINING'],
         managementTaskTypes,
       );
-      // 旧动作publishRealtimeEvent=false；此处只结算管理主线轮次。
+      const now = new Date();
+      await refreshOwnerProgress(tx, project.id, null, now);
+      await refreshManagementCardSnapshots(tx, project.id, now);
+      // 旧动作publishRealtimeEvent=false；卡片与主线轮次同事务刷新，保持静默。
       return this.response(tx, updated, principal, currentNodeCode !== project.currentNodeCode);
     });
   }

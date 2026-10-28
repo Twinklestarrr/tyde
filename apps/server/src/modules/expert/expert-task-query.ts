@@ -1,3 +1,6 @@
+import { ordinaryExamTask } from './expert-exam-task.js';
+import { expertOutputTask } from './expert-output-task.js';
+import { canReportExpertOutput, hasReportedExpertOutputToday } from './expert-report-capability.js';
 import { queryTransferTasks } from './expert-transfer-query.js';
 import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
 import { Prisma } from '@prisma/client';
@@ -24,7 +27,7 @@ export function validateTaskQuery(query: ExpertTaskQuery) {
     throw new AuthError(400, 'VALIDATION_ERROR', '关键字或接单状态参数无效，别名状态不得冲突');
 }
 
-/** 仅聚合已有接单/成员事实；生产报量与跨领域审批能力由对应任务接回。 */
+/** 聚合真实接单、成员及报量权限；读取不修复快照或任务轮次。 */
 export async function queryExpertTasks(
   tx: Prisma.TransactionClient,
   query: ExpertTaskQuery,
@@ -83,21 +86,13 @@ export async function queryExpertTasks(
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
-  const transferCards = await queryTransferTasks(tx, query, principal, projectId);
+  const transferCards = await queryTransferTasks(tx, query, principal, projectId, now);
   if (!rows.length) return transferCards;
   const ids = [...new Set(rows.map((r) => r.projectId))];
-  const [members, attempts, exams, managers, creators, pendingEntries] = await Promise.all([
+  const [members, exams, managers, creators, pendingEntries] = await Promise.all([
     tx.projectMember.findMany({
       where: { projectId: { in: ids }, userId: principal.userId },
       orderBy: { id: 'desc' },
-    }),
-    tx.entranceExamAttempt.findMany({
-      where: {
-        candidateUserId: principal.userId,
-        OR: [{ submittedAt: { not: null } }, { cancelledAt: { not: null } }],
-        exam: { projectId: { in: ids }, deleted: false },
-      },
-      include: { exam: { select: { projectId: true } } },
     }),
     tx.projectEntranceExam.findMany({
       where: {
@@ -176,28 +171,33 @@ export async function queryExpertTasks(
       continue;
     const needWrittenExam = project.productionPlan?.needWrittenExam ?? false;
     const enterable = exams.some((e) => e.projectId === row.projectId);
-    const finishedExam = attempts.some((a) => a.exam.projectId === row.projectId);
     const member = members.find((m) => m.projectId === row.projectId);
     const activeAccess =
       !!member &&
       ['ACTIVE', 'PENDING_TRANSFER', 'PENDING_EXIT'].includes(member.status) &&
       member.entryDecision !== 'NO' &&
       !!member.joinedAt;
+    const examTask =
+      acceptanceStatus === 'ACCEPTED' &&
+      needWrittenExam &&
+      (projectOwner || (!acceptedOrganizationOwner && !member))
+        ? await ordinaryExamTask(tx, project.id, principal.userId, now)
+        : null;
+    const hasExamTask = examTask?.assignmentId === row.id;
     let branch: string | null = null;
     if (acceptanceStatus === 'ACCEPTED') {
       // 仅本域已接实来源可展示；其他快照须由10—12回补真值，不能凭旧快照开放动作。
       if (projectOwner)
-        branch =
-          needWrittenExam && enterable && !finishedExam
-            ? 'ENTRANCE_EXAM'
-            : pendingEntries.some(
-                  (m) =>
-                    m.expertAssignmentId === row.id &&
-                    m.organizationId === row.organizationId &&
-                    qualifiedForEntry(m, needWrittenExam),
-                )
-              ? 'MEMBER_ENTRY_CONFIRM'
-              : null;
+        branch = hasExamTask
+          ? 'ENTRANCE_EXAM'
+          : pendingEntries.some(
+                (m) =>
+                  m.expertAssignmentId === row.id &&
+                  m.organizationId === row.organizationId &&
+                  qualifiedForEntry(m, needWrittenExam),
+              )
+            ? 'MEMBER_ENTRY_CONFIRM'
+            : null;
       else if (!acceptedOrganizationOwner)
         branch = member
           ? activeAccess
@@ -205,17 +205,25 @@ export async function queryExpertTasks(
               ? 'PRODUCTION_TASK'
               : 'STANDARD_TRAINING'
             : null
-          : needWrittenExam && !finishedExam
+          : hasExamTask
             ? 'ENTRANCE_EXAM'
             : null;
     }
-    const ownerWithoutExam = projectOwner && (!needWrittenExam || !enterable);
+    let outputBranch: string | null = null;
+    if (acceptanceStatus === 'ACCEPTED') {
+      outputBranch = await expertOutputTask(tx, project.id, row.organizationId, principal, now);
+      if (outputBranch === 'OUTPUT_DATA_REVIEW' || (outputBranch && !branch)) branch = outputBranch;
+    }
+    // 日报量只消解普通生产待办；实时核查、退回修正及独立培训仍保留。
     if (
       acceptanceStatus === 'ACCEPTED' &&
-      !ownerWithoutExam &&
-      (!branch || (branch === 'PRODUCTION_TASK' && !activeAccess))
+      !outputBranch &&
+      (branch ?? main) === 'PRODUCTION_TASK' &&
+      (await hasReportedExpertOutputToday(tx, project.id, principal.userId, now))
     )
       continue;
+    const ownerWithoutExam = projectOwner && (!needWrittenExam || !enterable);
+    if (acceptanceStatus === 'ACCEPTED' && !ownerWithoutExam && !branch) continue;
     const owners = ownersOf(row).map((u) => ({
       userId: u.id,
       name: displayName(u.displayName, u.realName, u.uid),
@@ -278,11 +286,13 @@ export async function queryExpertTasks(
         acceptedOrganizationOwner,
         canViewOrganizationData: projectOwner || acceptedOrganizationOwner,
       },
-      // 仅待响应分配/普通成员开放067，报量能力由11接回。
       operations: {
         canAccept: acceptanceStatus === 'PENDING_ACCEPTANCE',
         canReject: acceptanceStatus === 'PENDING_ACCEPTANCE',
-        canReportOutput: false,
+        canReportOutput:
+          acceptanceStatus === 'ACCEPTED' &&
+          (branch ?? main) === 'PRODUCTION_TASK' &&
+          (await canReportExpertOutput(tx, project.id, row.organizationId, principal, now)),
       },
     });
   }

@@ -1,12 +1,10 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { AuthError } from '../auth/auth.error.js';
 import type { AuthPrincipal } from '../auth/auth.service.js';
-import {
-  collectManagementTasks,
-  managementTaskTypes,
-  reconcileTaskRounds,
-  taskEventFacts,
-} from './project-task-rounds.js';
+import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
+import { collectRecruitmentTasks } from './project-recruitment-snapshot.js';
+import { managementTaskTypes, reconcileTaskRounds, taskEventFacts } from './project-task-rounds.js';
 
 export interface HandlerChangeInput {
   projectId: number;
@@ -66,7 +64,7 @@ export class ProjectRecruitmentHandlerService {
       await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id"=${input.projectId} AND "deleted"=false FOR UPDATE`;
       const { project, relation } = await this.primary(tx, input.projectId, principal);
       if (!candidate) throw new AuthError(400, 'VALIDATION_ERROR', '所选用户不是可用的策略官');
-      const before = await collectManagementTasks(tx, project);
+      const before = await collectRecruitmentTasks(tx, project);
       const changed = await tx.projectManagerRecruitment.updateMany({
         where: {
           id: relation.id,
@@ -78,8 +76,19 @@ export class ProjectRecruitmentHandlerService {
       });
       if (changed.count !== 1)
         throw new AuthError(409, 'DUPLICATE', '环节负责人已变化，请刷新后重试');
-      const after = await collectManagementTasks(tx, project);
-      await reconcileTaskRounds(tx, project.id, before, after, null, [], [], managementTaskTypes);
+      const after = await collectRecruitmentTasks(tx, project);
+      await reconcileTaskRounds(
+        tx,
+        project.id,
+        before,
+        after,
+        null,
+        [],
+        [],
+        [...managementTaskTypes, 'EXPERT_RECRUITMENT_RETRY'],
+      );
+      await refreshOwnerProgress(tx, project.id, null, new Date());
+      const cardChanges = await refreshManagementCardSnapshots(tx, project.id);
       // 不把转交视为完成招募；本域管理真值及待投递事件同事务。
       await tx.projectEventOutbox.create({
         data: {
@@ -93,6 +102,7 @@ export class ProjectRecruitmentHandlerService {
             operation: 'project.expert-recruitment-handler.change',
             actorUserId: principal.userId,
             ...taskEventFacts(before, after),
+            ...cardChanges,
           },
         },
       });

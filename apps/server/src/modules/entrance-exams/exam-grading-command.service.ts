@@ -195,13 +195,14 @@ export class ExamGradingCommandService {
               where: { id: attempt.id },
               data: { gradingStatus: 'IN_PROGRESS', updatedBy: actor },
             });
-            await syncGradingTasks(tx, input.projectId, before, now);
+            const cardChanges = await syncGradingTasks(tx, input.projectId, before, now);
             await tx.projectEventOutbox.create({
               data: {
                 projectId: input.projectId,
                 eventType: 'EXAM_AUTO_FAILED',
                 operation,
                 payload: {
+                  ...cardChanges,
                   provider: 'mock',
                   gradingRecordId: record.id,
                   toolTraceId: record.toolTraceId,
@@ -380,7 +381,7 @@ export class ExamGradingCommandService {
             gradingTaskTypes,
             now,
           );
-          await refreshGradingSnapshots(tx, input.projectId, after, now);
+          const cardChanges = await refreshGradingSnapshots(tx, input.projectId, after, now);
           await tx.projectEventOutbox.create({
             data: {
               projectId: input.projectId,
@@ -389,6 +390,7 @@ export class ExamGradingCommandService {
               actorUserId: principal?.userId,
               payload: {
                 attemptId: attempt.id,
+                ...cardChanges,
                 completedRoundId: round.id,
                 nextRoundId: next?.id ?? null,
                 reviewerUserIds: [
@@ -520,5 +522,5 @@ export async function syncGradingTasks(
     gradingTaskTypes,
     now,
   );
-  await refreshGradingSnapshots(tx, projectId, after, now);
+  return refreshGradingSnapshots(tx, projectId, after, now);
 }

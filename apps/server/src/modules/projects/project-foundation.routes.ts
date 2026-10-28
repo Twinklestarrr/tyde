@@ -1,3 +1,14 @@
+import type { BoardTrendsQuery } from './project-board-trends.js';
+import type { BoardProjectsQuery } from './project-board-projects.js';
+import type { ProjectBoardService } from './project-board.service.js';
+import {
+  boardTrendsSchema,
+  boardRisksSchema,
+  boardSubtasksSchema,
+  boardProjectsSchema,
+  boardStatisticsSchema,
+  boardBasicSchema,
+} from './project-board.schema.js';
 import type { ProjectRecruitmentService, RecruitmentInput } from './project-recruitment.service.js';
 import type { RecruitmentQuery } from './project-recruitment-candidates.js';
 import { recruitmentSchema } from './project-recruitment.schema.js';
@@ -61,6 +72,7 @@ export async function projectFoundationRoutes(
   materials: ProjectMaterialsService,
   handlers: ProjectRecruitmentHandlerService,
   recruitment: ProjectRecruitmentService,
+  board: ProjectBoardService,
 ) {
   await parent.register(async (app) => {
     const identities = new WeakMap<FastifyRequest, AuthPrincipal>();
@@ -94,6 +106,60 @@ export async function projectFoundationRoutes(
         throw new AuthError(400, 'VALIDATION_ERROR', '项目ID必须为32位正整数');
       return id;
     };
+    app.get<{ Querystring: { mode: 'TASK' | 'BOARD' } }>(
+      `${API_PREFIX}/projects/workbench/statistics`,
+      { schema: boardStatisticsSchema },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await board.statistics(req.query.mode, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: BoardTrendsQuery }>(
+      `${API_PREFIX}/projects/workbench/board/trends`,
+      { schema: boardTrendsSchema },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await board.trends(req.body, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: { projectId: number } }>(
+      `${API_PREFIX}/projects/workbench/board/risks`,
+      { schema: boardRisksSchema },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await board.risks(req.body.projectId, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: { projectId: number } }>(
+      `${API_PREFIX}/projects/workbench/board/subtasks`,
+      { schema: boardSubtasksSchema },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await board.subtasks(req.body.projectId, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: BoardProjectsQuery }>(
+      `${API_PREFIX}/projects/workbench/board/projects`,
+      { schema: boardProjectsSchema },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await board.projects(req.body, identities.get(req)!),
+      }),
+    );
+    app.post<{ Body: { projectId: number } }>(
+      `${API_PREFIX}/projects/workbench/board/project-detail`,
+      { schema: boardBasicSchema },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await board.basicDetail(req.body.projectId, identities.get(req)!),
+      }),
+    );
     app.get<{ Querystring: { projectId: string } }>(
       `${API_PREFIX}/projects/expert-recruitments/detail`,
       { schema: recruitmentSchema('detail') },

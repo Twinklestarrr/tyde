@@ -108,39 +108,15 @@ export async function movementTasks(
 export async function syncSnapshots(
   tx: Prisma.TransactionClient,
   projectId: number,
-  snapshot: TaskSnapshot,
+  _snapshot: TaskSnapshot,
   now: Date,
 ) {
-  for (const scope of snapshot.scopes) {
-    const where = {
-      projectId_userId_perspective: {
-        projectId,
-        userId: scope.userId,
-        perspective: scope.perspective,
-      },
-    };
-    const old = await tx.projectRoleNodeSnapshot.findUnique({ where });
-    if (old && old.branchPriority > 100) continue;
-    const id = Number(
-      snapshot.sources
-        .find((s) => s.userId === scope.userId && s.role === scope.role)!
-        .sources[0]!.split(':')[1],
-    );
-    const movement = await tx.projectMemberMovement.findUniqueOrThrow({ where: { id } });
-    const data = {
-      branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL',
-      branchPriority: 100,
-      sourceBizType: 'PROJECT_MEMBER_MOVEMENT',
-      sourceBizId: id,
-      sourceEventAt: movement.createdAt,
-      calculatedAt: now,
-    };
-    await tx.projectRoleNodeSnapshot.upsert({
-      where,
-      create: { projectId, userId: scope.userId, perspective: scope.perspective, ...data },
-      update: data,
-    });
-  }
+  // 延迟加载避免转项采集器与统一仲裁的模块循环；不再先覆盖旧快照。
+  const { refreshManagementCardSnapshots } =
+    await import('../projects/project-management-card-snapshot.js');
+  const { refreshOwnerProgress } = await import('../expert/expert-owner-command.js');
+  await refreshOwnerProgress(tx, projectId, null, now);
+  return refreshManagementCardSnapshots(tx, projectId, now);
 }
 export async function createMovement(
   db: PrismaClient,
@@ -385,8 +361,8 @@ export async function createMovement(
         ['MEMBER_MOVEMENT_APPROVAL'],
         now,
       );
-      await syncSnapshots(tx, input.projectId, after, now);
-      for (const projectId of [input.projectId, ...(target ? [target.id] : [])])
+      for (const projectId of [input.projectId, ...(target ? [target.id] : [])]) {
+        const cards = await syncSnapshots(tx, projectId, after, now);
         await tx.projectEventOutbox.create({
           data: {
             projectId,
@@ -395,6 +371,7 @@ export async function createMovement(
             actorUserId: principal.userId,
             payload: {
               schemaVersion: 1,
+              ...cards,
               movementIds,
               memberIds: ids,
               sourceProjectId: input.projectId,
@@ -405,6 +382,7 @@ export async function createMovement(
             },
           },
         });
+      }
       return null;
     },
     { timeout: 30_000 },

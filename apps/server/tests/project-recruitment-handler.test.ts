@@ -1,9 +1,17 @@
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => undefined),
+}));
 import type { PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import { createApp } from '../src/application.js';
 import { readConfig } from '../src/config/index.js';
 import { AuthService, type AuthPrincipal } from '../src/modules/auth/auth.service.js';
 import { ProjectRecruitmentHandlerService } from '../src/modules/projects/project-recruitment-handler.service.js';
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(async () => ({ cardChangedRecipients: [] })),
+}));
 import {
   handlerBody,
   handlerCandidates,
@@ -16,7 +24,10 @@ const principal: AuthPrincipal = {
   sessionId: 's',
   clientType: 'desktop',
 };
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 function setup() {
   const relation = {
     id: 12,
@@ -41,6 +52,7 @@ function setup() {
         return { count: 1 };
       }),
     },
+    projectExpertAssignment: { findMany: vi.fn(async () => []) },
     user: {
       findUnique: vi.fn().mockResolvedValue({ id: 'creator' }),
       findMany: vi.fn(async ({ where }) => where.id.in.map((id: string) => ({ id }))),
@@ -138,6 +150,72 @@ test('conditional relation conflict stops reconciliation and outbox', async () =
     status: 409,
   });
   expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
+  expect(refreshManagementCardSnapshots).not.toHaveBeenCalled();
+});
+test('handoff publishes real card recipients after relation and rounds; snapshot failure aborts outbox', async () => {
+  const { service, tx, relation } = setup();
+  const cardChanges = { cardChangedRecipients: [{ userId: 'old', role: 'PM' as const }] };
+  vi.mocked(refreshManagementCardSnapshots).mockImplementationOnce(async (transaction, id) => {
+    expect(transaction).toBe(tx);
+    expect(id).toBe(3001);
+    expect(relation.expertRecruitmentHandlerUserId).toBe(handlerExample.userId);
+    expect(tx.projectTaskRound.create).toHaveBeenCalled();
+    expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
+    return cardChanges;
+  });
+  await service.change(handlerBody.examples[0]!, principal);
+  expect(tx.projectEventOutbox.create).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      data: expect.objectContaining({ payload: expect.objectContaining(cardChanges) }),
+    }),
+  );
+  tx.projectEventOutbox.create.mockClear();
+  vi.mocked(refreshManagementCardSnapshots).mockRejectedValueOnce(new Error('handler card fault'));
+  await expect(service.change(handlerBody.examples[0]!, principal)).rejects.toThrow(
+    'handler card fault',
+  );
+  expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
+});
+test('retry handoff cancels old pending round and opens the new one without completing work', async () => {
+  const { service, tx } = setup();
+  tx.projectExpertAssignment.findMany.mockResolvedValue([{ id: 91 }] as never);
+  tx.projectTaskRound.findMany.mockResolvedValue([
+    {
+      id: 61,
+      userId: 'old',
+      role: 'PM',
+      taskType: 'EXPERT_RECRUITMENT_RETRY',
+      status: 'OPEN',
+      participated: true,
+    },
+  ] as never);
+  await service.change(handlerBody.examples[0]!, principal);
+  expect(tx.projectTaskRound.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        taskType: { in: expect.arrayContaining(['EXPERT_RECRUITMENT_RETRY']) },
+      }),
+    }),
+  );
+  expect(tx.projectTaskRound.update).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: { id: 61 },
+      data: expect.objectContaining({ status: 'CANCELLED', participated: true }),
+    }),
+  );
+  expect(tx.projectTaskRound.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      data: expect.objectContaining({
+        userId: handlerExample.userId,
+        taskType: 'EXPERT_RECRUITMENT_RETRY',
+        status: 'OPEN',
+        participated: false,
+      }),
+    }),
+  );
+  expect(
+    tx.projectTaskRound.update.mock.calls.every(([arg]) => arg.data.status !== 'COMPLETED'),
+  ).toBe(true);
 });
 test('HTTP exact paths, body validation, full examples, serialization and generated Swagger', async () => {
   const { db } = setup();
@@ -202,4 +280,22 @@ test('HTTP exact paths, body validation, full examples, serialization and genera
   } finally {
     await app.close();
   }
+});
+
+test('independent progress refresh runs after business rounds and aborts cards and outbox on failure', async () => {
+  const { service, tx } = setup();
+  const cardsBefore = vi.mocked(refreshManagementCardSnapshots).mock.calls.length;
+  vi.mocked(refreshOwnerProgress).mockImplementationOnce(async (transaction, id, ids) => {
+    expect(transaction).toBe(tx);
+    expect(id).toBe(3001);
+    expect(ids).toBeNull();
+    expect(tx.projectTaskRound.findMany).toHaveBeenCalled();
+    expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
+    throw new Error('recruit independent progress fault');
+  });
+  await expect(service.change(handlerBody.examples[0]!, principal)).rejects.toThrow(
+    'recruit independent progress fault',
+  );
+  expect(vi.mocked(refreshManagementCardSnapshots).mock.calls).toHaveLength(cardsBefore);
+  expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
 });

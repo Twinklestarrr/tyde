@@ -161,6 +161,50 @@ export const organizationUpdateResponse = {
     },
   ],
 };
+export const organizationOverviewResponse = {
+  type: 'object',
+  description:
+    '指定组织的实时顶部统计；均为非负整数，无匹配记录返回0，不返回null。不执行考勤重算、离组生效或待办刷新。',
+  additionalProperties: false,
+  required: [
+    'orgId',
+    'memberTotal',
+    'activeProjectMemberTotal',
+    'todayScheduledTotal',
+    'todayPresentTotal',
+    'pendingApprovalTotal',
+  ],
+  properties: {
+    orgId: orgIdField,
+    ...Object.fromEntries(
+      Object.entries({
+        memberTotal:
+          '组织成员关系条数；包含PENDING_ACTIVATION待激活、ACTIVE在组、EXIT_APPROVING退出审批中、PENDING_LEAVE待离职；排除PENDING待审核、LEFT已离组及REMOVED已移除。',
+        activeProjectMemberTotal:
+          '本组织成员关系关联的ACTIVE项目成员记录条数；同一人多项目分别计数，不额外过滤成员组织状态、项目角色、项目状态或逻辑删除；个人接单不计入。',
+        todayScheduledTotal:
+          '上海今日生效WORK工作日排班条数；仅status=ACTIVE、dayType=WORK，不额外过滤成员状态，不包含个人或其他组织排班。',
+        todayPresentTotal:
+          '上海今日最终考勤finalStatus=PRESENT的记录条数；不使用autoStatus、打卡次数或排班数替代，不额外过滤成员状态。',
+        pendingApprovalTotal:
+          '本组织当前登录用户本人的PENDING审批节点条数；所属流程也须PENDING，不计他人节点、等待节点及其他组织，不按业务类型限制。',
+      }).map(([key, description]) => [
+        key,
+        { type: 'integer', minimum: 0, description, examples: [0] },
+      ]),
+    ),
+  },
+  examples: [
+    {
+      orgId,
+      memberTotal: 21,
+      activeProjectMemberTotal: 13,
+      todayScheduledTotal: 9,
+      todayPresentTotal: 8,
+      pendingApprovalTotal: 3,
+    },
+  ],
+};
 export function organizationSchema(
   operationId: string,
   summary: string,

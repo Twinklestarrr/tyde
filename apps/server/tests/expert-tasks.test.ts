@@ -1,7 +1,23 @@
-import { expect, test, vi } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../src/modules/auth/auth.service.js';
 import { ExpertAssignmentService } from '../src/modules/expert/expert-assignment.service.js';
+const examTask = vi.hoisted(() => vi.fn());
+vi.mock('../src/modules/expert/expert-exam-task.js', () => ({ ordinaryExamTask: examTask }));
+const output = vi.hoisted(() => vi.fn());
+const daily = vi.hoisted(() => vi.fn());
+const reporting = vi.hoisted(() => vi.fn());
+vi.mock('../src/modules/expert/expert-report-capability.js', () => ({
+  canReportExpertOutput: reporting,
+  hasReportedExpertOutputToday: daily,
+}));
+vi.mock('../src/modules/expert/expert-output-task.js', () => ({ expertOutputTask: output }));
+beforeEach(() => {
+  examTask.mockReset().mockResolvedValue(null);
+  daily.mockReset().mockResolvedValue(false);
+  output.mockReset().mockResolvedValue(null);
+  reporting.mockReset().mockResolvedValue(false);
+});
 const principal = { userId: 'user', uid: 'uid', role: 'EXPERT' } as AuthPrincipal;
 function fixture() {
   const project = {
@@ -108,19 +124,9 @@ test('expert tasks use latest member fact and never revive prior training for ex
   f.row.status = 'ACCEPTED';
   expect(await f.service.myTasks({}, principal)).toEqual([]);
   f.project.productionPlan.needWrittenExam = true;
+  examTask.mockResolvedValue({ assignmentId: 1, examId: 9 });
   expect((await f.service.myTasks({}, principal))[0].branchNodeCode).toBe('ENTRANCE_EXAM');
-  expect(f.tx.entranceExamAttempt.findMany).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      where: expect.objectContaining({
-        OR: [{ submittedAt: { not: null } }, { cancelledAt: { not: null } }],
-      }),
-    }),
-  );
-  f.tx.entranceExamAttempt.findMany.mockResolvedValue([
-    { cancelledAt: new Date(), exam: { projectId: 10 } },
-  ]);
-  expect(await f.service.myTasks({}, principal)).toEqual([]);
-  f.tx.entranceExamAttempt.findMany.mockResolvedValue([{ exam: { projectId: 10 } }]);
+  examTask.mockResolvedValue(null);
   expect(await f.service.myTasks({}, principal)).toEqual([]);
   const current = {
     projectId: 10,
@@ -182,9 +188,117 @@ test('expert tasks owner history blocks legacy fallback and owner exam expires w
   f.row.owners[0].status = 'ACTIVE';
   f.project.productionPlan.needWrittenExam = true;
   f.tx.projectEntranceExam.findMany.mockResolvedValue([{ projectId: 10 }]);
+  examTask.mockResolvedValue({ assignmentId: 1, examId: 9 });
   expect((await f.service.myTasks({}, principal))[0].branchNodeCode).toBe('ENTRANCE_EXAM');
-  f.tx.entranceExamAttempt.findMany.mockResolvedValue([{ exam: { projectId: 10 } }]);
+  examTask.mockResolvedValue(null);
   expect(await f.service.myTasks({}, principal)).toEqual([]);
   f.tx.projectEntranceExam.findMany.mockResolvedValue([]);
   expect((await f.service.myTasks({}, principal))[0].branchNodeCode).toBe(null);
+});
+
+test('expert tasks restore live report review for organization owners and keep accepted filters', async () => {
+  const f = fixture();
+  f.row.subjectType = 'ORGANIZATION';
+  f.row.organizationId = 'org';
+  f.row.status = 'ACCEPTED';
+  f.tx.userOrgRel.findMany.mockResolvedValue([{ orgId: 'org', position: 'OWNER' }]);
+  output.mockResolvedValue('OUTPUT_DATA_REVIEW');
+  const cards = await f.service.myTasks({ status: 'ACCEPTED' }, principal);
+  expect(cards).toHaveLength(1);
+  expect(cards[0]).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    accessContext: { acceptedOrganizationOwner: true, canViewOrganizationData: true },
+  });
+  expect(output).toHaveBeenLastCalledWith(f.tx, 10, 'org', principal, expect.any(Date));
+  output.mockResolvedValue(null);
+  expect(await f.service.myTasks({}, principal)).toEqual([]);
+});
+test('expert tasks restore correction without an active member but never grant accept or reporting operations', async () => {
+  const f = fixture();
+  f.row.status = 'ACCEPTED';
+  output.mockResolvedValue('PRODUCTION_TASK');
+  expect((await f.service.myTasks({}, principal))[0]).toMatchObject({
+    branchNodeCode: 'PRODUCTION_TASK',
+    operations: { canAccept: false, canReject: false, canReportOutput: false },
+  });
+  f.row.status = 'PENDING_ACCEPTANCE';
+  output.mockClear();
+  expect((await f.service.myTasks({}, principal))[0].branchNodeCode).toBe(null);
+  expect(output).not.toHaveBeenCalled();
+});
+
+test('expert report button follows live capability only in accepted production, preserving training and review priority', async () => {
+  const f = fixture();
+  reporting.mockResolvedValue(true);
+  f.row.status = 'ACCEPTED';
+  output.mockResolvedValue('PRODUCTION_TASK');
+  expect((await f.service.myTasks({}, principal))[0].operations.canReportOutput).toBe(true);
+  expect(reporting).toHaveBeenLastCalledWith(f.tx, 10, null, principal, expect.any(Date));
+  reporting.mockResolvedValue(false);
+  expect((await f.service.myTasks({}, principal))[0].operations.canReportOutput).toBe(false);
+  reporting.mockResolvedValue(true);
+  for (const branch of ['OUTPUT_DATA_REVIEW', 'STANDARD_TRAINING']) {
+    reporting.mockClear();
+    if (branch === 'OUTPUT_DATA_REVIEW') output.mockResolvedValue(branch);
+    else {
+      output.mockResolvedValue('PRODUCTION_TASK');
+      f.tx.projectMember.findMany.mockResolvedValue([
+        {
+          projectId: 10,
+          status: 'ACTIVE',
+          entryDecision: 'YES',
+          joinedAt: new Date(),
+          standardTrainingConfirmedAt: null,
+        },
+      ]);
+    }
+    expect((await f.service.myTasks({}, principal))[0].operations.canReportOutput).toBe(false);
+    expect(reporting).not.toHaveBeenCalled();
+  }
+});
+
+test('daily reporting hides only ordinary production cards, retaining training, review, correction and pending acceptance', async () => {
+  const f = fixture();
+  f.row.status = 'ACCEPTED';
+  const member = {
+    projectId: 10,
+    status: 'ACTIVE',
+    entryDecision: 'YES',
+    joinedAt: new Date(),
+    standardTrainingConfirmedAt: new Date() as Date | null,
+  };
+  f.tx.projectMember.findMany.mockResolvedValue([member]);
+  daily.mockResolvedValue(true);
+  expect(await f.service.myTasks({}, principal)).toEqual([]);
+  expect(daily).toHaveBeenLastCalledWith(f.tx, 10, 'user', expect.any(Date));
+  for (const branch of ['OUTPUT_DATA_REVIEW', 'PRODUCTION_TASK']) {
+    output.mockResolvedValue(branch);
+    expect((await f.service.myTasks({}, principal))[0].branchNodeCode).toBe(branch);
+  }
+  output.mockResolvedValue(null);
+  member.standardTrainingConfirmedAt = null;
+  expect((await f.service.myTasks({}, principal))[0].branchNodeCode).toBe('STANDARD_TRAINING');
+  f.row.status = 'PENDING_ACCEPTANCE';
+  expect((await f.service.myTasks({}, principal))[0].operations.canAccept).toBe(true);
+  f.row.status = 'ACCEPTED';
+  member.standardTrainingConfirmedAt = new Date();
+  daily.mockResolvedValue(false);
+  expect((await f.service.myTasks({}, principal))[0].branchNodeCode).toBe('PRODUCTION_TASK');
+  daily.mockRejectedValue(new Error('daily source unavailable'));
+  await expect(f.service.myTasks({}, principal)).rejects.toThrow('daily source unavailable');
+});
+
+test('ordinary exam cards require a live source for the same assignment and preserve bound exams after closure', async () => {
+  const f = fixture();
+  f.row.status = 'ACCEPTED';
+  f.project.productionPlan.needWrittenExam = true;
+  expect(await f.service.myTasks({}, principal)).toEqual([]);
+  examTask.mockResolvedValue({ assignmentId: 2, examId: 9 });
+  expect(await f.service.myTasks({}, principal)).toEqual([]);
+  examTask.mockResolvedValue({ assignmentId: 1, examId: 9 });
+  expect(await f.service.myTasks({}, principal)).toMatchObject([
+    { branchNodeCode: 'ENTRANCE_EXAM' },
+  ]);
+  expect(examTask).toHaveBeenLastCalledWith(f.tx, 10, 'user', expect.any(Date));
+  expect(f.tx.projectEntranceExam.findMany).toHaveResolvedWith([]);
 });

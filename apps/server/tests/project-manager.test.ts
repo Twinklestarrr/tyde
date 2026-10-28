@@ -1,3 +1,13 @@
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => undefined),
+}));
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(async () => ({
+    cardChangedRecipients: [{ userId: 'card-user', role: 'EXPERT' }],
+  })),
+}));
 import type { PrismaClient, Prisma, ProjectTaskRound } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import { FileService } from '../src/modules/files/file.service.js';
@@ -205,6 +215,7 @@ test('first recruit writes assignment, only node fields, completed/open rounds a
       actorUserId: principal.userId,
       payload: expect.objectContaining({
         schemaVersion: 1,
+        cardChangedRecipients: [{ userId: 'card-user', role: 'EXPERT' }],
         projectAudience: expect.arrayContaining([{ userId: candidate.userId, role: 'PM' }]),
       }),
     }),
@@ -499,4 +510,31 @@ test('claimed project attachments allow only independently authorized current PM
     status: 403,
   });
   expect(storage.open).toHaveBeenCalledTimes(1);
+});
+
+test('manager card collection failure aborts before recording assignment event', async () => {
+  const f = setup();
+  vi.mocked(refreshManagementCardSnapshots).mockRejectedValueOnce(new Error('cards unavailable'));
+  await expect(
+    f.service.recruit({ projectId: base.id, candidateUserId: candidate.userId }, principal),
+  ).rejects.toThrow('cards unavailable');
+  expect(f.tx.projectEventOutbox.create).not.toHaveBeenCalled();
+});
+
+test('independent progress refresh runs after business rounds and aborts cards and outbox on failure', async () => {
+  const { service, tx } = setup();
+  const cardsBefore = vi.mocked(refreshManagementCardSnapshots).mock.calls.length;
+  vi.mocked(refreshOwnerProgress).mockImplementationOnce(async (transaction, id, ids) => {
+    expect(transaction).toBe(tx);
+    expect(id).toBe(base.id);
+    expect(ids).toBeNull();
+    expect(tx.projectTaskRound.findMany).toHaveBeenCalled();
+    expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
+    throw new Error('recruit independent progress fault');
+  });
+  await expect(
+    service.recruit({ projectId: base.id, candidateUserId: candidate.userId }, principal),
+  ).rejects.toThrow('recruit independent progress fault');
+  expect(vi.mocked(refreshManagementCardSnapshots).mock.calls).toHaveLength(cardsBefore);
+  expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
 });

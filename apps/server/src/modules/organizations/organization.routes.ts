@@ -43,6 +43,7 @@ import {
   organizationUpdateBody,
   organizationDetailResponse,
   organizationUpdateResponse,
+  organizationOverviewResponse,
 } from './organization.schema.js';
 
 export async function organizationRoutes(
@@ -79,6 +80,28 @@ export async function organizationRoutes(
           : req.cookies[config.cookieSecure ? '__Host-tyde_session' : 'tyde_session'];
       identities.set(req, await auth.authenticate(token, client));
     });
+    app.get<{ Querystring: { orgId: string } }>(
+      `${API_PREFIX}/organizations/overview`,
+      {
+        schema: {
+          ...organizationSchema(
+            'getOrganizationOverview',
+            '获取组织顶部数据看板',
+            '显式指定组织；仅该组织ACTIVE、EXIT_APPROVING或PENDING_LEAVE的OWNER主管/ADMIN管理员可查，不限定当前会话业务角色。五项聚合在同一RepeatableRead只读事务快照完成；今日为Asia/Shanghai自然日。',
+            organizationOverviewResponse,
+          ),
+          querystring: {
+            ...organizationQuery,
+            description: '组织概览查询参数；orgId必填，无默认组织。',
+          },
+        },
+      },
+      async (req) => ({
+        code: 200,
+        message: '操作成功',
+        data: await service.overview(req.query.orgId, identities.get(req)!),
+      }),
+    );
     app.get<{ Querystring: { orgId: string } }>(
       `${API_PREFIX}/organizations`,
       {

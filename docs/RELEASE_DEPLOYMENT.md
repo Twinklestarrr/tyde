@@ -37,6 +37,8 @@ git push origin HEAD:release
 
 整理前本地开发分支与 `origin/release` 已分叉（当时领先 51、落后 32），且有未提交业务修改。本次先整理待发布改动、合并最新 `origin/release` 并验证，再仅普通 push 到 `origin/release`；不直接推送两个仓库的 main，不用 `--force` 跳过分叉。
 
+本次合并验证：`pnpm test:features` 的10阶段完整复跑通过，包括233核心、718后端单测、167页面（无失败/跳过/重试）、189 Agent服务和89 Agent Web；`pnpm typecheck`、`pnpm lint`、变更文件格式检查及 `pnpm build:vercel` 通过。首次核心运行有1项 Electron 启动脚本用例失败，单项及整套复跑均通过，未放宽超时。未执行数据库集成、迁移、seed、真实模型或生产部署。源仓库启用变量和同步 secret 均未配置，跨仓生产同步保持关闭。
+
 本地验证命令（仅临时本地 Git 仓库，无网络、凭据或部署）：
 
 ```sh

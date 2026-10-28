@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { transferCandidate, lockTransferCandidate } from '../personnel/personnel-transfer-exam.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
@@ -236,6 +238,8 @@ export class ExamCandidateService {
         });
         if (!version || !paper || !paper.questions.length)
           throw new AuthError(500, 'INTERNAL_ERROR', '应试记录绑定的版本或试卷异常');
+        await refreshOwnerProgress(tx, projectId, [p.userId], now);
+        await refreshManagementCardSnapshots(tx, projectId, now);
         return {
           projectId,
           attemptId: attempt.id,

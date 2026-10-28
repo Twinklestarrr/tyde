@@ -22,6 +22,45 @@ export class OrganizationService {
     readonly files: FileRegistryService,
   ) {}
 
+  async overview(orgId: string, principal: AuthPrincipal, now = new Date()) {
+    return this.db.$transaction(
+      async (tx) => {
+        await this.requireManager(tx, orgId, principal.userId);
+        await this.requireOrganization(tx, orgId);
+        // date列使用UTC午夜承载上海业务日期，不依赖数据库会话时区。
+        const today = new Date(new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(0, 10));
+        const memberTotal = await tx.userOrgRel.count({
+          where: { orgId, joinStatus: { in: ['PENDING_ACTIVATION', ...participatingStatuses] } },
+        });
+        const activeProjectMemberTotal = await tx.projectMember.count({
+          where: { status: 'ACTIVE', organizationMembership: { orgId } },
+        });
+        const todayScheduledTotal = await tx.orgMemberSchedule.count({
+          where: { orgId, scheduleDate: today, status: 'ACTIVE', dayType: 'WORK' },
+        });
+        const todayPresentTotal = await tx.orgAttendanceDaily.count({
+          where: { orgId, attendanceDate: today, finalStatus: 'PRESENT' },
+        });
+        const pendingApprovalTotal = await tx.approvalNode.count({
+          where: {
+            approverId: principal.userId,
+            nodeStatus: 'PENDING',
+            flow: { applicantOrgId: orgId, status: 'PENDING' },
+          },
+        });
+        return {
+          orgId,
+          memberTotal,
+          activeProjectMemberTotal,
+          todayScheduledTotal,
+          todayPresentTotal,
+          pendingApprovalTotal,
+        };
+      },
+      { isolationLevel: 'RepeatableRead' },
+    );
+  }
+
   async detail(orgId: string, principal: AuthPrincipal) {
     return this.db.$transaction(async (tx) => {
       const membership = await this.requireManager(tx, orgId, principal.userId);

@@ -1,3 +1,5 @@
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
 import { tryConsumeTransferResult } from '../personnel/personnel-transfer-exam.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
@@ -185,6 +187,8 @@ export class ExamCandidateCommandService {
             updatedBy: p.uid,
           },
         });
+        await finishCandidateTask(tx, input.projectId, p.userId, now, true);
+        const cards = await syncGradingTasks(tx, input.projectId, before, now);
         const first = rounds[0]!;
         await tx.projectEventOutbox.create({
           data: {
@@ -198,11 +202,13 @@ export class ExamCandidateCommandService {
             payload:
               first.gradingMode === 'AUTO'
                 ? {
+                    cardChangedRecipients: cards.cardChangedRecipients,
                     gradingRecordId: firstRecordId,
                     provider: 'mock',
                     executionStatus: 'NOT_EXECUTED',
                   }
                 : {
+                    cardChangedRecipients: cards.cardChangedRecipients,
                     attemptId: attempt.id,
                     nextRoundId: first.id,
                     reviewerUserIds: reviewerIds(first.reviewersJson),
@@ -210,8 +216,6 @@ export class ExamCandidateCommandService {
                   },
           },
         });
-        await syncGradingTasks(tx, input.projectId, before, now);
-        await finishCandidateTask(tx, input.projectId, p.userId, now, true);
         return {
           attemptId: attempt.id,
           answerCount: answers.length,
@@ -233,6 +237,9 @@ export class ExamCandidateCommandService {
           where: { id: attempt.id },
           data: { cancelledAt: now, updatedBy: p.uid },
         });
+        await finishCandidateTask(tx, input.projectId, p.userId, now, false);
+        await refreshOwnerProgress(tx, input.projectId, null, now);
+        const cards = await refreshManagementCardSnapshots(tx, input.projectId, now);
         await tx.projectEventOutbox.create({
           data: {
             projectId: input.projectId,
@@ -245,10 +252,10 @@ export class ExamCandidateCommandService {
               sourceBizId: attempt.sourceBizId,
               admitted: false,
               cancelled: true,
+              cardChangedRecipients: cards.cardChangedRecipients,
             },
           },
         });
-        await finishCandidateTask(tx, input.projectId, p.userId, now, false);
         return { attemptId: attempt.id, cancelledAt: projectTime(now) };
       },
       { timeout: 30000 },
@@ -270,15 +277,6 @@ async function finishCandidateTask(
       status: submitted ? 'COMPLETED' : 'CANCELLED',
       participated: submitted,
       finishedAt: now,
-    },
-  });
-  await tx.projectRoleNodeSnapshot.deleteMany({
-    where: {
-      projectId,
-      userId,
-      perspective: { in: ['EXPERT_INDIVIDUAL', 'EXPERT_MEMBER', 'EXPERT_PROJECT_OWNER'] },
-      branchNodeCode: 'ENTRANCE_EXAM',
-      sourceBizType: 'EXPERT_ASSIGNMENT',
     },
   });
 }

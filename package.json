@@ -58,6 +58,7 @@
     "db:migrate": "pnpm --filter @tyde/server db:migrate",
     "db:deploy": "pnpm --filter @tyde/server db:deploy",
     "db:cleanup": "pnpm --filter @tyde/server db:cleanup",
+    "db:seed:project-categories": "tsx apps/server/src/seed-project-categories.ts",
     "db:deploy:test": "node scripts/migrate-test.mjs",
     "migrate:agent": "pnpm --filter @tyde/agent migrate",
     "check:agent-db": "pnpm --filter @tyde/agent db:check",

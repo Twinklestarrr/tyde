@@ -1,3 +1,4 @@
+import { syncSnapshots } from '../src/modules/personnel/personnel-movement-create.js';
 import { expect, test, vi } from 'vitest';
 import {
   applyMovement,
@@ -10,7 +11,9 @@ vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
 }));
 vi.mock('../src/modules/personnel/personnel-movement-create.js', () => ({
   movementTasks: vi.fn(async () => ({ scopes: [], sources: [] })),
-  syncSnapshots: vi.fn(async () => {}),
+  syncSnapshots: vi.fn(async () => ({
+    cardChangedRecipients: [{ userId: 'restored', role: 'EXPERT' }],
+  })),
   projectOwners: vi.fn(async () => [{ id: 'new', uid: 'new', status: 'ACTIVE' }]),
 }));
 vi.mock('../src/modules/projects/project-task-rounds.js', () => ({
@@ -224,6 +227,16 @@ test('approver refresh cancels only current obsolete candidate, adds current man
   });
   expect(tx.approvalActionLog.create.mock.calls[0]![0].data.actionType).toBe('TRANSFER');
   expect(tx.projectMember.update).not.toHaveBeenCalled();
+  expect(tx.projectEventOutbox.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      data: expect.objectContaining({
+        payload: expect.objectContaining({
+          cardChangedRecipients: [{ userId: 'restored', role: 'EXPERT' }],
+        }),
+      }),
+    }),
+  );
+  expect(tx.projectRoleNodeSnapshot.deleteMany).not.toHaveBeenCalled();
 });
 test('approver refresh is a no-op for business waits, other project side and unchanged candidates', async () => {
   for (const kind of ['wait', 'side', 'unchanged']) {
@@ -259,4 +272,15 @@ test('due scan isolates failures, rechecks concurrent terminal records and conti
     skipped: 1,
     failed: 1,
   });
+});
+
+test('approver refresh can defer cards to enclosing owner transaction without suppressing approval event', async () => {
+  const { m, tx } = fixture();
+  m.status = 'PROCESSING';
+  m.flow!.status = 'PENDING';
+  vi.mocked(syncSnapshots).mockClear();
+  expect(await refreshMovementApprovers(tx as never, 2, now, false)).toBe(1);
+  expect(syncSnapshots).not.toHaveBeenCalled();
+  expect(tx.projectRoleNodeSnapshot.deleteMany).not.toHaveBeenCalled();
+  expect(tx.projectEventOutbox.create).toHaveBeenCalledOnce();
 });
