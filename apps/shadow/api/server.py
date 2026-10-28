@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 
 from api.lifecycle import Lifecycle
+from api.progress import describe_action
 from api.schemas import (CancelResponse, LLMConfigRequest, LLMConfigResponse, ProgressResponse,
                          ResumeResponse, TaskRequest, TaskResponse)
 from auth.audit import AuditError, AuditLog
@@ -149,8 +150,17 @@ async def _execute_task(app, record, description, config):
                 record.launch_attempted = True
 
             bus.on(BrowserLaunchEvent, observe_launch)
+
+        def action_ready(state_summary, model_output, step_num):
+            if record.status != "running" or record.cancel_requested or record.finishing:
+                return
+            action_message = describe_action(model_output)
+            if action_message is not None:
+                record.message = action_message
+
         record.agent = _build_agent(task=description, browser_session=record.session,
-            task_id=record.task_id, account_id=record.account_id, config=config, enable_signal_handler=False)
+            task_id=record.task_id, account_id=record.account_id, config=config, enable_signal_handler=False,
+            register_new_step_callback=action_ready)
         record.status = "running"
         agent_started = True
 

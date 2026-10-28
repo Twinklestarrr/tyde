@@ -20,7 +20,7 @@ def supports_deepseek_vision(llm) -> bool:
 
 
 def build_llm(config: Settings | None = None, *, model: str | None = None):
-    """统一使用 LLM_API_KEY，不依赖第三方提供方专属环境变量。"""
+    """统一使用 LLM_API_KEY。"""
     config = config if config is not None else settings
     clients = {"deepseek": _DeepSeekClient, "openai": ChatOpenAI}
     provider = config.LLM_PROVIDER.strip().lower()

@@ -846,6 +846,138 @@ async def test_progress_waits_for_step_end_and_preserves_url_after_budget_row(en
         assert body["current_url"] == "https://example.com/next"
 
 
+def emit_action(agent, action, step=1):
+    callback = agent.kwargs.get("register_new_step_callback")
+    if callback is not None:
+        callback(SimpleNamespace(), SimpleNamespace(action=[action] if action is not None else []), step)
+
+
+@pytest.mark.asyncio
+async def test_action_message_is_visible_before_step_end_and_replaced_by_latest_action(environment):
+    env = environment
+    async with client_for(env) as client:
+        task_id = (await submit(client)).json()["task_id"]
+        await asyncio.wait_for(env.started.wait(), 2)
+        agent = env.agents[0]
+        agent.history.history.append(SimpleNamespace(state=SimpleNamespace(url="https://example.com/start")))
+        await agent.callbacks["on_step_start"](agent)
+        emit_action(agent, {"click": {"index": 2}})
+        body = (await client.get(f"/task/{task_id}/status")).json()
+        assert body["status"] == "running" and body["message"] == "正在点击页面元素"
+        assert body["steps_completed"] == 0 and body["current_url"] == "https://example.com/start"
+
+        emit_action(agent, {"navigate": {"url": "baidu.com"}}, step=2)
+        body = (await client.get(f"/task/{task_id}/status")).json()
+        assert body["message"] == "正在导航 baidu.com"
+        assert body["steps_completed"] == 0 and body["current_url"] == "https://example.com/start"
+        assert set(body) == {"task_id", "status", "steps_completed", "current_url", "message",
+            "takeover_reason", "login_required", "captcha_detected"}
+        emit_action(agent, None, step=3)
+        assert (await client.get(f"/task/{task_id}/status")).json()["message"] == body["message"]
+
+
+@pytest.mark.asyncio
+async def test_action_message_polling_is_read_only(environment):
+    env = environment
+    async with client_for(env) as client:
+        task_id = (await submit(client)).json()["task_id"]
+        await asyncio.wait_for(env.started.wait(), 2)
+        agent = env.agents[0]
+        emit_action(agent, {"input": {"text": "private-input", "index": 1}})
+        audit_before = env.path.read_bytes()
+
+        async def forbidden(*args, **kwargs):
+            pytest.fail("轮询动作描述不能调用模型、读取页面或推进任务")
+
+        agent.run = forbidden
+        agent.llm = SimpleNamespace(ainvoke=forbidden)
+        env.sessions[0].get_browser_state_summary = forbidden
+        for _ in range(3):
+            response = await client.get(f"/task/{task_id}/status")
+            assert response.json()["message"] == "正在输入内容"
+            assert response.json()["steps_completed"] == 0
+            assert "private-input" not in response.text
+        assert env.path.read_bytes() == audit_before
+        assert len(env.agents) == len(env.sessions) == 1
+
+
+@pytest.mark.asyncio
+async def test_action_message_does_not_mask_takeover_or_cancellation(environment):
+    from core.orchestrator.takeover import TakeoverSnapshot
+
+    env = environment
+    async with client_for(env) as client:
+        task_id = (await submit(client)).json()["task_id"]
+        await asyncio.wait_for(env.started.wait(), 2)
+        agent = env.agents[0]
+        emit_action(agent, {"click": {"index": 1}})
+        assert (await client.get(f"/task/{task_id}/status")).json()["message"] == "正在点击页面元素"
+        agent.takeover.snapshot = TakeoverSnapshot(task_id, status="awaiting_user",
+            message="请人工登录", takeover_reason="login_required", login_required=True)
+        body = (await client.get(f"/task/{task_id}/status")).json()
+        assert body["status"] == "awaiting_user" and body["message"] == "请人工登录"
+        assert body["login_required"] and body["takeover_reason"] == "login_required"
+
+        env.block_cleanup = True
+        assert (await client.post(f"/task/{task_id}/cancel")).status_code == 202
+        await asyncio.wait_for(env.cleanup_started.wait(), 2)
+        saved = env.app.state.task_results[task_id]
+        message_before = saved.message
+        emit_action(agent, {"navigate": {"url": "https://example.com/late"}})
+        assert saved.message == message_before
+        body = (await client.get(f"/task/{task_id}/status")).json()
+        assert body["status"] == "cancelling" and body["message"] == "正在取消任务"
+
+
+@pytest.mark.asyncio
+async def test_action_message_cannot_overwrite_message_during_final_cleanup(environment):
+    env = environment
+    async with client_for(env) as client:
+        task_id = (await submit(client)).json()["task_id"]
+        await asyncio.wait_for(env.started.wait(), 2)
+        agent = env.agents[0]
+        emit_action(agent, {"done": {"text": "not-final-yet", "success": True}})
+        body = (await client.get(f"/task/{task_id}/status")).json()
+        assert body["status"] == "running" and body["message"] == "正在整理任务结果"
+        env.block_kill = True
+        env.release.set()
+        await asyncio.wait_for(env.kill_started.wait(), 2)
+        saved = env.app.state.task_results[task_id]
+        assert saved.finishing
+        message_before = saved.message
+        emit_action(agent, {"click": {"index": 9}})
+        assert saved.message == message_before
+        env.kill_release.set()
+        await result(env, task_id)
+        assert (await client.get(f"/task/{task_id}/status")).json()["message"] == env.final_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome, expected", [
+    ("completed", "页面标题：Example Domain\n已完成读取。"),
+    ("failed", "任务未完成"),
+    ("cancelled", "任务已取消"),
+])
+async def test_action_message_cannot_overwrite_terminal_results(environment, outcome, expected):
+    env = environment
+    async with client_for(env) as client:
+        task_id = (await submit(client)).json()["task_id"]
+        await asyncio.wait_for(env.started.wait(), 2)
+        agent = env.agents[0]
+        emit_action(agent, {"click": {"index": 1}})
+        assert (await client.get(f"/task/{task_id}/status")).json()["message"] == "正在点击页面元素"
+        if outcome == "cancelled":
+            await client.post(f"/task/{task_id}/cancel")
+        else:
+            env.success = outcome == "completed"
+            env.release.set()
+        saved = await result(env, task_id)
+        emit_action(agent, {"navigate": {"url": "https://example.com/late"}})
+        body = (await client.get(f"/task/{task_id}/status")).json()
+        assert saved.message == expected
+        assert body["status"] == outcome and body["message"] == expected
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("success", [True, False, None])
 async def test_terminal_status_survives_release_and_ignores_old_waiting_snapshot(environment, success):

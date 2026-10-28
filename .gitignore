@@ -62,6 +62,7 @@ apps/electron/resources/runtime.json
 /apps/shadow/**/env/
 
 # 编辑器与系统文件
+/apps/shadow/.agents/
 /apps/shadow/**/.idea/
 /apps/shadow/**/.vscode/
 /apps/shadow/**/*.swp
