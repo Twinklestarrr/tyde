@@ -9,7 +9,18 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const stages = ['core', 'server-unit', 'web-build', 'electron-build', 'frontend'];
+const stages = [
+  'core',
+  'server-unit',
+  'web-build',
+  'electron-build',
+  'frontend',
+  'agent-contracts',
+  'agent-build',
+  'agent-unit',
+  'agent-web-build',
+  'agent-web-unit',
+];
 const stats = { expected: 2, unexpected: 0, skipped: 0, flaky: 0 };
 const fakePnpm = String.raw`#!/usr/bin/env node
 import { spawn } from 'node:child_process';
@@ -29,8 +40,11 @@ if (worker === 'child' || worker === 'grandchild') {
   const args = process.argv.slice(2);
   const id = args[0] === 'test:core' ? 'core' : args.includes('@tyde/server') ? 'server-unit'
     : args[0] === 'build:web' ? 'web-build' : args.includes('@tyde/electron') ? 'electron-build'
-    : args.includes('playwright') ? 'frontend' : 'unexpected-command';
-  record('stage', { id, args });
+    : args.includes('playwright') ? 'frontend' : args[0] === 'check:agent-contracts' ? 'agent-contracts'
+    : args[0] === 'build:agent' ? 'agent-build' : args.includes('@tyde/agent') ? 'agent-unit'
+    : args[0] === 'build:agent-web' ? 'agent-web-build' : args.includes('@tyde/agent-web') ? 'agent-web-unit'
+    : 'unexpected-command';
+  record('stage', { id, args, databaseConfigured: 'AGENT_TEST_DATABASE_URL' in process.env });
   console.log('fixture stdout ' + id);
   console.error('fixture stderr ' + id);
   if (id === 'frontend' && process.env.FIXTURE_HOLD === '1') {
@@ -44,13 +58,14 @@ if (worker === 'child' || worker === 'grandchild') {
   } else {
     if (id === 'frontend' && process.env.FIXTURE_NO_REPORT !== '1')
       writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE,
-        JSON.stringify({ stats: { expected: 2, unexpected: 0, skipped: 0, flaky: 0 } }));
+        JSON.stringify({ stats: process.env.FIXTURE_STATS ? JSON.parse(process.env.FIXTURE_STATS)
+          : { expected: 2, unexpected: 0, skipped: 0, flaky: 0 } }));
     process.exitCode = process.env.FIXTURE_FAIL === id ? 7 : id === 'unexpected-command' ? 9 : 0;
   }
 }
 `;
 
-async function waitFor(check, message, timeout = 15_000) {
+async function waitFor(check, message, timeout = 30_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const value = await check();
@@ -91,6 +106,15 @@ async function fixture(t, occupied = false) {
     if (probe !== external) await new Promise((accept) => probe.close(accept));
   await mkdir(join(root, 'scripts'));
   await mkdir(join(root, 'bin'));
+  await mkdir(join(root, 'apps/agent/tests'), { recursive: true });
+  for (const name of [
+    'zeta.test.ts',
+    'alpha.test.ts',
+    'storage-migrations.integration.test.ts',
+    'runtime.integration.ts',
+    'helpers.ts',
+  ])
+    await writeFile(join(root, 'apps/agent/tests', name), '');
   await writeFile(eventsFile, '');
   const source = await readFile(join(project, 'scripts/test-features.mjs'), 'utf8');
   assert.match(source, /const ports = \[5176, 5177\];/, '仅替换临时副本的测试端口');
@@ -183,14 +207,30 @@ async function fixture(t, occupied = false) {
   };
 }
 
-test('feature runner executes five isolated stages in order and records real report stats', async (t) => {
+test('feature runner executes ten isolated stages and excludes Agent database tests and credentials', async (t) => {
   const local = await fixture(t);
-  const result = await local.launch().finish();
+  const result = await local
+    .launch({ AGENT_TEST_DATABASE_URL: 'postgresql://fixture/never_connect_test' })
+    .finish();
   assert.equal(result.code, 0, result.output);
+  const events = await local.events();
   assert.deepEqual(
-    (await local.events()).map((row) => row.id),
+    events.map((row) => row.id),
     stages,
   );
+  assert.ok(events.every((row) => !row.databaseConfigured));
+  assert.deepEqual(events.find((row) => row.id === 'agent-unit').args, [
+    '--filter',
+    '@tyde/agent',
+    'exec',
+    'node',
+    '--import',
+    'tsx',
+    '--test',
+    '--test-concurrency=2',
+    'tests/alpha.test.ts',
+    'tests/zeta.test.ts',
+  ]);
   const { latest, summary, markdown, directory } = await local.report();
   assert.equal(latest.result, 'passed');
   assert.equal(summary.result, 'passed');
@@ -203,6 +243,8 @@ test('feature runner executes five isolated stages in order and records real rep
   assert.ok(summary.checks.every((row) => row.status === 'passed' && row.code === 0));
   assert.deepEqual(summary.frontend, stats);
   assert.deepEqual(summary.notRun, []);
+  assert.ok(summary.notExecuted.includes('PostgreSQL 数据库集成与迁移'));
+  assert.ok(summary.notExecuted.includes('真实模型与业务 Agent 联调'));
   assert.match(markdown, /2 通过，0 失败/);
   for (const stage of stages) {
     const log = await readFile(join(directory, stage + '.log'), 'utf8');
@@ -229,7 +271,7 @@ test('a failed stage prevents every later command and reports its exit code', as
   assert.ok(alive(external.pid), '阶段失败不能终止外部进程');
   const { summary } = await local.report();
   assert.equal(summary.result, 'failed');
-  assert.deepEqual(summary.notRun, ['electron-build', 'frontend']);
+  assert.deepEqual(summary.notRun, stages.slice(3));
   assert.deepEqual(
     summary.checks.map(({ id, status, code }) => ({ id, status, code })),
     [
@@ -285,9 +327,45 @@ test('an exit-zero frontend command without its JSON stats cannot pass', async (
   assert.equal(result.code, 1, result.output);
   assert.deepEqual(
     (await local.events()).map((row) => row.id),
-    stages,
+    stages.slice(0, 5),
   );
   const { summary } = await local.report();
   assert.equal(summary.result, 'failed');
   assert.ok(summary.failure, '缺失页面执行报告必须给出原因');
+  assert.equal(summary.checks.at(-1).id, 'frontend');
+  assert.equal(summary.checks.at(-1).status, 'failed');
+  assert.equal(summary.checks.at(-1).code, 0, '保留真实退出码，与报告校验失败分开');
+  assert.deepEqual(summary.notRun, stages.slice(5));
+});
+
+test('zero, invalid and failed frontend report counts block later Agent stages', async (t) => {
+  for (const [label, counts] of [
+    ['zero tests', { ...stats, expected: 0 }],
+    ['invalid number', { ...stats, skipped: '0' }],
+    ['failed cases', { ...stats, unexpected: 1 }],
+  ])
+    await t.test(label, async (t) => {
+      const local = await fixture(t);
+      const result = await local.launch({ FIXTURE_STATS: JSON.stringify(counts) }).finish();
+      assert.equal(result.code, 1, result.output);
+      assert.deepEqual(
+        (await local.events()).map((row) => row.id),
+        stages.slice(0, 5),
+      );
+      const { summary } = await local.report();
+      assert.equal(summary.result, 'failed');
+      assert.equal(summary.checks.at(-1).id, 'frontend');
+      assert.equal(summary.checks.at(-1).status, 'failed');
+      assert.deepEqual(summary.notRun, stages.slice(5));
+    });
+});
+
+test('frontend skips and flaky results retain their actual counts in the report', async (t) => {
+  const local = await fixture(t);
+  const counts = { ...stats, skipped: 1, flaky: 1 };
+  const result = await local.launch({ FIXTURE_STATS: JSON.stringify(counts) }).finish();
+  assert.equal(result.code, 0, result.output);
+  const { summary, markdown } = await local.report();
+  assert.deepEqual(summary.frontend, counts);
+  assert.match(markdown, /2 通过，0 失败，1 跳过，1 重试后通过/);
 });

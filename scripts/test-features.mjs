@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { dirname, relative, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -19,6 +19,7 @@ const owned = new Map();
 let active;
 let interrupted = false;
 let stopTimer;
+let frontend;
 
 /** 记录出生时间，清理仅限本次命令的后代，避免误杀用户进程或复用的 PID。 */
 function processes() {
@@ -142,6 +143,30 @@ const steps = [
       resolve(directory, 'browser'),
     ],
   ],
+  ['agent-contracts', 'Agent 共享契约一致性', ['check:agent-contracts']],
+  ['agent-build', 'Agent 服务类型检查与构建', ['build:agent']],
+  [
+    'agent-unit',
+    'Agent 隔离服务测试（排除数据库集成）',
+    [
+      '--filter',
+      '@tyde/agent',
+      'exec',
+      'node',
+      '--import',
+      'tsx',
+      '--test',
+      '--test-concurrency=2',
+    ],
+  ],
+  ['agent-web-build', 'Agent Web 类型检查与构建', ['build:agent-web']],
+  ['agent-web-unit', 'Agent Web 控制器与组件测试', ['--filter', '@tyde/agent-web', 'test']],
+];
+const notExecuted = [
+  'PostgreSQL 数据库集成与迁移',
+  '真实业务后端 HTTP/OSS 联调',
+  '真实模型与业务 Agent 联调',
+  '部署与发布',
 ];
 let failure;
 let timer;
@@ -154,6 +179,14 @@ try {
   timer = setInterval(track, 250);
   for (const [id, label, args] of steps) {
     if (interrupted) break;
+    const commandArgs = [...args];
+    if (id === 'agent-unit') {
+      const files = (await readdir(resolve(root, 'apps/agent/tests')))
+        .filter((name) => name.endsWith('.test.ts') && !name.endsWith('.integration.test.ts'))
+        .sort();
+      if (!files.length) throw new Error('没有找到 Agent 隔离服务测试，不能视为通过。');
+      commandArgs.push(...files.map((name) => `tests/${name}`));
+    }
     console.info(`\n[功能回归] ${label}`);
     const begin = Date.now();
     const log = createWriteStream(resolve(directory, `${id}.log`));
@@ -161,12 +194,17 @@ try {
     let closed;
     try {
       outcome = await new Promise((accept, reject) => {
-        active = spawn('pnpm', args, {
+        const env = {
+          ...process.env,
+          PLAYWRIGHT_JSON_OUTPUT_FILE: resolve(directory, 'frontend.json'),
+        };
+        delete env.AGENT_TEST_DATABASE_URL;
+        active = spawn('pnpm', commandArgs, {
           cwd: root,
           detached: process.platform !== 'win32',
           shell: process.platform === 'win32',
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: { ...process.env, PLAYWRIGHT_JSON_OUTPUT_FILE: resolve(directory, 'frontend.json') },
+          env,
         });
         for (const [stream, output] of [
           [active.stdout, process.stdout],
@@ -196,13 +234,32 @@ try {
     const row = {
       id,
       label,
-      command: ['pnpm', ...args],
+      command: ['pnpm', ...commandArgs],
       ...outcome,
       status: interrupted ? 'interrupted' : outcome.code === 0 ? 'passed' : 'failed',
       durationMs: Date.now() - begin,
       log: `${id}.log`,
     };
     checks.push(row);
+    if (id === 'frontend') {
+      try {
+        const stats = JSON.parse(await readFile(resolve(directory, 'frontend.json'), 'utf8')).stats;
+        if (
+          !stats ||
+          !['expected', 'unexpected', 'skipped', 'flaky'].every(
+            (key) => Number.isSafeInteger(stats[key]) && stats[key] >= 0,
+          )
+        )
+          throw new Error('页面报告计数无效');
+        frontend = stats;
+        if (stats.expected < 1 || stats.unexpected !== 0) throw new Error('页面用例未通过');
+      } catch {
+        if (row.status === 'passed') {
+          row.status = 'failed';
+          failure = '页面测试未生成有效的通过报告，请查看 frontend.log。';
+        }
+      }
+    }
     if (row.status !== 'passed') break;
   }
 } catch (error) {
@@ -222,17 +279,6 @@ try {
   } catch (error) {
     failure = error.message;
   }
-  let frontend;
-  try {
-    frontend = JSON.parse(await readFile(resolve(directory, 'frontend.json'), 'utf8')).stats;
-  } catch {
-    /* browser step not reached */
-  }
-  if (
-    checks.some((row) => row.id === 'frontend' && row.status === 'passed') &&
-    (!frontend || frontend.expected < 1 || frontend.unexpected !== 0)
-  )
-    failure = '页面测试未生成有效的通过报告，请查看 frontend.log。';
   const result =
     !failure &&
     !interrupted &&
@@ -252,11 +298,12 @@ try {
     checks,
     frontend,
     notRun: steps.filter(([id]) => !checks.some((row) => row.id === id)).map(([id]) => id),
+    notExecuted,
   };
   await writeFile(resolve(directory, 'summary.json'), JSON.stringify(report, null, 2) + '\n');
   await writeFile(
     resolve(directory, 'report.md'),
-    `# 已接入功能自动化回归\n\n结果：${result}\n\n仅运行隔离接口、单元测试及 Web/Electron 页面，不操作数据库、不调用真实业务 Agent。\n\n| 检查 | 结果 | 耗时 |\n| --- | --- | --- |\n${checks.map((row) => `| ${row.label} | ${row.status} | ${(row.durationMs / 1000).toFixed(1)}s |`).join('\n')}\n\n${frontend ? `页面：${frontend.expected} 通过，${frontend.unexpected} 失败，${frontend.skipped} 跳过，${frontend.flaky} 重试后通过。\n\n` : ''}${failure ? `错误：${failure}\n\n` : ''}未运行：${report.notRun.join('、') || '无'}。详细日志和页面截图、trace 位于本目录。\n`,
+    `# 已接入功能自动化回归\n\n结果：${result}\n\n运行隔离接口、业务与 Agent 单元测试、构建及 Web/Electron 页面，不操作数据库、不调用真实模型或业务 Agent。Agent Web 验证控制器与组件，不代表真实浏览器联调。\n\n| 检查 | 结果 | 耗时 |\n| --- | --- | --- |\n${checks.map((row) => `| ${row.label} | ${row.status} | ${(row.durationMs / 1000).toFixed(1)}s |`).join('\n')}\n\n${frontend ? `页面：${frontend.expected} 通过，${frontend.unexpected} 失败，${frontend.skipped} 跳过，${frontend.flaky} 重试后通过。\n\n` : ''}${failure ? `错误：${failure}\n\n` : ''}未运行阶段：${report.notRun.join('、') || '无'}。\n\n本命令不执行：${notExecuted.join('、')}。这些能力不计入本次通过结果。详细日志和页面截图、trace 位于本目录。\n`,
   );
   await writeFile(
     resolve(root, 'artifacts/feature-tests/latest.json'),
