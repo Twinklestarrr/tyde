@@ -1,3 +1,6 @@
+import { ExamCommandService } from '../src/modules/entrance-exams/exam-command.service.js';
+import { ExamCandidateService } from '../src/modules/entrance-exams/exam-candidate.service.js';
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
 import { PersonnelMovementService } from '../src/modules/personnel/personnel-movement.service.js';
 import { PersonnelService } from '../src/modules/personnel/personnel.service.js';
 import { ExamCandidateCommandService } from '../src/modules/entrance-exams/exam-candidate-command.service.js';
@@ -27,6 +30,7 @@ import { PrismaClient, type Prisma } from '@prisma/client';
 import { afterAll, beforeEach, expect, test } from 'vitest';
 import { FileRegistryService } from '../src/modules/files/file-registry.service.js';
 import { Readable } from 'node:stream';
+import { request as nodeHttpRequest, type IncomingHttpHeaders } from 'node:http';
 import type { ObjectStorage } from '../src/modules/files/object-storage.js';
 import { createApp } from '../src/application.js';
 import { readConfig } from '../src/config/index.js';
@@ -7835,6 +7839,7 @@ async function materialsConfirmationFixture() {
       projectId: f.projectId,
       userId: expert.user.id,
       expertAssignmentId: assignment.id,
+      admittedAt: new Date(),
       joinedAt: new Date(),
       createdBy: f.manager.user.uid,
     },
@@ -13703,3 +13708,8550 @@ test('personnel transfer sources: personal effective identity supports projects,
     }),
   ).toBe(0);
 });
+
+// 13第一批：仅定向 workbench basic detail，不重复12已通过的26项。
+const boardBasicHttp = (projectId: number, headers: Record<string, string>) =>
+  post('/projects/workbench/board/project-detail', { projectId }, headers);
+test('workbench basic detail: creator scope, category snapshots, current requester, completed/draft visibility and read-only effects', async () => {
+  const f = await productionPlanFixture();
+  const current = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const categories = await db.projectCategoryRelation.findMany({
+    where: { projectId: f.projectId },
+    orderBy: [{ categoryLevel: 'asc' }, { sortNo: 'asc' }, { id: 'asc' }],
+  });
+  await db.user.update({
+    where: { id: f.user.id },
+    data: { displayName: '看板新昵称', realName: '看板新姓名' },
+  });
+  const snapshot = async () => ({
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    nodes: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    outbox: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await snapshot();
+  const result = await boardBasicHttp(f.projectId, f.headers);
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json().data).toMatchObject({
+    projectId: f.projectId,
+    projectNo: current.projectNo,
+    requesterName: '看板新昵称(看板新姓名)',
+    categoryLevel3Ids: categories.filter((c) => c.categoryLevel === 3).map((c) => c.categoryId),
+    categoryLevel3Names: categories
+      .filter((c) => c.categoryLevel === 3)
+      .map((c) => c.categoryNameSnapshot),
+    status: 'PUBLISHED',
+    closedAt: null,
+  });
+  for (const field of [
+    'id',
+    'extJson',
+    'versionNo',
+    'createdBy',
+    'attachments',
+    'productionRequirements',
+  ])
+    expect(result.json().data).not.toHaveProperty(field);
+  expect(await snapshot()).toEqual(before);
+  const other = await projectManagerAccount(7);
+  expect((await post('/auth/switch-role', { role: 'NAVIGATOR' }, other.headers)).statusCode).toBe(
+    200,
+  );
+  expect((await boardBasicHttp(f.projectId, other.headers)).statusCode).toBe(403);
+  for (const status of ['DRAFT', 'PUBLISHED']) {
+    await db.project.update({
+      where: { id: f.projectId },
+      data: { status, closedAt: status === 'CLOSED' ? new Date('2026-10-26T02:00Z') : null },
+    });
+    const response = await boardBasicHttp(f.projectId, f.headers);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data.status).toBe(status);
+  }
+  await db.project.update({ where: { id: f.projectId }, data: { deleted: true } });
+  expect((await boardBasicHttp(f.projectId, f.headers)).statusCode).toBe(403);
+  expect((await boardBasicHttp(2147483647, f.headers)).statusCode).toBe(403);
+});
+test('workbench basic detail: PM pending candidate, assigned handler, replacement and session role isolation follow live relationships', async () => {
+  const f = await productionPlanFixture();
+  for (const headers of [f.manager.headers, f.handler.headers])
+    expect((await boardBasicHttp(f.projectId, headers)).statusCode).toBe(200);
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId },
+    data: { status: 'PENDING_ACCEPTANCE' },
+  });
+  expect((await boardBasicHttp(f.projectId, f.manager.headers)).statusCode).toBe(200);
+  expect((await boardBasicHttp(f.projectId, f.handler.headers)).statusCode).toBe(403);
+  expect((await post('/auth/switch-role', { role: 'EXPERT' }, f.manager.headers)).statusCode).toBe(
+    200,
+  );
+  expect((await boardBasicHttp(f.projectId, f.manager.headers)).statusCode).toBe(403);
+  expect((await post('/auth/switch-role', { role: 'PM' }, f.manager.headers)).statusCode).toBe(200);
+  expect((await boardBasicHttp(f.projectId, f.manager.headers)).statusCode).toBe(200);
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId },
+    data: { status: 'REPLACED' },
+  });
+  expect((await boardBasicHttp(f.projectId, f.manager.headers)).statusCode).toBe(403);
+});
+test('workbench basic detail: accepted organization managers, legacy fallback, removed owners, pending/left membership and personal assignments isolate expert scope', async () => {
+  const f = await personnelEntryFixture();
+  const unrelatedOrg = await db.organization.create({
+    data: { name: '看板无关主管组织', expertiseTags: [] },
+  });
+  await db.userOrgRel.create({
+    data: {
+      orgId: unrelatedOrg.id,
+      userId: f.individual.user.id,
+      uid: f.individual.user.uid,
+      position: 'OWNER',
+      joinStatus: 'ACTIVE',
+    },
+  });
+  // 本人是组织成员且有个人接单，仍不等于项目负责人。
+  expect((await boardBasicHttp(f.projectId, f.individual.headers)).statusCode).toBe(403);
+  expect((await boardBasicHttp(f.projectId, f.owner.headers)).statusCode).toBe(200);
+  await db.projectExpertAssignment.update({
+    where: { id: f.orgAssignment.id },
+    data: { projectOwnerUserId: f.individual.user.id },
+  });
+  await db.projectExpertAssignmentOwner.deleteMany({ where: { assignmentId: f.orgAssignment.id } });
+  expect((await boardBasicHttp(f.projectId, f.individual.headers)).statusCode).toBe(200); // 旧单负责人回退
+  await db.projectExpertAssignmentOwner.create({
+    data: {
+      assignmentId: f.orgAssignment.id,
+      userId: f.individual.user.id,
+      status: 'REMOVED',
+      createdBy: f.user.uid,
+    },
+  });
+  expect((await boardBasicHttp(f.projectId, f.individual.headers)).statusCode).toBe(403); // REMOVED也阻止回退
+  await db.projectExpertAssignmentOwner.updateMany({
+    where: { assignmentId: f.orgAssignment.id },
+    data: { status: 'ACTIVE' },
+  });
+  expect((await boardBasicHttp(f.projectId, f.individual.headers)).statusCode).toBe(200);
+  for (const joinStatus of ['PENDING_ACTIVATION', 'LEFT', 'REMOVED']) {
+    await db.userOrgRel.update({ where: { id: f.rel.id }, data: { joinStatus } });
+    expect((await boardBasicHttp(f.projectId, f.individual.headers)).statusCode).toBe(403);
+  }
+  await db.userOrgRel.update({ where: { id: f.rel.id }, data: { joinStatus: 'EXIT_APPROVING' } });
+  expect((await boardBasicHttp(f.projectId, f.individual.headers)).statusCode).toBe(200);
+  await db.projectExpertAssignment.update({
+    where: { id: f.orgAssignment.id },
+    data: { status: 'PENDING_ACCEPTANCE' },
+  });
+  expect((await boardBasicHttp(f.projectId, f.individual.headers)).statusCode).toBe(403);
+  expect((await boardBasicHttp(f.projectId, f.owner.headers)).statusCode).toBe(403);
+  await db.projectExpertAssignment.update({
+    where: { id: f.orgAssignment.id },
+    data: { status: 'ACCEPTED' },
+  });
+  await db.organization.update({ where: { id: f.organization.id }, data: { deleted: true } });
+  expect((await boardBasicHttp(f.projectId, f.owner.headers)).statusCode).toBe(403);
+});
+
+// 13第二批：仅定向 workbench statistics，不重复108或12已通过项。
+const workbenchStats = async (mode: string, headers: Record<string, string>) => {
+  const response = await app.inject({
+    url: `/api/v1/projects/workbench/statistics?mode=${mode}`,
+    headers,
+  });
+  expect(response.statusCode, response.body).toBe(200);
+  return response.json().data;
+};
+test('workbench statistics: BOARD published live role scopes, all stages and logical deletion use real subtask reports', async () => {
+  const f = await productionQualityFixture();
+  for (const headers of [f.headers, f.manager.headers, f.owner.headers]) {
+    expect(await workbenchStats('BOARD', headers)).toEqual({
+      mode: 'BOARD',
+      totalProjectCount: 1,
+      startupProjectCount: 0,
+      assemblyProjectCount: 0,
+      productionProjectCount: 1,
+    });
+  }
+  expect((await workbenchStats('BOARD', f.individual.headers)).totalProjectCount).toBe(0);
+  for (const node of ['PRODUCTION_PLAN', 'RECRUIT_EXECUTION_EXPERT', 'COMPLETED', null]) {
+    await db.project.update({ where: { id: f.projectId }, data: { currentNodeCode: node } });
+    expect(await workbenchStats('BOARD', f.headers)).toMatchObject({
+      totalProjectCount: 1,
+      startupProjectCount: Number(node === 'PRODUCTION_PLAN'),
+      assemblyProjectCount: Number(node === 'RECRUIT_EXECUTION_EXPERT'),
+      productionProjectCount: 0,
+    });
+  }
+  await db.project.update({
+    where: { id: f.projectId },
+    data: { currentNodeCode: 'PRODUCTION_TASK' },
+  });
+  await db.projectOutputReport.updateMany({
+    where: { projectId: f.projectId },
+    data: { subtaskId: null },
+  });
+  expect((await workbenchStats('BOARD', f.headers)).productionProjectCount).toBe(0);
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId },
+    data: { status: 'PENDING_ACCEPTANCE' },
+  });
+  expect((await workbenchStats('BOARD', f.manager.headers)).totalProjectCount).toBe(0);
+  for (const data of [{ status: 'DRAFT' }, { status: 'PUBLISHED', deleted: true }]) {
+    await db.project.update({ where: { id: f.projectId }, data });
+    expect((await workbenchStats('BOARD', f.headers)).totalProjectCount).toBe(0);
+  }
+});
+test('workbench statistics: TASK aggregates real sources over card priority, personal training, acceptance/rework and no read side effects', async () => {
+  const f = await productionQualityFixture();
+  const snapshot = async () => ({
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await snapshot();
+  const pm = await workbenchStats('TASK', f.manager.headers);
+  expect(pm.pendingTaskCount).toBe(1); // 多条PENDING报量归并一个核查任务。
+  expect(pm.involvedProjectCount).toBe(1);
+  expect((await workbenchStats('TASK', f.individual.headers)).pendingTaskCount).toBe(1); // 双身份只计一次培训。
+  expect(await snapshot()).toEqual(before);
+  await db.projectSubtask.updateMany({
+    where: { projectId: f.projectId },
+    data: {
+      status: 'PENDING_ACCEPTANCE',
+      actualQuantity: 10,
+      reportedQuantity: 10,
+      actualDeliveryDate: new Date('2099-12-31'),
+      submittedBy: f.manager.user.uid,
+      submittedAt: new Date(),
+    },
+  });
+  await db.projectSubtask.update({ where: { id: f.designated.id }, data: { acceptanceRound: 2 } });
+  // 已报量任务结束后核查源消失；首次与返修验收统一计一类。
+  expect((await workbenchStats('TASK', f.headers)).pendingTaskCount).toBe(1);
+  await db.projectRoleNodeSnapshot.deleteMany({ where: { projectId: f.projectId } });
+  expect((await workbenchStats('TASK', f.headers)).pendingTaskCount).toBe(1);
+  await db.project.update({ where: { id: f.projectId }, data: { currentNodeCode: 'COMPLETED' } });
+  expect((await workbenchStats('TASK', f.headers)).pendingTaskCount).toBe(0);
+});
+test('workbench statistics: TASK latest persisted rounds hide older completions and role/relationship loss applies immediately', async () => {
+  const f = await productionSubtaskFixture();
+  await db.projectTaskRound.deleteMany({ where: { projectId: f.projectId } });
+  const now = new Date();
+  const add = (taskType: string, status: string, userId = f.manager.user.id, role = 'PM') =>
+    db.projectTaskRound.create({
+      data: {
+        projectId: f.projectId,
+        userId,
+        role,
+        taskType,
+        status,
+        participated: status === 'COMPLETED',
+        openedAt: now,
+        finishedAt: status === 'OPEN' ? null : now,
+      },
+    });
+  await add('OUTPUT_DATA_REVIEW', 'COMPLETED');
+  expect((await workbenchStats('TASK', f.manager.headers)).completedTaskCount).toBe(1);
+  await add('OUTPUT_DATA_REVIEW', 'OPEN');
+  expect((await workbenchStats('TASK', f.manager.headers)).completedTaskCount).toBe(0);
+  await add('OUTPUT_DATA_REVIEW', 'COMPLETED');
+  await add('OUTPUT_DATA_REVIEW', 'CANCELLED');
+  await add('STANDARD_TRAINING', 'COMPLETED', f.individual.user.id, 'EXPERT');
+  expect((await workbenchStats('TASK', f.manager.headers)).completedTaskCount).toBe(0);
+  // 最新COMPLETED夹具不能掩盖真实未清空的培训来源。
+  expect((await workbenchStats('TASK', f.individual.headers)).completedTaskCount).toBe(0);
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId },
+    data: { status: 'REPLACED' },
+  });
+  expect(await workbenchStats('TASK', f.manager.headers)).toEqual({
+    mode: 'TASK',
+    pendingTaskCount: 0,
+    completedTaskCount: 0,
+    involvedProjectCount: 0,
+  });
+});
+test('workbench statistics: EXPERT organization owner fallback, multi-organization membership and session switch never expand scope', async () => {
+  const f = await personnelEntryFixture();
+  expect((await workbenchStats('BOARD', f.owner.headers)).totalProjectCount).toBe(1);
+  expect((await workbenchStats('BOARD', f.individual.headers)).totalProjectCount).toBe(0);
+  await db.projectExpertAssignmentOwner.deleteMany({ where: { assignmentId: f.orgAssignment.id } });
+  await db.projectExpertAssignment.update({
+    where: { id: f.orgAssignment.id },
+    data: { projectOwnerUserId: f.individual.user.id },
+  });
+  expect((await workbenchStats('BOARD', f.individual.headers)).totalProjectCount).toBe(1);
+  await db.projectExpertAssignmentOwner.create({
+    data: {
+      assignmentId: f.orgAssignment.id,
+      userId: f.individual.user.id,
+      status: 'REMOVED',
+      createdBy: f.user.uid,
+    },
+  });
+  expect((await workbenchStats('BOARD', f.individual.headers)).totalProjectCount).toBe(0);
+  await db.userOrgRel.updateMany({
+    where: { orgId: f.organization.id, userId: f.owner.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await workbenchStats('BOARD', f.owner.headers)).totalProjectCount).toBe(0);
+  expect(
+    (await post('/auth/switch-role', { role: 'NAVIGATOR' }, f.individual.headers)).statusCode,
+  ).toBe(200);
+  expect(await workbenchStats('TASK', f.individual.headers)).toEqual({
+    mode: 'TASK',
+    pendingTaskCount: 0,
+    completedTaskCount: 0,
+    involvedProjectCount: 0,
+  });
+});
+
+// 13第三批：仅定向 workbench projects，不重复108/109或12已通过项。
+const boardProjectsHttp = (body: object, headers: Record<string, string>) =>
+  post('/projects/workbench/board/projects', body, headers);
+test('workbench projects: snapshot keyword, stable pagination, actual delivery progress, current name and read-only state', async () => {
+  const f = await productionQualityFixture();
+  await db.project.update({
+    where: { id: f.projectId },
+    data: { projectQuantity: '3', currentNodeCode: 'COMPLETED' },
+  });
+  await db.projectSubtask.update({ where: { id: f.pool.id }, data: { actualQuantity: '4.0001' } });
+  const project = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  await db.user.update({
+    where: { id: f.user.id },
+    data: { displayName: '看板列表实时昵称', realName: '新姓名' },
+  });
+  const snapshot = async () => ({
+    projects: await db.project.findMany({ orderBy: { id: 'asc' } }),
+    subtasks: await db.projectSubtask.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    outbox: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await snapshot();
+  for (const headers of [f.headers, f.manager.headers, f.owner.headers]) {
+    const response = await boardProjectsHttp(
+      { keyword: ` ${project.requesterName} `, size: 1 },
+      headers,
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data).toMatchObject({
+      total: 1,
+      pages: 1,
+      current: 1,
+      size: 1,
+      records: [
+        {
+          projectId: f.projectId,
+          requesterName: '看板列表实时昵称(新姓名)',
+          currentNodeName: '结项',
+          progressQuantity: 4.0001,
+          targetQuantity: 3,
+          progressPercent: 133.34,
+        },
+      ],
+    });
+  }
+  expect(
+    (await boardProjectsHttp({ keyword: '看板列表实时昵称' }, f.headers)).json().data.total,
+  ).toBe(0);
+  expect((await boardProjectsHttp({ current: 2, size: 1 }, f.headers)).json().data).toMatchObject({
+    total: 1,
+    pages: 1,
+    records: [],
+  });
+  expect(await snapshot()).toEqual(before);
+  for (const data of [{ status: 'DRAFT' }, { status: 'PUBLISHED', deleted: true }]) {
+    await db.project.update({ where: { id: f.projectId }, data });
+    expect((await boardProjectsHttp({}, f.headers)).json().data.total).toBe(0);
+  }
+  const { id: originalId, ...projectCopy } = project;
+  const copyData = { ...projectCopy, extJson: undefined };
+  const tied = new Date('2026-10-26T02:00:00Z');
+  const older = await db.project.create({
+    data: {
+      ...copyData,
+      projectNo: `${project.projectNo}A`,
+      projectName: '列表排序甲',
+      publishedAt: tied,
+    },
+  });
+  const newer = await db.project.create({
+    data: {
+      ...copyData,
+      projectNo: `${project.projectNo}B`,
+      projectName: '列表排序乙',
+      publishedAt: tied,
+    },
+  });
+  expect(newer.id).toBeGreaterThan(originalId);
+  for (const [current, expectedId] of [
+    [1, newer.id],
+    [2, older.id],
+  ]) {
+    const page = await boardProjectsHttp({ keyword: '列表排序', current, size: 1 }, f.headers);
+    expect(page.statusCode, page.body).toBe(200);
+    expect(page.json().data).toMatchObject({
+      total: 2,
+      pages: 2,
+      current,
+      records: [{ projectId: expectedId, progressQuantity: 0 }],
+    });
+  }
+});
+test('workbench projects: PM current assignment and handler flags, pending exclusion, null node fallback and role isolation', async () => {
+  const f = await personnelEntryFixture();
+  for (const [headers, primary, handler] of [
+    [f.manager.headers, true, false],
+    [f.handler.headers, false, true],
+  ] as const) {
+    const response = await boardProjectsHttp({}, headers);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data.records[0]).toMatchObject({
+      projectId: f.projectId,
+      assignmentId: null,
+      primaryProjectManager: primary,
+      expertRecruitmentHandler: handler,
+    });
+  }
+  await db.project.update({ where: { id: f.projectId }, data: { currentNodeCode: null } });
+  expect((await boardProjectsHttp({}, f.headers)).json().data.records[0].currentNodeCode).toBe(
+    'PRODUCTION_PLAN',
+  );
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId },
+    data: { status: 'PENDING_ACCEPTANCE' },
+  });
+  expect((await boardProjectsHttp({}, f.manager.headers)).json().data.total).toBe(0);
+  expect((await boardProjectsHttp({}, f.handler.headers)).json().data.total).toBe(0);
+  expect((await boardProjectsHttp({}, f.headers)).json().data.records[0].currentNodeCode).toBe(
+    'RECRUIT_PROJECT_MANAGER',
+  );
+  await post('/auth/switch-role', { role: 'NAVIGATOR' }, f.owner.headers);
+  expect((await boardProjectsHttp({}, f.owner.headers)).json().data.total).toBe(0);
+});
+test('workbench projects: expert max manageable assignment, empty manager versus ordinary expert, legacy fallback and immediate loss', async () => {
+  const f = await personnelEntryFixture();
+  const first = await boardProjectsHttp({}, f.owner.headers);
+  expect(first.statusCode, first.body).toBe(200);
+  expect(first.json().data.records[0]).toMatchObject({ assignmentId: f.orgAssignment.id });
+  expect(first.json().data.records[0]).not.toHaveProperty('primaryProjectManager');
+  expect(
+    (await boardProjectsHttp({ keyword: '不存在的项目' }, f.owner.headers)).json().data,
+  ).toMatchObject({ total: 0, records: [] });
+  expect((await boardProjectsHttp({}, f.individual.headers)).statusCode).toBe(403);
+  await db.projectExpertAssignmentOwner.deleteMany({ where: { assignmentId: f.orgAssignment.id } });
+  await db.projectExpertAssignment.update({
+    where: { id: f.orgAssignment.id },
+    data: { projectOwnerUserId: f.individual.user.id },
+  });
+  expect(
+    (await boardProjectsHttp({}, f.individual.headers)).json().data.records[0].assignmentId,
+  ).toBe(f.orgAssignment.id);
+  await db.projectExpertAssignmentOwner.create({
+    data: {
+      assignmentId: f.orgAssignment.id,
+      userId: f.individual.user.id,
+      status: 'REMOVED',
+      createdBy: f.user.uid,
+    },
+  });
+  expect((await boardProjectsHttp({}, f.individual.headers)).statusCode).toBe(403);
+  const org = await db.organization.create({
+    data: { name: '看板列表第二组织', expertiseTags: [] },
+  });
+  await db.userOrgRel.create({
+    data: {
+      orgId: org.id,
+      userId: f.owner.user.id,
+      uid: f.owner.user.uid,
+      position: 'OWNER',
+      joinStatus: 'ACTIVE',
+    },
+  });
+  const { id: oldId, ...assignment } = f.orgAssignment;
+  const second = await db.projectExpertAssignment.create({
+    data: {
+      ...assignment,
+      assignmentNo: `PEA-BOARD-${org.id}`,
+      status: 'ACCEPTED',
+      organizationId: org.id,
+      projectOwnerUserId: null,
+    },
+  });
+  expect(second.assignmentNo).not.toBe(f.orgAssignment.assignmentNo);
+  expect(second.id).toBeGreaterThan(oldId);
+  expect((await boardProjectsHttp({}, f.owner.headers)).json().data).toMatchObject({
+    total: 1,
+    records: [{ assignmentId: second.id }],
+  });
+  await db.userOrgRel.updateMany({
+    where: { orgId: org.id, userId: f.owner.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await boardProjectsHttp({}, f.owner.headers)).json().data.records[0].assignmentId).toBe(
+    f.orgAssignment.id,
+  );
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await boardProjectsHttp({}, f.owner.headers)).statusCode).toBe(403);
+});
+
+// 13第四批：仅定向 workbench subtasks，不重复此前已通过的集成。
+const boardSubtasksHttp = (projectId: number, headers: Record<string, string>) =>
+  post('/projects/workbench/board/subtasks', { projectId }, headers);
+test('workbench subtasks: whole-project cumulative reports, Shanghai risk boundaries, ordering and read-only snapshot', async () => {
+  const f = await productionQualityFixture();
+  const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  const createdAt = new Date(`${today}T00:00:00+08:00`);
+  await db.projectSubtask.update({
+    where: { id: f.pool.id },
+    data: {
+      createdAt,
+      expectedDeliveryDate: new Date(today),
+      expectedQuantity: 100,
+      reportedQuantity: 999,
+      actualQuantity: 888,
+    },
+  });
+  await db.projectOutputReport.update({
+    where: { id: f.orgReport.id },
+    data: {
+      reviewStatus: 'RETURNED',
+      returnReason: '验证全部报量均计入',
+      returnedBy: f.manager.user.uid,
+      returnedAt: new Date(),
+    },
+  });
+  const snapshot = async () => ({
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    tasks: await db.projectSubtask.findMany({ orderBy: { id: 'asc' } }),
+    reports: await db.projectOutputReport.findMany({ orderBy: { id: 'asc' } }),
+    assignees: await db.projectSubtaskAssignee.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await snapshot();
+  for (const headers of [f.headers, f.manager.headers, f.handler.headers]) {
+    const r = await boardSubtasksHttp(f.projectId, headers);
+    expect(r.statusCode, r.body).toBe(200);
+    expect(r.json().data[0]).toMatchObject({
+      subtaskId: f.pool.id,
+      reportedQuantity: 10,
+      targetQuantity: 100,
+      progressPercent: 10,
+      plannedStartDate: today,
+      expectedQuantityToDate: 100,
+      progressLowRisk: true,
+      overdueRisk: true,
+    });
+  }
+  expect(await snapshot()).toEqual(before);
+  for (const status of ['PENDING_ACCEPTANCE', 'ACCEPTED']) {
+    await db.projectSubtask.update({
+      where: { id: f.pool.id },
+      data: {
+        status,
+        actualDeliveryDate: new Date(today),
+        submittedBy: f.manager.user.uid,
+        submittedAt: createdAt,
+        reviewedBy: status === 'ACCEPTED' ? f.user.uid : null,
+        reviewedAt: status === 'ACCEPTED' ? new Date() : null,
+        rejectReason: null,
+      },
+    });
+    expect((await boardSubtasksHttp(f.projectId, f.headers)).json().data[0]).toMatchObject({
+      overdueRisk: false,
+      progressLowRisk: false,
+    });
+  }
+  await db.projectSubtask.update({
+    where: { id: f.pool.id },
+    data: {
+      status: 'REWORK_REQUIRED',
+      reviewedBy: f.user.uid,
+      reviewedAt: new Date(),
+      rejectReason: '验证返修状态恢复进度与逾期风险',
+    },
+  });
+  expect((await boardSubtasksHttp(f.projectId, f.headers)).json().data[0]).toMatchObject({
+    overdueRisk: true,
+    progressLowRisk: true,
+  });
+});
+test('workbench subtasks: organization pool, designated per-person targets, multi-organization union, historical reports and immediate loss', async () => {
+  const f = await productionQualityFixture();
+  const saved = await f.submit([
+    { memberId: f.orgMember.id, subtaskId: f.designated.id, reportDate: f.day, quantity: 12 },
+  ]);
+  expect(saved.statusCode, saved.body).toBe(200);
+  await db.projectSubtask.update({
+    where: { id: f.designated.id },
+    data: { expectedQuantity: 100 },
+  });
+  await db.projectSubtaskAssignee.create({
+    data: {
+      projectId: f.projectId,
+      subtaskId: f.designated.id,
+      memberId: f.personalMember.id,
+      userId: f.individual.user.id,
+      assignmentType: 'DESIGNATED',
+      assignedBy: f.user.uid,
+    },
+  });
+  const rows = (await boardSubtasksHttp(f.projectId, f.owner.headers)).json().data;
+  expect(rows.find((r: { subtaskId: number }) => r.subtaskId === f.pool.id)).toMatchObject({
+    reportedQuantity: 2.8766,
+    targetQuantity: 10.1234,
+  });
+  expect(rows.find((r: { subtaskId: number }) => r.subtaskId === f.designated.id)).toMatchObject({
+    reportedQuantity: 12,
+    targetQuantity: 50,
+    progressPercent: 24,
+  });
+  const org = await db.organization.create({
+    data: { name: '子任务进度第二组织', expertiseTags: [] },
+  });
+  await db.userOrgRel.create({
+    data: {
+      orgId: org.id,
+      userId: f.owner.user.id,
+      uid: f.owner.user.uid,
+      position: 'OWNER',
+      joinStatus: 'ACTIVE',
+    },
+  });
+  const { id: oldId, ...assignment } = f.orgAssignment;
+  expect(oldId).toBeGreaterThan(0);
+  const second = await db.projectExpertAssignment.create({
+    data: {
+      ...assignment,
+      assignmentNo: `PEA-SUB-${org.id}`,
+      status: 'ACCEPTED',
+      organizationId: org.id,
+      projectOwnerUserId: null,
+    },
+  });
+  const m = await db.projectMember.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.individual.user.id,
+      organizationId: org.id,
+      expertAssignmentId: second.id,
+      status: 'LEFT',
+      createdBy: f.user.uid,
+    },
+  });
+  await db.projectSubtaskAssignee.create({
+    data: {
+      projectId: f.projectId,
+      subtaskId: f.designated.id,
+      memberId: m.id,
+      userId: m.userId,
+      assignmentType: 'DESIGNATED',
+      assignedBy: f.user.uid,
+    },
+  });
+  await db.projectOutputReport.create({
+    data: {
+      projectId: f.projectId,
+      subtaskId: f.designated.id,
+      memberId: m.id,
+      userId: m.userId,
+      reportDate: new Date(f.day),
+      quantity: 8,
+      quantityUnit: f.designated.quantityUnit,
+      createdBy: f.user.uid,
+    },
+  });
+  const union = await boardSubtasksHttp(f.projectId, f.owner.headers);
+  expect(union.statusCode, union.body).toBe(200);
+  expect(
+    union.json().data.find((r: { subtaskId: number }) => r.subtaskId === f.designated.id),
+  ).toMatchObject({ reportedQuantity: 10, progressPercent: 30 });
+  // 没有本组织指定或报量的任务不展示；全项目仍可见。
+  expect(
+    (await f.create({ subtaskName: '仅个人任务', memberIds: [f.personalMember.id] })).statusCode,
+  ).toBe(200);
+  expect((await boardSubtasksHttp(f.projectId, f.owner.headers)).json().data).toHaveLength(2);
+  expect((await boardSubtasksHttp(f.projectId, f.headers)).json().data).toHaveLength(3);
+  await db.userOrgRel.updateMany({
+    where: { orgId: org.id, userId: f.owner.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect(
+    (await boardSubtasksHttp(f.projectId, f.owner.headers))
+      .json()
+      .data.find((r: { subtaskId: number }) => r.subtaskId === f.designated.id),
+  ).toMatchObject({ reportedQuantity: 12, progressPercent: 36 });
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await boardSubtasksHttp(f.projectId, f.owner.headers)).statusCode).toBe(403);
+});
+test('workbench subtasks: current role, published project, pending PM exclusion, ordinary expert denial and empty project', async () => {
+  const f = await productionOutputFixture();
+  expect((await boardSubtasksHttp(f.projectId, f.individual.headers)).statusCode).toBe(403);
+  expect((await boardSubtasksHttp(2147483647, f.headers)).statusCode).toBe(403);
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId },
+    data: { status: 'PENDING_ACCEPTANCE' },
+  });
+  expect((await boardSubtasksHttp(f.projectId, f.manager.headers)).statusCode).toBe(403);
+  expect((await boardSubtasksHttp(f.projectId, f.handler.headers)).statusCode).toBe(403);
+  for (const data of [{ status: 'DRAFT' }, { status: 'PUBLISHED', deleted: true }]) {
+    await db.project.update({ where: { id: f.projectId }, data });
+    expect((await boardSubtasksHttp(f.projectId, f.headers)).statusCode).toBe(403);
+  }
+  await db.project.update({
+    where: { id: f.projectId },
+    data: { status: 'PUBLISHED', deleted: false, currentNodeCode: 'COMPLETED' },
+  });
+  expect((await boardSubtasksHttp(f.projectId, f.headers)).statusCode).toBe(200);
+  const switched = await post('/auth/switch-role', { role: 'EXPERT' }, f.headers);
+  expect(switched.statusCode, switched.body).toBe(200);
+  expect((await boardSubtasksHttp(f.projectId, f.headers)).statusCode).toBe(403);
+  await db.projectSubtaskAssignee.deleteMany({ where: { projectId: f.projectId } });
+  await db.projectSubtask.deleteMany({ where: { projectId: f.projectId } });
+  expect((await boardSubtasksHttp(f.projectId, f.owner.headers)).json().data).toEqual([]);
+});
+
+// 13第五批：仅定向 workbench risks，不重复此前已通过的集成。
+const boardRisksHttp = (projectId: number, headers: Record<string, string>) =>
+  post('/projects/workbench/board/risks', { projectId }, headers);
+async function workbenchRiskFixture() {
+  const f = await productionQualityFixture();
+  const plan = await db.projectProductionPlan.findUniqueOrThrow({
+    where: { projectId: f.projectId },
+  });
+  const stage = await db.projectProductionStage.create({
+    data: {
+      planId: plan.id,
+      sequenceNo: 1,
+      stageName: '风险预警测试阶段',
+      createdBy: f.manager.user.uid,
+      startDate: new Date(f.day),
+      endDate: new Date(f.day),
+      naturalDayCount: 1,
+      workdayCount: 1,
+      workdayCountSource: 'MANUAL',
+      operatorHeadcount: 1,
+      operatorCpd: 10,
+      accuracyRate: 90,
+      expectedOutput: 10,
+    },
+  });
+  return { ...f, plan, stage };
+}
+test('workbench risks: independent project and subtask cards, navigator hides members and all reads preserve facts', async () => {
+  const f = await workbenchRiskFixture();
+  const deadline = new Date(Date.now() - 120000);
+  await db.project.update({
+    where: { id: f.projectId },
+    data: { deadline, currentNodeCode: 'PRODUCTION_TASK' },
+  });
+  await db.projectSubtask.update({
+    where: { id: f.pool.id },
+    data: {
+      createdAt: new Date(`${f.day}T00:00:00+08:00`),
+      expectedDeliveryDate: new Date(f.day),
+      expectedQuantity: 100,
+    },
+  });
+  const snapshot = async () => ({
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    tasks: await db.projectSubtask.findMany({ orderBy: { id: 'asc' } }),
+    reports: await db.projectOutputReport.findMany({ orderBy: { id: 'asc' } }),
+    quality: await db.projectOutputQuality.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await snapshot();
+  for (const headers of [f.headers, f.manager.headers, f.handler.headers]) {
+    const r = await boardRisksHttp(f.projectId, headers);
+    expect(r.statusCode, r.body).toBe(200);
+    const data = r.json().data;
+    expect(data.viewScope).toBe('FULL_PROJECT');
+    expect(data.project).toMatchObject({
+      pendingCount: 1,
+      urgentCount: 1,
+      items: [expect.objectContaining({ code: 'PROJECT_OVERDUE', targetId: f.projectId })],
+    });
+    const poolRisks = data.subtasks.items.filter(
+      (i: { targetId: number }) => i.targetId === f.pool.id,
+    );
+    expect(poolRisks).toEqual([
+      expect.objectContaining({
+        code: 'SUBTASK_OVERDUE',
+        severity: 'URGENT',
+        overdueDays: 0,
+        message: '子任务已到交付日，尚未提交验收',
+      }),
+      expect.objectContaining({
+        code: 'SUBTASK_PROGRESS_LOW',
+        severity: 'WARNING',
+        overdueDays: null,
+      }),
+    ]);
+    expect(data.subtasks.pendingCount).toBe(data.subtasks.items.length);
+    if (headers === f.headers)
+      expect(data.members).toEqual({ pendingCount: 0, urgentCount: 0, items: [] });
+    else
+      expect(data.members.items).toContainEqual(
+        expect.objectContaining({ code: 'MEMBER_EFFICIENCY', targetId: f.orgMember.id }),
+      );
+  }
+  expect(await snapshot()).toEqual(before);
+  await db.project.update({ where: { id: f.projectId }, data: { currentNodeCode: 'COMPLETED' } });
+  const completed = (await boardRisksHttp(f.projectId, f.manager.headers)).json().data;
+  expect(completed.project.pendingCount).toBe(0);
+  expect(completed.members.pendingCount).toBe(0);
+});
+test('workbench risks: latest weighted cumulative quality, stage thresholds, zero-report pending members and plan fallback', async () => {
+  const f = await workbenchRiskFixture();
+  const append = (reportId: number, inspectedQuantity: number, qualifiedQuantity: number) =>
+    db.projectOutputQuality.create({
+      data: {
+        outputReportId: reportId,
+        inspectedQuantity,
+        qualifiedQuantity,
+        recordedBy: f.manager.user.uid,
+        unqualifiedReason: qualifiedQuantity < inspectedQuantity ? '核验质量风险' : null,
+      },
+    });
+  await append(f.orgReport.id, 1, 0.1);
+  await append(f.orgReport.id, 1, 0.9);
+  const readMembers = async () => {
+    const r = await boardRisksHttp(f.projectId, f.manager.headers);
+    expect(r.statusCode, r.body).toBe(200);
+    return r.json().data.members;
+  };
+  expect((await readMembers()).items).not.toContainEqual(
+    expect.objectContaining({ code: 'MEMBER_QUALITY', targetId: f.orgMember.id }),
+  );
+  // A second report on another day contributes to cumulative accuracy, not today's CPD.
+  const yesterday = new Date(new Date(f.day).getTime() - 86400000);
+  const report = await db.projectOutputReport.create({
+    data: {
+      projectId: f.projectId,
+      memberId: f.orgMember.id,
+      userId: f.orgMember.userId,
+      reportDate: yesterday,
+      quantity: 1000,
+      quantityUnit: '条',
+      createdBy: f.manager.user.uid,
+    },
+  });
+  await append(report.id, 9, 8.1); // weighted 90%, not sum of individual percentages.
+  expect((await readMembers()).items).not.toContainEqual(
+    expect.objectContaining({ code: 'MEMBER_QUALITY' }),
+  );
+  await append(report.id, 9, 7.2); // latest weighted accuracy = 81%.
+  const risks = (await readMembers()).items;
+  expect(risks).toContainEqual(
+    expect.objectContaining({ code: 'MEMBER_QUALITY', targetId: f.orgMember.id }),
+  );
+  expect(risks).toContainEqual(
+    expect.objectContaining({ code: 'MEMBER_EFFICIENCY', targetId: f.orgMember.id }),
+  );
+  await db.projectOutputReport.updateMany({
+    where: { projectId: f.projectId },
+    data: { reportDate: yesterday },
+  });
+  for (const status of ['PENDING_EXIT', 'PENDING_TRANSFER']) {
+    await db.projectMember.update({ where: { id: f.orgMember.id }, data: { status } });
+    expect((await readMembers()).items).toContainEqual(
+      expect.objectContaining({ code: 'MEMBER_EFFICIENCY', targetId: f.orgMember.id }),
+    );
+  }
+  await db.projectMember.update({
+    where: { id: f.orgMember.id },
+    data: { status: 'LEFT', leftAt: new Date() },
+  });
+  expect(
+    (await readMembers()).items.every((i: { targetId: number }) => i.targetId !== f.orgMember.id),
+  ).toBe(true);
+  await db.projectMember.update({
+    where: { id: f.orgMember.id },
+    data: { status: 'ACTIVE', leftAt: null },
+  });
+  await db.projectProductionStage.update({
+    where: { id: f.stage.id },
+    data: { startDate: new Date('2099-12-31'), endDate: new Date('2099-12-31') },
+  });
+  const fallback = await readMembers();
+  expect(fallback.items).toContainEqual(
+    expect.objectContaining({ code: 'MEMBER_EFFICIENCY', targetId: f.orgMember.id }),
+  );
+  expect(fallback.items.every((i: { code: string }) => i.code !== 'MEMBER_QUALITY')).toBe(true);
+});
+test('workbench risks: concrete organization member scope, current role, ordinary expert denial and immediate relationship loss', async () => {
+  const f = await workbenchRiskFixture();
+  for (const report of [f.orgReport, f.personalReport])
+    await db.projectOutputQuality.create({
+      data: {
+        outputReportId: report.id,
+        inspectedQuantity: 1,
+        qualifiedQuantity: 0.1,
+        unqualifiedReason: '验证组织隔离',
+        recordedBy: f.manager.user.uid,
+      },
+    });
+  const r = await boardRisksHttp(f.projectId, f.owner.headers);
+  expect(r.statusCode, r.body).toBe(200);
+  expect(r.json().data.viewScope).toBe('ORGANIZATION');
+  // 组织接单时负责人也成为实际成员，入项夹具激活全部成员；零报量负责人仍应有效率风险。
+  const ownerMember = await db.projectMember.findFirstOrThrow({
+    where: { projectId: f.projectId, userId: f.owner.user.id, organizationId: f.organization.id },
+  });
+  expect(ownerMember.status).toBe('ACTIVE');
+  expect(ownerMember.id).not.toBe(f.orgMember.id);
+  expect(await db.projectOutputReport.count({ where: { memberId: ownerMember.id } })).toBe(0);
+  const expected = [
+    { code: 'MEMBER_EFFICIENCY', targetId: ownerMember.id },
+    { code: 'MEMBER_EFFICIENCY', targetId: f.orgMember.id },
+    { code: 'MEMBER_QUALITY', targetId: f.orgMember.id },
+  ].sort((a, b) => a.targetId - b.targetId);
+  expect(r.json().data.members).toMatchObject({ pendingCount: 3, urgentCount: 0 });
+  expect(r.json().data.members.items).toEqual(
+    expected.map((item) => expect.objectContaining(item)),
+  );
+  // 同一账号的个人接单成员有质量风险，也必须被组织范围排除。
+  expect(
+    r
+      .json()
+      .data.members.items.some(
+        (item: { targetId: number }) => item.targetId === f.personalMember.id,
+      ),
+  ).toBe(false);
+  expect((await boardRisksHttp(f.projectId, f.individual.headers)).statusCode).toBe(403);
+  expect((await boardRisksHttp(2147483647, f.manager.headers)).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'NAVIGATOR' }, f.owner.headers);
+  expect((await boardRisksHttp(f.projectId, f.owner.headers)).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'EXPERT' }, f.owner.headers);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await boardRisksHttp(f.projectId, f.owner.headers)).statusCode).toBe(403);
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId },
+    data: { status: 'PENDING_ACCEPTANCE' },
+  });
+  expect((await boardRisksHttp(f.projectId, f.manager.headers)).statusCode).toBe(403);
+  await db.project.update({ where: { id: f.projectId }, data: { status: 'DRAFT' } });
+  expect((await boardRisksHttp(f.projectId, f.headers)).statusCode).toBe(403);
+});
+
+// 13第六批：仅定向 workbench trends；不重复108—112。
+const boardTrendsHttp = (
+  projectId: number,
+  day: string,
+  headers: Record<string, string>,
+  body = {},
+) =>
+  post(
+    '/projects/workbench/board/trends',
+    { projectId, metric: 'QUANTITY', startDate: day, endDate: day, ...body },
+    headers,
+  );
+test('workbench trends: real daily totals, seven natural day window, gaps, zero-report members and read-only snapshot', async () => {
+  const f = await productionQualityFixture();
+  const offset = (n: number) =>
+    new Date(new Date(f.day).getTime() + n * 86400000).toISOString().slice(0, 10);
+  for (const [days, quantity] of [
+    [-7, 700],
+    [-6, 7],
+    [-1, 14],
+  ] as const)
+    await db.projectOutputReport.create({
+      data: {
+        projectId: f.projectId,
+        memberId: f.orgMember.id,
+        userId: f.orgMember.userId,
+        reportDate: new Date(offset(days)),
+        quantity,
+        quantityUnit: '条',
+        createdBy: f.manager.user.uid,
+      },
+    });
+  // Another source on the same day adds to daily quantity, without replacing the subtask report.
+  await db.projectOutputReport.create({
+    data: {
+      projectId: f.projectId,
+      memberId: f.orgMember.id,
+      userId: f.orgMember.userId,
+      reportDate: new Date(f.day),
+      quantity: '4.1234',
+      quantityUnit: '条',
+      createdBy: f.manager.user.uid,
+    },
+  });
+  const ownerMember = await db.projectMember.findFirstOrThrow({
+    where: { projectId: f.projectId, userId: f.owner.user.id, organizationId: f.organization.id },
+  });
+  const snapshot = async () => ({
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+    reports: await db.projectOutputReport.findMany({ orderBy: { id: 'asc' } }),
+    quality: await db.projectOutputQuality.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await snapshot();
+  for (const headers of [f.manager.headers, f.handler.headers]) {
+    const response = await boardTrendsHttp(f.projectId, f.day, headers, { endDate: offset(1) });
+    expect(response.statusCode, response.body).toBe(200);
+    const data = response.json().data;
+    expect(data.dates).toEqual([f.day, offset(1)]);
+    expect(
+      data.series.find((s: { memberId: number }) => s.memberId === f.orgMember.id).values,
+    ).toEqual([7, 0]);
+    expect(
+      data.series.find((s: { memberId: number }) => s.memberId === ownerMember.id).values,
+    ).toEqual([0, 0]);
+    expect(data.series.map((s: { memberId: number }) => s.memberId)).toEqual(
+      [f.personalMember.id, f.orgMember.id, ownerMember.id].sort((a, b) => a - b),
+    );
+    const cpd = await boardTrendsHttp(f.projectId, f.day, headers, {
+      metric: 'CPD',
+      endDate: offset(1),
+    });
+    expect(cpd.statusCode, cpd.body).toBe(200);
+    expect(
+      cpd.json().data.series.find((s: { memberId: number }) => s.memberId === f.orgMember.id)
+        .values,
+    ).toEqual([4, 3]);
+  }
+  const nav = await boardTrendsHttp(f.projectId, f.day, f.headers);
+  expect(nav.statusCode, nav.body).toBe(200);
+  expect(nav.json().data).toMatchObject({ dates: [f.day], series: [], viewScope: 'FULL_PROJECT' });
+  expect(await snapshot()).toEqual(before);
+});
+test('workbench trends: latest per-report quality, daily weighted accuracy, no inspection null and pending member statuses', async () => {
+  const f = await productionQualityFixture();
+  const report = await db.projectOutputReport.create({
+    data: {
+      projectId: f.projectId,
+      memberId: f.orgMember.id,
+      userId: f.orgMember.userId,
+      reportDate: new Date(f.day),
+      quantity: 100,
+      quantityUnit: '条',
+      createdBy: f.manager.user.uid,
+    },
+  });
+  const append = (id: number, inspectedQuantity: number, qualifiedQuantity: number) =>
+    db.projectOutputQuality.create({
+      data: {
+        outputReportId: id,
+        inspectedQuantity,
+        qualifiedQuantity,
+        recordedBy: f.manager.user.uid,
+        unqualifiedReason: '趋势加权验证',
+      },
+    });
+  await append(f.orgReport.id, 1, 0.1);
+  await append(f.orgReport.id, 1, 0.9);
+  await append(report.id, 9, 7.2);
+  const tomorrow = new Date(new Date(f.day).getTime() + 86400000).toISOString().slice(0, 10);
+  const read = async () => {
+    const response = await boardTrendsHttp(f.projectId, f.day, f.manager.headers, {
+      metric: 'ACCURACY',
+      endDate: tomorrow,
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    return response.json().data.series;
+  };
+  for (const status of ['ACTIVE', 'PENDING_EXIT', 'PENDING_TRANSFER']) {
+    await db.projectMember.update({ where: { id: f.orgMember.id }, data: { status } });
+    const series = await read();
+    expect(series.find((s: { memberId: number }) => s.memberId === f.orgMember.id).values).toEqual([
+      81,
+      null,
+    ]);
+    expect(
+      series.find((s: { memberId: number }) => s.memberId === f.personalMember.id).values,
+    ).toEqual([null, null]);
+  }
+  await append(report.id, 9, 0);
+  expect(
+    (await read()).find((s: { memberId: number }) => s.memberId === f.orgMember.id).values,
+  ).toEqual([9, null]);
+  await db.projectMember.update({
+    where: { id: f.orgMember.id },
+    data: { status: 'LEFT', leftAt: new Date() },
+  });
+  expect((await read()).some((s: { memberId: number }) => s.memberId === f.orgMember.id)).toBe(
+    false,
+  );
+});
+test('workbench trends: organization identities, current role and immediate access loss, date validation and unpublished project denial', async () => {
+  const f = await productionQualityFixture();
+  const response = await boardTrendsHttp(f.projectId, f.day, f.owner.headers);
+  expect(response.statusCode, response.body).toBe(200);
+  const ownerMember = await db.projectMember.findFirstOrThrow({
+    where: { projectId: f.projectId, userId: f.owner.user.id, organizationId: f.organization.id },
+  });
+  expect(response.json().data.viewScope).toBe('ORGANIZATION');
+  expect(response.json().data.series.map((s: { memberId: number }) => s.memberId)).toEqual(
+    [ownerMember.id, f.orgMember.id].sort((a, b) => a - b),
+  );
+  expect((await boardTrendsHttp(f.projectId, f.day, f.individual.headers)).statusCode).toBe(403);
+  for (const body of [
+    { startDate: '2026-02-29' },
+    { startDate: '2026-01-01', endDate: '2027-01-02' },
+    { startDate: '2026-10-02', endDate: '2026-10-01' },
+    { metric: 'OTHER' },
+  ])
+    expect((await boardTrendsHttp(f.projectId, f.day, f.manager.headers, body)).statusCode).toBe(
+      400,
+    );
+  await post('/auth/switch-role', { role: 'NAVIGATOR' }, f.owner.headers);
+  expect((await boardTrendsHttp(f.projectId, f.day, f.owner.headers)).statusCode).toBe(403);
+  await post('/auth/switch-role', { role: 'EXPERT' }, f.owner.headers);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect((await boardTrendsHttp(f.projectId, f.day, f.owner.headers)).statusCode).toBe(403);
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId },
+    data: { status: 'PENDING_ACCEPTANCE' },
+  });
+  expect((await boardTrendsHttp(f.projectId, f.day, f.manager.headers)).statusCode).toBe(403);
+  await db.project.update({ where: { id: f.projectId }, data: { status: 'DRAFT' } });
+  expect((await boardTrendsHttp(f.projectId, f.day, f.headers)).statusCode).toBe(403);
+});
+
+// 13第七批：仅定向 organization overview，不重复108—113。
+const overviewRead = (orgId: string, headers: Record<string, string>) =>
+  app.inject({ url: `/api/v1/organizations/overview?orgId=${orgId}`, headers });
+
+test('organization overview: real member and active project relation counts, zero values and no read side effects', async () => {
+  const f = await memberFixture();
+  expect((await overviewRead(f.orgId, f.headers)).json().data).toEqual({
+    orgId: f.orgId,
+    memberTotal: 1,
+    activeProjectMemberTotal: 0,
+    todayScheduledTotal: 0,
+    todayPresentTotal: 0,
+    pendingApprovalTotal: 0,
+  });
+  const members = [];
+  for (const status of [
+    'ACTIVE',
+    'PENDING',
+    'PENDING_ACTIVATION',
+    'EXIT_APPROVING',
+    'PENDING_LEAVE',
+    'LEFT',
+    'REMOVED',
+  ])
+    members.push(await f.add('MEMBER', status));
+  const p1 = await memberCountProject(f.owner, 'OVERVIEW-A');
+  const p2 = await memberCountProject(f.owner, 'OVERVIEW-B', 'DRAFT', true);
+  for (const projectId of [p1.id, p2.id])
+    await db.projectMember.create({
+      data: {
+        projectId,
+        userId: members[0].user.id,
+        userOrgRelId: members[0].rel.id,
+        organizationId: f.orgId,
+        createdBy: f.owner.uid,
+      },
+    });
+  await db.projectMember.create({
+    data: {
+      projectId: p1.id,
+      userId: members[5].user.id,
+      userOrgRelId: members[5].rel.id,
+      organizationId: f.orgId,
+      projectRole: 'PROJECT_MANAGER',
+      createdBy: f.owner.uid,
+    },
+  });
+  await db.projectMember.create({
+    data: { projectId: p1.id, userId: f.owner.id, createdBy: f.owner.uid },
+  });
+  await db.projectMember.create({
+    data: {
+      projectId: p1.id,
+      userId: members[1].user.id,
+      userOrgRelId: members[1].rel.id,
+      organizationId: f.orgId,
+      status: 'LEFT',
+      createdBy: f.owner.uid,
+    },
+  });
+  const before = await db.userOrgRel.findMany({ orderBy: { id: 'asc' } });
+  const projectBefore = await db.projectMember.findMany({ orderBy: { id: 'asc' } });
+  const result = await overviewRead(f.orgId, f.headers);
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json().data).toMatchObject({ memberTotal: 5, activeProjectMemberTotal: 3 });
+  expect(await db.userOrgRel.findMany({ orderBy: { id: 'asc' } })).toEqual(before);
+  expect(await db.projectMember.findMany({ orderBy: { id: 'asc' } })).toEqual(projectBefore);
+  expect(await db.projectTaskRound.count()).toBe(0);
+  expect(await db.projectEventOutbox.count()).toBe(0);
+});
+
+test('organization overview: Shanghai today schedules and final attendance, exact organization and personal approval nodes', async () => {
+  const f = await memberFixture(),
+    admin = await f.add('ADMIN');
+  const today = shanghaiDay(new Date());
+  const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().slice(0, 10);
+  const inactive = await f.add();
+  const other = await db.organization.create({ data: { name: '概览隔离组织', expertiseTags: [] } });
+  const otherRel = await db.userOrgRel.create({
+    data: { userId: f.owner.id, uid: f.owner.uid, orgId: other.id, position: 'OWNER' },
+  });
+  for (const [scopeKey, rel, date, dayType, status] of [
+    [f.orgId, f.ownerRel, today, 'WORK', 'ACTIVE'],
+    [f.orgId, admin.rel, today, 'REST', 'ACTIVE'],
+    [f.orgId, admin.rel, yesterday, 'WORK', 'ACTIVE'],
+    [f.orgId, inactive.rel, today, 'WORK', 'INACTIVE'],
+    [other.id, otherRel, today, 'WORK', 'ACTIVE'],
+  ] as const)
+    await db.orgMemberSchedule.create({
+      data: {
+        scopeKey,
+        orgId: scopeKey,
+        userOrgRelId: rel.id,
+        userId: rel.userId,
+        scheduleDate: new Date(date),
+        dayType,
+        status,
+        ...(dayType === 'WORK'
+          ? {
+              shiftStartAt: new Date(`${date}T09:00:00Z`),
+              shiftEndAt: new Date(`${date}T18:00:00Z`),
+            }
+          : {}),
+        createdBy: f.owner.uid,
+        updatedBy: f.owner.uid,
+      },
+    });
+  for (const [scopeKey, rel, date, autoStatus, finalStatus] of [
+    [f.orgId, f.ownerRel, today, 'ABSENT', 'PRESENT'],
+    [f.orgId, admin.rel, today, 'PRESENT', 'LEAVE'],
+    [f.orgId, admin.rel, yesterday, 'PRESENT', 'PRESENT'],
+    [f.orgId, inactive.rel, today, 'PRESENT', null],
+    [other.id, otherRel, today, 'PRESENT', 'PRESENT'],
+  ] as const)
+    await db.orgAttendanceDaily.create({
+      data: {
+        scopeKey,
+        orgId: scopeKey,
+        userOrgRelId: rel.id,
+        userId: rel.userId,
+        attendanceDate: new Date(date),
+        autoStatus,
+        finalStatus,
+        createdBy: f.owner.uid,
+        updatedBy: f.owner.uid,
+      },
+    });
+  await db.orgMemberSchedule.create({
+    data: {
+      scopeKey: 'PERSONAL',
+      userId: f.owner.id,
+      scheduleDate: new Date(today),
+      dayType: 'WORK',
+      shiftStartAt: new Date(`${today}T09:00:00Z`),
+      shiftEndAt: new Date(`${today}T18:00:00Z`),
+      createdBy: f.owner.uid,
+      updatedBy: f.owner.uid,
+    },
+  });
+  await db.orgAttendanceDaily.create({
+    data: {
+      scopeKey: 'PERSONAL',
+      userId: f.owner.id,
+      attendanceDate: new Date(today),
+      finalStatus: 'PRESENT',
+      createdBy: f.owner.uid,
+      updatedBy: f.owner.uid,
+    },
+  });
+  for (const [index, [orgId, approver, flowStatus, nodeStatus]] of (
+    [
+      [f.orgId, f.owner, 'PENDING', 'PENDING'],
+      [f.orgId, admin.user, 'PENDING', 'PENDING'],
+      [other.id, f.owner, 'PENDING', 'PENDING'],
+      [f.orgId, f.owner, 'APPROVED', 'PENDING'],
+      [f.orgId, f.owner, 'PENDING', 'WAITING'],
+    ] as const
+  ).entries())
+    await db.approvalFlow.create({
+      data: {
+        flowNo: `OVERVIEW-${index}`,
+        processCode: 'OVERVIEW',
+        businessType: 'ORG_MEMBER_EXIT',
+        businessId: f.ownerRel.id,
+        title: '概览审批',
+        applicantId: f.owner.id,
+        applicantName: '主管',
+        applicantOrgId: orgId,
+        status: flowStatus,
+        nodes: {
+          create: {
+            flowNo: `OVERVIEW-${index}`,
+            nodeSeq: 1,
+            nodeCode: 'REVIEW',
+            nodeName: '审批',
+            approverId: approver.id,
+            approverUid: approver.uid,
+            approverName: '审批人',
+            approverType: 'USER',
+            nodeStatus: nodeStatus,
+          },
+        },
+      },
+    });
+  const before = {
+    schedules: await db.orgMemberSchedule.findMany({ orderBy: { id: 'asc' } }),
+    days: await db.orgAttendanceDaily.findMany({ orderBy: { id: 'asc' } }),
+    flows: await db.approvalFlow.findMany({ orderBy: { id: 'asc' } }),
+    nodes: await db.approvalNode.findMany({ orderBy: { id: 'asc' } }),
+  };
+  const result = await overviewRead(f.orgId, f.headers);
+  expect(result.statusCode, result.body).toBe(200);
+  expect(result.json().data).toMatchObject({
+    todayScheduledTotal: 1,
+    todayPresentTotal: 1,
+    pendingApprovalTotal: 1,
+  });
+  expect((await overviewRead(f.orgId, admin.headers)).json().data.pendingApprovalTotal).toBe(1);
+  expect({
+    schedules: await db.orgMemberSchedule.findMany({ orderBy: { id: 'asc' } }),
+    days: await db.orgAttendanceDaily.findMany({ orderBy: { id: 'asc' } }),
+    flows: await db.approvalFlow.findMany({ orderBy: { id: 'asc' } }),
+    nodes: await db.approvalNode.findMany({ orderBy: { id: 'asc' } }),
+  }).toEqual(before);
+});
+
+test('organization overview: explicit organization managers, role sessions, participating status and immediate permission loss', async () => {
+  const f = await memberFixture(),
+    member = await f.add(),
+    admin = await f.add('ADMIN');
+  expect((await overviewRead(f.orgId, member.headers)).statusCode).toBe(403);
+  for (const status of ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE']) {
+    await db.userOrgRel.update({ where: { id: admin.rel.id }, data: { joinStatus: status } });
+    expect((await overviewRead(f.orgId, admin.headers)).statusCode).toBe(200);
+  }
+  for (const status of ['PENDING', 'PENDING_ACTIVATION', 'LEFT', 'REMOVED']) {
+    await db.userOrgRel.update({ where: { id: admin.rel.id }, data: { joinStatus: status } });
+    expect((await overviewRead(f.orgId, admin.headers)).statusCode).toBe(403);
+  }
+  const other = await db.organization.create({ data: { name: '多组织概览', expertiseTags: [] } });
+  expect((await overviewRead(other.id, f.headers)).statusCode).toBe(403);
+  await db.userOrgRel.create({
+    data: { userId: f.owner.id, uid: f.owner.uid, orgId: other.id, position: 'ADMIN' },
+  });
+  expect((await overviewRead(other.id, f.headers)).statusCode).toBe(200);
+  for (const role of ['PM', 'NAVIGATOR', 'EXPERT']) {
+    const switched = await post('/auth/switch-role', { role }, f.headers);
+    expect(switched.statusCode, switched.body).toBe(200);
+    expect((await overviewRead(f.orgId, f.headers)).statusCode).toBe(200);
+  }
+  await db.userOrgRel.update({ where: { id: f.ownerRel.id }, data: { joinStatus: 'LEFT' } });
+  expect((await overviewRead(f.orgId, f.headers)).statusCode).toBe(403);
+  expect((await overviewRead(other.id, f.headers)).statusCode).toBe(200);
+  await db.organization.update({ where: { id: other.id }, data: { deleted: true } });
+  expect((await overviewRead(other.id, f.headers)).statusCode).toBe(404);
+});
+
+// 13第八批只定向本组；不重复108—114或11/12已通过的集成。
+async function refreshManagementCards(projectId: number) {
+  return db.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id"=${projectId} FOR UPDATE`;
+      await refreshManagementCardSnapshots(tx, projectId);
+    },
+    { timeout: 30_000 },
+  );
+}
+const managementCard = (projectId: number, userId: string, perspective = 'PROJECT_MANAGER') =>
+  db.projectRoleNodeSnapshot.findUnique({
+    where: { projectId_userId_perspective: { projectId, userId, perspective } },
+  });
+
+test('management card arbitration: real cross-domain priority, fallback, role isolation and transaction rollback preserve task rounds', async () => {
+  const f = await productionQualityFixture();
+  const projectBefore = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const roundsBefore = await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } });
+  const expertBefore = await db.projectRoleNodeSnapshot.findMany({
+    where: { projectId: f.projectId, perspective: { startsWith: 'EXPERT_' } },
+    orderBy: { id: 'asc' },
+    select: {
+      id: true,
+      userId: true,
+      perspective: true,
+      branchNodeCode: true,
+      branchPriority: true,
+      sourceBizType: true,
+      sourceBizId: true,
+      sourceEventAt: true,
+    },
+  });
+  await refreshManagementCards(f.projectId);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    branchPriority: 70,
+  });
+  await db.projectSubtask.update({
+    where: { id: f.designated.id },
+    data: {
+      status: 'REWORK_REQUIRED',
+      actualQuantity: 10,
+      reportedQuantity: 10,
+      actualDeliveryDate: new Date('2099-12-31'),
+      submittedBy: f.manager.user.uid,
+      submittedAt: new Date(),
+      reviewedBy: f.user.uid,
+      reviewedAt: new Date(),
+      rejectReason: '补充交付说明',
+    },
+  });
+  await refreshManagementCards(f.projectId);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'SUBTASK_REWORK_SUBMIT',
+    branchPriority: 85,
+    sourceBizId: f.designated.id,
+  });
+  const cardsBefore = await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } });
+  await expect(
+    db.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id"=${f.projectId} FOR UPDATE`;
+        await tx.projectSubtask.update({
+          where: { id: f.designated.id },
+          data: { status: 'ACCEPTED', rejectReason: null },
+        });
+        await refreshManagementCardSnapshots(tx, f.projectId);
+        throw new Error('arbitration rollback');
+      },
+      { timeout: 30_000 },
+    ),
+  ).rejects.toThrow('arbitration rollback');
+  expect(await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } })).toEqual(
+    cardsBefore,
+  );
+  await db.projectSubtask.update({
+    where: { id: f.designated.id },
+    data: { status: 'ACCEPTED', rejectReason: null },
+  });
+  await refreshManagementCards(f.projectId);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    branchPriority: 70,
+  });
+  expect(await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } })).toEqual(roundsBefore);
+  expect(await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).toEqual(projectBefore);
+  expect(
+    await db.projectRoleNodeSnapshot.findMany({
+      where: { projectId: f.projectId, perspective: { startsWith: 'EXPERT_' } },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        userId: true,
+        perspective: true,
+        branchNodeCode: true,
+        branchPriority: true,
+        sourceBizType: true,
+        sourceBizId: true,
+        sourceEventAt: true,
+      },
+    }),
+  ).toEqual(expertBefore);
+  await db.project.update({ where: { id: f.projectId }, data: { currentNodeCode: 'COMPLETED' } });
+  await refreshManagementCards(f.projectId);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toBeNull();
+});
+
+test('management card arbitration: recruitment response and replacement restore entry while completing only the handled task round', async () => {
+  const f = await expertResponseFixture();
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId, status: 'ASSIGNED' },
+    data: { expertRecruitmentHandlerUserId: f.manager.user.id },
+  });
+  const accepted = await f.respond(
+    f.orgAssignment.id,
+    { decision: 'ACCEPT', projectOwnerUserId: f.owner.user.id },
+    f.owner.headers,
+  );
+  expect(accepted.statusCode, accepted.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+    branchPriority: 60,
+  });
+  const rejected = await f.respond(f.personal.id, { decision: 'REJECT', rejectReason: '暂不参与' });
+  expect(rejected.statusCode, rejected.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'EXPERT_RECRUITMENT_RETRY',
+    branchPriority: 90,
+    sourceBizId: f.personal.id,
+  });
+  const replacement = await f.submit([{ ...f.item, sourceRejectedAssignmentId: f.personal.id }]);
+  expect(replacement.statusCode, replacement.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+    branchPriority: 60,
+  });
+  const rounds = await db.projectTaskRound.findMany({
+    where: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      taskType: 'EXPERT_RECRUITMENT_RETRY',
+    },
+    orderBy: { id: 'desc' },
+  });
+  expect(rounds[0]).toMatchObject({ status: 'COMPLETED', participated: true });
+  expect(
+    await db.projectTaskRound.count({
+      where: { projectId: f.projectId, taskType: 'EXPERT_RECRUITMENT_RETRY', status: 'OPEN' },
+    }),
+  ).toBe(0);
+  expect(
+    await managementCard(f.projectId, f.manager.user.id, 'EXPERT_RECRUITMENT_HANDLER'),
+  ).toBeNull();
+});
+
+test('management card arbitration: final manual grading restores real admitted entry and inactive management loses its snapshot', async () => {
+  const f = await manualGradingFixture();
+  await db.entranceExamGradingRound.update({
+    where: { id: f.secondRound.id },
+    data: { gradingMode: 'MANUAL', reviewersJson: [{ userId: f.manager.user.id }] },
+  });
+  const first = await f.manual();
+  expect(first.statusCode, first.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'ENTRANCE_EXAM_GRADING',
+    sourceBizId: f.secondRecord.id,
+  });
+  const final = await f.manual({ gradingRecordId: f.secondRecord.id });
+  expect(final.statusCode, final.body).toBe(200);
+  expect(final.json().data).toMatchObject({ gradingStatus: 'COMPLETED', finalResult: 'ADMITTED' });
+  const member = await db.projectMember.findFirstOrThrow({
+    where: { admissionAttemptId: f.attempt.id },
+  });
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+    sourceBizId: member.id,
+    branchPriority: 60,
+  });
+  expect(
+    await db.projectTaskRound.count({
+      where: { projectId: f.projectId, taskType: 'ENTRANCE_EXAM_GRADING', status: 'OPEN' },
+    }),
+  ).toBe(0);
+  await db.user.update({ where: { id: f.manager.user.id }, data: { status: 'DISABLED' } });
+  await refreshManagementCards(f.projectId);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toBeNull();
+});
+
+// 13第九批：只定向 management card write events，不重复第八批已通过项。
+test('management card write events: entry opens first-creation card and real subtask creation restores remaining entry with recipient facts', async () => {
+  const f = await personnelEntryFixture();
+  const saved = await f.save();
+  expect(saved.statusCode, saved.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'SUBTASK_CREATE',
+    sourceBizType: 'PROJECT',
+    sourceBizId: f.projectId,
+  });
+  const entryEvent = await db.projectEventOutbox.findFirstOrThrow({
+    where: { projectId: f.projectId, operation: 'SAVE_ENTRY' },
+    orderBy: { id: 'desc' },
+  });
+  expect(entryEvent.payload).toMatchObject({
+    cardChangedRecipients: [{ userId: f.manager.user.id, role: 'PM' }],
+  });
+  const entryRounds = await db.projectTaskRound.findMany({
+    where: { projectId: f.projectId, taskType: 'MEMBER_ENTRY_CONFIRM' },
+    orderBy: { id: 'asc' },
+  });
+  const created = await post(
+    '/production-tasks/create',
+    {
+      projectId: f.projectId,
+      subtaskName: '卡片恢复验证',
+      expectedDeliveryDate: '2099-12-31',
+      expectedQuantity: 1,
+      distributionMode: 'POOL',
+      memberIds: [],
+    },
+    f.manager.headers,
+  );
+  expect(created.statusCode, created.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+    branchPriority: 60,
+  });
+  expect(
+    await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId, taskType: 'MEMBER_ENTRY_CONFIRM' },
+      orderBy: { id: 'asc' },
+    }),
+  ).toEqual(entryRounds);
+  expect(
+    await db.projectTaskRound.findFirstOrThrow({
+      where: { projectId: f.projectId, userId: f.manager.user.id, taskType: 'SUBTASK_CREATE' },
+      orderBy: { id: 'desc' },
+    }),
+  ).toMatchObject({ status: 'COMPLETED', participated: true });
+  const event = await db.projectEventOutbox.findFirstOrThrow({
+    where: { projectId: f.projectId, eventType: 'PROJECT_SUBTASK_CHANGED', operation: 'CREATED' },
+    orderBy: { id: 'desc' },
+  });
+  expect(event.payload).toMatchObject({
+    cardChangedRecipients: [{ userId: f.manager.user.id, role: 'PM' }],
+  });
+});
+
+test('management card write events: report verification stays silent and acceptance rejection/resubmission restores real pending report by role', async () => {
+  const f = await productionQualityFixture();
+  const count = await db.projectEventOutbox.count();
+  const verified = await f.review();
+  expect(verified.statusCode, verified.body).toBe(200);
+  expect(await db.projectEventOutbox.count()).toBe(count);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toBeNull();
+  const saved = await f.submit([
+    { memberId: f.orgMember.id, subtaskId: f.designated.id, reportDate: f.day, quantity: 1 },
+  ]);
+  expect(saved.statusCode, saved.body).toBe(200);
+  const report = await db.projectOutputReport.findFirstOrThrow({
+    where: { subtaskId: f.designated.id },
+  });
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    sourceBizId: report.id,
+  });
+  expect((await f.acceptance()).statusCode).toBe(200);
+  expect(await managementCard(f.projectId, f.user.id, 'NAVIGATOR')).toMatchObject({
+    branchNodeCode: 'SUBTASK_ACCEPTANCE',
+  });
+  const rejected = await f.decision({ decision: 'REJECT', rejectReason: '补充说明' });
+  expect(rejected.statusCode, rejected.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'SUBTASK_REWORK_SUBMIT',
+  });
+  const reportRounds = await db.projectTaskRound.findMany({
+    where: { projectId: f.projectId, taskType: 'OUTPUT_DATA_REVIEW' },
+    orderBy: { id: 'asc' },
+  });
+  // outbox 使用随机 UUID，不能按 ID 大小推断产生顺序。
+  const previousSubmissions = await db.projectEventOutbox.findMany({
+    where: { projectId: f.projectId, operation: 'ACCEPTANCE_SUBMITTED' },
+    select: { id: true },
+  });
+  const submitted = await f.acceptance();
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    sourceBizId: report.id,
+  });
+  expect(await managementCard(f.projectId, f.user.id, 'NAVIGATOR')).toMatchObject({
+    branchNodeCode: 'SUBTASK_REWORK_REVIEW',
+  });
+  expect(
+    await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId, taskType: 'OUTPUT_DATA_REVIEW' },
+      orderBy: { id: 'asc' },
+    }),
+  ).toEqual(reportRounds);
+  const resubmissionEvents = await db.projectEventOutbox.findMany({
+    where: {
+      projectId: f.projectId,
+      eventType: 'PROJECT_SUBTASK_CHANGED',
+      operation: 'ACCEPTANCE_SUBMITTED',
+      id: { notIn: previousSubmissions.map((event) => event.id) },
+    },
+  });
+  expect(resubmissionEvents).toHaveLength(1);
+  expect(resubmissionEvents[0]!.payload).toMatchObject({
+    projectId: f.projectId,
+    subtaskId: f.pool.id,
+    cardChangedRecipients: expect.arrayContaining([
+      { userId: f.manager.user.id, role: 'PM' },
+      { userId: f.user.id, role: 'NAVIGATOR' },
+    ]),
+  });
+  expect((await f.decision()).statusCode).toBe(200);
+  expect(await managementCard(f.projectId, f.user.id, 'NAVIGATOR')).toBeNull();
+});
+
+test('management card write events: outbox failure rolls back new report, cross-domain cards and task rounds together', async () => {
+  const f = await productionOutputFixture();
+  const { OutputReportService } =
+    await import('../src/modules/production/output-report.service.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.individual.headers.authorization.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  const before = {
+    project: await db.project.findUniqueOrThrow({ where: { id: f.projectId } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    outbox: await db.projectEventOutbox.count(),
+  };
+  const faulty = new Proxy(db, {
+    get(target, property) {
+      if (property === '$transaction')
+        return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>, options: unknown) =>
+          target.$transaction(
+            (tx) =>
+              fn(
+                new Proxy(tx, {
+                  get(inner, model) {
+                    if (model === 'projectEventOutbox')
+                      return new Proxy(inner.projectEventOutbox, {
+                        get(delegate, operation) {
+                          if (operation === 'create')
+                            return () => {
+                              throw new Error('card write event rollback');
+                            };
+                          return Reflect.get(delegate, operation);
+                        },
+                      });
+                    return Reflect.get(inner, model);
+                  },
+                }),
+              ),
+            options as never,
+          );
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  await expect(
+    new OutputReportService(faulty).save(
+      {
+        projectId: f.projectId,
+        reports: [
+          { memberId: f.personalMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 1 },
+        ],
+      },
+      principal,
+    ),
+  ).rejects.toThrow('card write event rollback');
+  expect(await db.projectOutputReport.count()).toBe(0);
+  expect(await db.projectSubtaskAssignee.count({ where: { subtaskId: f.pool.id } })).toBe(0);
+  expect(await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } })).toEqual(
+    before.cards,
+  );
+  expect(await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } })).toEqual(before.rounds);
+  expect(await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).toEqual(
+    before.project,
+  );
+  expect(await db.projectEventOutbox.count()).toBe(before.outbox);
+});
+
+// 13第十批：只定向 management card event recipients，不重复前批已通过项。
+async function onlyNewCardEvent(projectId: number, eventType: string, action: () => Promise<void>) {
+  const where = { projectId, eventType };
+  const before = new Set((await db.projectEventOutbox.findMany({ where })).map((e) => e.id));
+  await action();
+  const events = (await db.projectEventOutbox.findMany({ where })).filter((e) => !before.has(e.id));
+  expect(events).toHaveLength(1);
+  return events[0]!.payload;
+}
+
+test('management card event recipients: rejection and replacement notify the real fallback manager', async () => {
+  const f = await expertResponseFixture();
+  await db.projectManagerRecruitment.updateMany({
+    where: { projectId: f.projectId, status: 'ASSIGNED' },
+    data: { expertRecruitmentHandlerUserId: f.manager.user.id },
+  });
+  const accepted = await f.respond(
+    f.orgAssignment.id,
+    { decision: 'ACCEPT', projectOwnerUserId: f.owner.user.id },
+    f.owner.headers,
+  );
+  expect(accepted.statusCode, accepted.body).toBe(200);
+  const recipients = [{ userId: f.manager.user.id, role: 'PM' }];
+  const rejected = await onlyNewCardEvent(f.projectId, 'EXPERT_ASSIGNMENT_RESPONDED', async () => {
+    const response = await f.respond(f.personal.id, {
+      decision: 'REJECT',
+      rejectReason: '本轮无法参与',
+    });
+    expect(response.statusCode, response.body).toBe(200);
+  });
+  expect(rejected).toMatchObject({
+    assignmentId: f.personal.id,
+    decision: 'REJECT',
+    cardChangedRecipients: recipients,
+  });
+  const replaced = await onlyNewCardEvent(f.projectId, 'EXPERT_ASSIGNMENTS_CREATED', async () => {
+    const response = await f.submit([{ ...f.item, sourceRejectedAssignmentId: f.personal.id }]);
+    expect(response.statusCode, response.body).toBe(200);
+  });
+  expect(replaced).toMatchObject({ projectId: f.projectId, cardChangedRecipients: recipients });
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+  });
+});
+
+test('management card event recipients: final manual result changes both reviewer roles and restores entry only for the current PM', async () => {
+  const f = await manualGradingFixture();
+  await db.entranceExamGradingRound.update({
+    where: { id: f.secondRound.id },
+    data: { gradingMode: 'MANUAL', reviewersJson: [{ userId: f.manager.user.id }] },
+  });
+  const first = await f.manual();
+  expect(first.statusCode, first.body).toBe(200);
+  const payload = await onlyNewCardEvent(f.projectId, 'EXAM_REVIEW_QUEUE_CHANGED', async () => {
+    const response = await f.manual({ gradingRecordId: f.secondRecord.id });
+    expect(response.statusCode, response.body).toBe(200);
+  });
+  expect(payload).toMatchObject({
+    completedRoundId: f.secondRound.id,
+    nextRoundId: null,
+    deliveryStatus: 'NOT_DELIVERED',
+    cardChangedRecipients: expect.arrayContaining([
+      { userId: f.manager.user.id, role: 'NAVIGATOR' },
+      { userId: f.manager.user.id, role: 'PM' },
+    ]),
+  });
+  expect(await managementCard(f.projectId, f.manager.user.id, 'NAVIGATOR')).toBeNull();
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+  });
+});
+
+test('management card event recipients: failed mock, retry and compensation publish changed cards once and callback replay stays silent', async () => {
+  const f = await autoGradingFixture();
+  const input = await f.auto.claim(f.secondRecord.id);
+  expect(input).not.toBeNull();
+  const failed = { ...input!, status: 'FAILED' as const, items: null, errorMessage: '模拟失败' };
+  const recipients = [{ userId: f.manager.user.id, role: 'PM' }];
+  const failurePayload = await onlyNewCardEvent(f.projectId, 'EXAM_AUTO_FAILED', async () => {
+    const response = await autoHttpCallback(failed);
+    expect(response.statusCode, response.body).toBe(200);
+  });
+  expect(failurePayload).toMatchObject({ provider: 'mock', cardChangedRecipients: recipients });
+  const count = await db.projectEventOutbox.count();
+  expect((await autoHttpCallback(failed)).statusCode).toBe(200);
+  expect(await db.projectEventOutbox.count()).toBe(count);
+  const retryState = async () => ({
+    records: await db.entranceExamGradingRecord.findMany({ orderBy: { id: 'asc' } }),
+    items: await db.entranceExamGradingItem.findMany({ orderBy: { id: 'asc' } }),
+    attempts: await db.entranceExamAttempt.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const beforeRetry = await retryState();
+  const failing = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction(
+            (tx) =>
+              fn(
+                new Proxy(tx, {
+                  get(t, k) {
+                    if (k === 'projectEventOutbox')
+                      return {
+                        ...t.projectEventOutbox,
+                        create: async () => {
+                          throw new Error('card recipient outbox fault');
+                        },
+                      };
+                    return Reflect.get(t, k);
+                  },
+                }),
+              ),
+            { timeout: 30_000 },
+          );
+      return Reflect.get(target, key);
+    },
+  });
+  await expect(
+    new ExamAutoService(failing).retry(f.locator, {
+      userId: f.manager.user.id,
+      uid: f.manager.user.uid,
+      role: 'PM',
+      sessionId: 'test',
+      clientType: 'desktop',
+    }),
+  ).rejects.toThrow('card recipient outbox fault');
+  expect(await retryState()).toEqual(beforeRetry);
+  const retryPayload = await onlyNewCardEvent(
+    f.projectId,
+    'EXAM_AUTO_DISPATCH_REQUESTED',
+    async () => {
+      const response = await post('/entrance-exams/grading/retry', f.locator, f.manager.headers);
+      expect(response.statusCode, response.body).toBe(200);
+    },
+  );
+  expect(retryPayload).toMatchObject({
+    provider: 'mock',
+    executionStatus: 'NOT_EXECUTED',
+    cardChangedRecipients: recipients,
+  });
+  expect(await managementCard(f.projectId, f.manager.user.id)).toBeNull();
+  const claimed = await f.auto.claim(f.secondRecord.id);
+  expect(
+    (await autoHttpCallback({ ...claimed!, ...failed, toolTraceId: claimed!.toolTraceId }))
+      .statusCode,
+  ).toBe(200);
+  const compensated = await onlyNewCardEvent(f.projectId, 'EXAM_REVIEW_QUEUE_CHANGED', async () => {
+    const response = await f.compensate();
+    expect(response.statusCode, response.body).toBe(200);
+  });
+  expect(compensated).toMatchObject({ cardChangedRecipients: recipients });
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+  });
+});
+
+// 13第十一批：仅定向 expert card arbitration，不重复前十批集成。
+test('expert card arbitration: separate multi-organization management scopes, real entry fallback and revoked recipients', async () => {
+  const f = await productionQualityFixture();
+  // A组织只保留主管视角，B组织只赋予同一用户项目负责人视角。
+  await db.projectExpertAssignmentOwner.updateMany({
+    where: { assignmentId: f.orgAssignment.id },
+    data: { status: 'REMOVED', removedAt: new Date() },
+  });
+  const organization = await db.organization.create({
+    data: { name: '第二管理组织', expertiseTags: [] },
+  });
+  await db.userOrgRel.create({
+    data: {
+      orgId: organization.id,
+      userId: f.owner.user.id,
+      uid: f.owner.user.uid,
+      position: 'MEMBER',
+      joinStatus: 'ACTIVE',
+    },
+  });
+  const relation = await db.userOrgRel.create({
+    data: {
+      orgId: organization.id,
+      userId: f.individual.user.id,
+      uid: f.individual.user.uid,
+      joinStatus: 'ACTIVE',
+    },
+  });
+  const { id: oldAssignmentId, ...assignment } = await db.projectExpertAssignment.findUniqueOrThrow(
+    { where: { id: f.orgAssignment.id } },
+  );
+  const second = await db.projectExpertAssignment.create({
+    data: {
+      ...assignment,
+      assignmentNo: `PEA-CARD-${organization.id}`,
+      organizationId: organization.id,
+      projectOwnerUserId: f.owner.user.id,
+      owners: { create: { userId: f.owner.user.id, createdBy: f.owner.user.uid } },
+    },
+  });
+  expect(second.id).not.toBe(oldAssignmentId);
+  await db.projectExpertAssignmentMember.create({
+    data: {
+      assignmentId: second.id,
+      userId: f.individual.user.id,
+      userOrgRelId: relation.id,
+      status: 'ACCEPTED',
+      respondedAt: new Date(),
+      createdBy: f.individual.user.uid,
+    },
+  });
+  const { id: oldMemberId, ...member } = await db.projectMember.findUniqueOrThrow({
+    where: { id: f.orgMember.id },
+  });
+  const secondMember = await db.projectMember.create({
+    data: {
+      ...member,
+      organizationId: organization.id,
+      userOrgRelId: relation.id,
+      expertAssignmentId: second.id,
+      admissionAttemptId: null,
+      status: 'PENDING_ENTRY',
+      entryDecision: null,
+      plannedEntryDate: null,
+      joinedAt: null,
+      standardTrainingConfirmedAt: null,
+    },
+  });
+  expect(secondMember.id).not.toBe(oldMemberId);
+  const { id: oldReportId, ...report } = f.orgReport;
+  const secondReport = await db.projectOutputReport.create({
+    data: { ...report, memberId: secondMember.id },
+  });
+  expect(secondReport.id).not.toBe(oldReportId);
+  const rounds = await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } });
+  await refreshManagementCards(f.projectId);
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_ORG_OWNER')).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    sourceBizId: f.orgReport.id,
+  });
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    sourceBizId: secondReport.id,
+  });
+  await db.projectOutputReport.update({
+    where: { id: secondReport.id },
+    data: {
+      reviewStatus: 'VERIFIED',
+      verifiedBy: f.manager.user.uid,
+      verifiedAt: new Date(),
+      lockedAt: new Date(),
+    },
+  });
+  await refreshManagementCards(f.projectId);
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+    sourceBizId: secondMember.id,
+  });
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_ORG_OWNER')).toMatchObject({
+    sourceBizId: f.orgReport.id,
+  });
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  const changed = await db.$transaction((tx) => refreshManagementCardSnapshots(tx, f.projectId), {
+    timeout: 30_000,
+  });
+  expect(changed.cardChangedRecipients).toContainEqual({ userId: f.owner.user.id, role: 'EXPERT' });
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toBeNull();
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_ORG_OWNER')).not.toBeNull();
+  expect(await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } })).toEqual(rounds);
+});
+
+test('expert card arbitration: real return and correction events notify EXPERT once while personal progress and correction rounds remain independent', async () => {
+  const f = await productionQualityFixture();
+  const member = await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } });
+  expect(await managementCard(f.projectId, f.individual.user.id, 'EXPERT_MEMBER')).toMatchObject({
+    branchNodeCode: 'STANDARD_TRAINING',
+    sourceBizId: member.id,
+  });
+  const returned = await onlyNewCardEvent(f.projectId, 'OUTPUT_REPORT_STATE_CHANGED', async () => {
+    const response = await f.review({
+      action: 'RETURN',
+      reportIds: [f.orgReport.id],
+      reason: '重新确认产出',
+    });
+    expect(response.statusCode, response.body).toBe(200);
+  });
+  const expertRecipients = (
+    returned as { cardChangedRecipients: { userId: string; role: string }[] }
+  ).cardChangedRecipients.filter((r) => r.userId === f.owner.user.id && r.role === 'EXPERT');
+  expect(expertRecipients).toEqual([{ userId: f.owner.user.id, role: 'EXPERT' }]);
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_ORG_OWNER')).toBeNull();
+  expect(await managementCard(f.projectId, f.individual.user.id, 'EXPERT_MEMBER')).toMatchObject({
+    branchNodeCode: 'STANDARD_TRAINING',
+    sourceBizId: member.id,
+  });
+  expect(
+    await db.projectTaskRound.findFirst({
+      where: {
+        projectId: f.projectId,
+        userId: f.individual.user.id,
+        taskType: 'OUTPUT_REPORT_CORRECTION',
+        status: 'OPEN',
+      },
+    }),
+  ).not.toBeNull();
+  const corrected = await onlyNewCardEvent(f.projectId, 'OUTPUT_REPORT_STATE_CHANGED', async () => {
+    const response = await f.correct(f.orgReport.id);
+    expect(response.statusCode, response.body).toBe(200);
+  });
+  expect(corrected).toMatchObject({
+    cardChangedRecipients: expect.arrayContaining([{ userId: f.owner.user.id, role: 'EXPERT' }]),
+  });
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    sourceBizId: f.orgReport.id,
+  });
+  expect(
+    await db.projectTaskRound.findFirst({
+      where: {
+        projectId: f.projectId,
+        userId: f.individual.user.id,
+        taskType: 'OUTPUT_REPORT_CORRECTION',
+        status: 'COMPLETED',
+      },
+    }),
+  ).not.toBeNull();
+  await post('/auth/switch-role', { role: 'PM' }, f.owner.headers);
+  await refreshManagementCards(f.projectId);
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toMatchObject({
+    sourceBizId: f.orgReport.id,
+  });
+});
+
+test('expert card arbitration: outbox failure rolls back real expert cards, report, pool claim and every task round', async () => {
+  const f = await productionOutputFixture();
+  const { OutputReportService } =
+    await import('../src/modules/production/output-report.service.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.individual.headers.authorization.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  const state = async () => ({
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    reports: await db.projectOutputReport.findMany({ orderBy: { id: 'asc' } }),
+    claims: await db.projectSubtaskAssignee.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+    project: await db.project.findUniqueOrThrow({ where: { id: f.projectId } }),
+  });
+  const before = await state();
+  const faulty = new Proxy(db, {
+    get(target, property) {
+      if (property === '$transaction')
+        return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>, options: unknown) =>
+          target.$transaction(
+            (tx) =>
+              fn(
+                new Proxy(tx, {
+                  get(inner, model) {
+                    if (model === 'projectEventOutbox')
+                      return new Proxy(inner.projectEventOutbox, {
+                        get(delegate, operation) {
+                          if (operation === 'create')
+                            return (input: { data: { payload: unknown } }) => {
+                              expect(input.data.payload).toMatchObject({
+                                cardChangedRecipients: expect.arrayContaining([
+                                  { userId: f.owner.user.id, role: 'EXPERT' },
+                                ]),
+                              });
+                              throw new Error('expert card outbox fault');
+                            };
+                          return Reflect.get(delegate, operation);
+                        },
+                      });
+                    return Reflect.get(inner, model);
+                  },
+                }),
+              ),
+            options as never,
+          );
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  await expect(
+    new OutputReportService(faulty).save(
+      {
+        projectId: f.projectId,
+        reports: [
+          { memberId: f.orgMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 2 },
+        ],
+      },
+      principal,
+    ),
+  ).rejects.toThrow('expert card outbox fault');
+  expect(await state()).toEqual(before);
+});
+
+// 13第十二批：仅定向 movement card lifecycle，不重复前十一批。
+async function movementCardLifecycleFixture() {
+  const f = await personnelTransferProgressFixture();
+  const ownerMember = f.members.find((m) => m.userId === f.owner.user.id)!;
+  // 另一真实待入项来源与正在转项的成员独立，用于验证审批消失后的恢复。
+  await db.projectMember.update({
+    where: { id: ownerMember.id },
+    data: {
+      status: 'PENDING_CONFIRM',
+      entryDecision: null,
+      plannedEntryDate: null,
+      joinedAt: null,
+    },
+  });
+  await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id"=${f.projectId} FOR UPDATE`;
+    await refreshManagementCardSnapshots(tx, f.projectId);
+  });
+  return { ...f, ownerMember };
+}
+async function movementCardNewEvents(projectId: number, work: () => Promise<unknown>) {
+  const before = new Set(
+    (await db.projectEventOutbox.findMany({ where: { projectId }, select: { id: true } })).map(
+      (e) => e.id,
+    ),
+  );
+  await work();
+  return (await db.projectEventOutbox.findMany({ where: { projectId } })).filter(
+    (e) => !before.has(e.id),
+  );
+}
+
+test('movement card lifecycle: real approval restores independent entry card and withdrawal retains restored source and rounds', async () => {
+  const f = await movementCardLifecycleFixture();
+  const rounds = await db.projectTaskRound.findMany({
+    where: { projectId: f.projectId, taskType: 'MEMBER_ENTRY_CONFIRM' },
+    orderBy: { id: 'asc' },
+  });
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toMatchObject({
+    branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL',
+  });
+  const events = await movementCardNewEvents(f.projectId, async () => {
+    const result = await f.process();
+    expect(result.statusCode, result.body).toBe(200);
+  });
+  expect(events).toHaveLength(1);
+  expect(events[0]!.payload).toMatchObject({
+    cardChangedRecipients: expect.arrayContaining([{ userId: f.owner.user.id, role: 'EXPERT' }]),
+  });
+  expect((await f.load()).flow!.currentNodeCode).toBe('MEMBER_CONFIRM');
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+    sourceBizId: f.ownerMember.id,
+  });
+  expect(
+    await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId, taskType: 'MEMBER_ENTRY_CONFIRM' },
+      orderBy: { id: 'asc' },
+    }),
+  ).toEqual(rounds);
+  const withdrawn = await f.withdraw();
+  expect(withdrawn.statusCode, withdrawn.body).toBe(200);
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toMatchObject({
+    branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
+    sourceBizId: f.ownerMember.id,
+  });
+});
+
+test('movement card lifecycle: owner replacement transfers active approval card and original owner event contains both changed recipients', async () => {
+  const f = await personnelTransferProgressFixture();
+  const { replaceProjectOwners } = await import('../src/modules/expert/expert-owner-command.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.owner.headers.authorization.slice(7),
+    'desktop',
+  );
+  const events = await movementCardNewEvents(f.projectId, () =>
+    replaceProjectOwners(
+      db,
+      { assignmentId: f.orgAssignment.id, projectOwnerUserIds: [f.individual.user.id] },
+      principal,
+      'CARD_OWNER_REPLACE',
+    ),
+  );
+  const event = events.filter((e) => e.eventType === 'PROJECT_ASSIGNMENT_OWNERS_CHANGED');
+  expect(event).toHaveLength(1);
+  expect(event[0]!.payload).toMatchObject({
+    cardChangedRecipients: expect.arrayContaining([
+      { userId: f.owner.user.id, role: 'EXPERT' },
+      { userId: f.individual.user.id, role: 'EXPERT' },
+    ]),
+  });
+  expect(await managementCard(f.projectId, f.owner.user.id, 'EXPERT_PROJECT_OWNER')).toBeNull();
+  expect(
+    await managementCard(f.projectId, f.individual.user.id, 'EXPERT_PROJECT_OWNER'),
+  ).toMatchObject({ branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL', sourceBizId: (await f.load()).id });
+  expect((await f.process()).statusCode).toBe(403);
+  const approved = await f.process({}, f.individual.headers);
+  expect(approved.statusCode, approved.body).toBe(200);
+});
+
+test('movement card lifecycle: approval outbox fault rolls back restored cards, business nodes, logs and rounds in both projects', async () => {
+  const f = await movementCardLifecycleFixture();
+  const state = async () => ({
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+    movements: await db.projectMemberMovement.findMany({ orderBy: { id: 'asc' } }),
+    flows: await db.approvalFlow.findMany({ orderBy: { id: 'asc' } }),
+    nodes: await db.approvalNode.findMany({ orderBy: { id: 'asc' } }),
+    actions: await db.approvalActionLog.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await state();
+  const { processMovement } = await import('../src/modules/personnel/personnel-transfer.js');
+  const m = await f.load();
+  const flow = m.flow!;
+  const node = flow.nodes.find(
+    (n) => n.nodeSeq === flow.currentNode && n.nodeStatus === 'PENDING',
+  )!;
+  const principal = await new AuthService(db, config).authenticate(
+    f.owner.headers.authorization.slice(7),
+    'desktop',
+  );
+  const faulty = new Proxy(db, {
+    get(target, property) {
+      if (property === '$transaction')
+        return (work: (tx: Prisma.TransactionClient) => Promise<unknown>, options: unknown) =>
+          target.$transaction(
+            (tx) =>
+              work(
+                new Proxy(tx, {
+                  get(inner, model) {
+                    if (model === 'projectEventOutbox')
+                      return new Proxy(inner.projectEventOutbox, {
+                        get(delegate, method) {
+                          if (method === 'create')
+                            return (input: { data: { payload: unknown } }) => {
+                              expect(input.data.payload).toMatchObject({
+                                cardChangedRecipients: expect.arrayContaining([
+                                  { userId: f.owner.user.id, role: 'EXPERT' },
+                                ]),
+                              });
+                              throw new Error('movement card outbox fault');
+                            };
+                          return Reflect.get(delegate, method);
+                        },
+                      });
+                    return Reflect.get(inner, model);
+                  },
+                }),
+              ),
+            options as never,
+          );
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  await expect(
+    processMovement(
+      faulty,
+      {
+        projectId: f.projectId,
+        movementId: m.id,
+        flowNo: flow.flowNo,
+        flowVersionNo: flow.versionNo,
+        nodeId: node.id,
+        nodeVersionNo: node.versionNo,
+        action: 'APPROVE',
+      },
+      principal,
+    ),
+  ).rejects.toThrow('movement card outbox fault');
+  expect(await state()).toEqual(before);
+});
+
+test('candidate and training card writes: confirmation repairs stale priority, stays silent and cleans terminal cards on materials update', async () => {
+  const f = await materialsConfirmationFixture();
+  const key = {
+    projectId: f.projectId,
+    userId: f.expert.user.id,
+    perspective: 'EXPERT_INDIVIDUAL',
+  };
+  await db.projectRoleNodeSnapshot.create({
+    data: {
+      ...key,
+      branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL',
+      branchPriority: 90,
+      sourceBizType: 'PROJECT_MEMBER_MOVEMENT',
+      sourceBizId: 2147483647,
+      sourceEventAt: new Date('2026-10-01Z'),
+      calculatedAt: new Date('2026-10-01Z'),
+    },
+  });
+  const project = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const events = await db.projectEventOutbox.findMany({
+    where: { projectId: f.projectId },
+    orderBy: { id: 'asc' },
+  });
+  const result = await f.confirmRead();
+  expect(result.statusCode, result.body).toBe(200);
+  const card = await db.projectRoleNodeSnapshot.findUniqueOrThrow({
+    where: { projectId_userId_perspective: key },
+  });
+  expect(card).toMatchObject({
+    branchNodeCode: 'PRODUCTION_TASK',
+    sourceBizType: 'PROJECT_MEMBER',
+    sourceBizId: f.member.id,
+  });
+  const member = await db.projectMember.findUniqueOrThrow({ where: { id: f.member.id } });
+  expect(card.sourceEventAt).toEqual(member.standardTrainingConfirmedAt);
+  expect((await f.confirmRead()).json().data.readConfirmationTransitioned).toBe(false);
+  expect(await db.project.findUniqueOrThrow({ where: { id: f.projectId } })).toEqual(project);
+  expect(
+    await db.projectEventOutbox.findMany({
+      where: { projectId: f.projectId },
+      orderBy: { id: 'asc' },
+    }),
+  ).toEqual(events);
+  expect(
+    await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId, userId: f.expert.user.id, taskType: 'STANDARD_TRAINING' },
+    }),
+  ).toMatchObject([{ status: 'COMPLETED', participated: true }]);
+  // 当前没有项目结项命令；显式终态夹具只验证既有材料入口不会保留旧卡片。
+  await db.project.update({ where: { id: f.projectId }, data: { currentNodeCode: 'COMPLETED' } });
+  const update = await post(
+    '/projects/standard-materials/update',
+    { projectId: f.projectId, standardContent: '终态材料修订' },
+    f.manager.headers,
+  );
+  expect(update.statusCode, update.body).toBe(200);
+  expect(update.json().data.currentNodeCode).toBe('COMPLETED');
+  expect(await db.projectRoleNodeSnapshot.count({ where: { projectId: f.projectId } })).toBe(0);
+  expect(
+    await db.projectEventOutbox.findMany({
+      where: { projectId: f.projectId },
+      orderBy: { id: 'asc' },
+    }),
+  ).toEqual(events);
+});
+
+async function candidateCardState(projectId: number) {
+  const where = { projectId };
+  return {
+    cards: await db.projectRoleNodeSnapshot.findMany({ where, orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ where, orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ where, orderBy: { id: 'asc' } }),
+    attempts: await db.entranceExamAttempt.findMany({
+      where: { exam: { projectId } },
+      orderBy: { id: 'asc' },
+    }),
+    answers: await db.entranceExamAnswer.findMany({
+      where: { attempt: { exam: { projectId } } },
+      orderBy: { id: 'asc' },
+    }),
+    records: await db.entranceExamGradingRecord.findMany({
+      where: { attempt: { exam: { projectId } } },
+      orderBy: { id: 'asc' },
+    }),
+  };
+}
+function candidateEventFailureDb() {
+  return new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction(
+            (tx) =>
+              callback(
+                new Proxy(tx, {
+                  get(transaction, property) {
+                    if (property === 'projectEventOutbox')
+                      return {
+                        ...transaction.projectEventOutbox,
+                        create: async () => {
+                          throw new Error('candidate card event failure');
+                        },
+                      };
+                    return Reflect.get(transaction, property);
+                  },
+                }),
+              ),
+            { timeout: 30000 },
+          );
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+for (const mode of ['MANUAL', 'AUTO'] as const)
+  test(`candidate and training card writes: ${mode} submission carries real card audiences and rolls back with outbox`, async () => {
+    const f = await candidateSubmissionFixture(mode);
+    await db.$transaction((tx) => refreshManagementCardSnapshots(tx, f.projectId));
+    const key = {
+      projectId: f.projectId,
+      userId: f.individual.user.id,
+      perspective: 'EXPERT_INDIVIDUAL',
+    };
+    expect(
+      await db.projectRoleNodeSnapshot.findUniqueOrThrow({
+        where: { projectId_userId_perspective: key },
+      }),
+    ).toMatchObject({
+      branchNodeCode: 'ENTRANCE_EXAM',
+      sourceBizType: 'ENTRANCE_EXAM',
+      sourceBizId: f.exam.id,
+    });
+    const before = await candidateCardState(f.projectId);
+    const principal = {
+      userId: f.individual.user.id,
+      uid: f.individual.user.uid,
+      role: 'EXPERT' as const,
+      sessionId: 'test',
+      clientType: 'desktop' as const,
+    };
+    await expect(
+      new ExamCandidateCommandService(candidateEventFailureDb(), registry).submit(
+        f.input,
+        principal,
+      ),
+    ).rejects.toThrow('candidate card event failure');
+    expect(await candidateCardState(f.projectId)).toEqual(before);
+    const payload = await onlyNewCardEvent(
+      f.projectId,
+      mode === 'MANUAL' ? 'EXAM_REVIEW_QUEUE_CHANGED' : 'EXAM_AUTO_DISPATCH_REQUESTED',
+      async () => {
+        const response = await f.submitExam();
+        expect(response.statusCode, response.body).toBe(200);
+      },
+    );
+    expect(payload.cardChangedRecipients).toEqual(
+      expect.arrayContaining([{ userId: f.individual.user.id, role: 'EXPERT' }]),
+    );
+    if (mode === 'MANUAL')
+      expect(payload.cardChangedRecipients).toEqual(
+        expect.arrayContaining([{ userId: f.manager.user.id, role: 'NAVIGATOR' }]),
+      );
+    expect(
+      await db.projectRoleNodeSnapshot.findUnique({ where: { projectId_userId_perspective: key } }),
+    ).toBeNull();
+    const after = await candidateCardState(f.projectId);
+    expect((await f.submitExam()).statusCode).toBe(409);
+    expect(await candidateCardState(f.projectId)).toEqual(after);
+  });
+
+test('candidate and training card writes: cancellation clears real exam source with audience and atomic event rollback', async () => {
+  const f = await candidateSubmissionFixture();
+  await db.$transaction((tx) => refreshManagementCardSnapshots(tx, f.projectId));
+  const before = await candidateCardState(f.projectId);
+  expect(before.cards).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ userId: f.individual.user.id, branchNodeCode: 'ENTRANCE_EXAM' }),
+    ]),
+  );
+  const principal = {
+    userId: f.individual.user.id,
+    uid: f.individual.user.uid,
+    role: 'EXPERT' as const,
+    sessionId: 'test',
+    clientType: 'desktop' as const,
+  };
+  await expect(
+    new ExamCandidateCommandService(candidateEventFailureDb(), registry).cancel(f.input, principal),
+  ).rejects.toThrow('candidate card event failure');
+  expect(await candidateCardState(f.projectId)).toEqual(before);
+  const payload = await onlyNewCardEvent(f.projectId, 'EXAM_RESULT_DECIDED', async () => {
+    const response = await f.cancelExam();
+    expect(response.statusCode, response.body).toBe(200);
+  });
+  expect(payload).toMatchObject({
+    cancelled: true,
+    cardChangedRecipients: [{ userId: f.individual.user.id, role: 'EXPERT' }],
+  });
+  expect(
+    await db.projectRoleNodeSnapshot.count({
+      where: { projectId: f.projectId, userId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  const after = await candidateCardState(f.projectId);
+  expect((await f.cancelExam()).statusCode).toBe(400);
+  expect(await candidateCardState(f.projectId)).toEqual(after);
+});
+
+// 13第十四批：仅定向 expert report task reads，不重复历史批次。
+test('expert report task reads: real review source overrides stale cards and verification removes the branch without read side effects', async () => {
+  const f = await productionQualityFixture();
+  expect((await post('/auth/switch-role', { role: 'EXPERT' }, f.owner.headers)).statusCode).toBe(
+    200,
+  );
+  await db.projectRoleNodeSnapshot.updateMany({
+    where: { projectId: f.projectId, userId: f.owner.user.id },
+    data: { branchNodeCode: 'MEMBER_ENTRY_CONFIRM', branchPriority: 60 },
+  });
+  const read = () => post('/expert-assignments/my-tasks', { status: 'ACCEPTED' }, f.owner.headers);
+  const before = {
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.count(),
+  };
+  const response = await read();
+  expect(response.statusCode, response.body).toBe(200);
+  expect(response.json().data).toContainEqual(
+    expect.objectContaining({
+      assignmentId: f.orgAssignment.id,
+      branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    }),
+  );
+  expect({
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.count(),
+  }).toEqual(before);
+  const verified = await f.review({ reportIds: [f.orgReport.id] });
+  expect(verified.statusCode, verified.body).toBe(200);
+  // 再造陈旧快照，读取仍须以已核准的真实来源撤除核查支线。
+  await db.projectRoleNodeSnapshot.updateMany({
+    where: { projectId: f.projectId, userId: f.owner.user.id },
+    data: { branchNodeCode: 'OUTPUT_DATA_REVIEW', branchPriority: 70 },
+  });
+  expect(
+    (await read())
+      .json()
+      .data.some((c: { branchNodeCode: string }) => c.branchNodeCode === 'OUTPUT_DATA_REVIEW'),
+  ).toBe(false);
+});
+
+test('expert report task reads: current organization departure revokes review while personal training remains independent of returned reports', async () => {
+  const f = await productionQualityFixture();
+  expect((await post('/auth/switch-role', { role: 'EXPERT' }, f.owner.headers)).statusCode).toBe(
+    200,
+  );
+  const response = await post('/expert-assignments/my-tasks', {}, f.owner.headers);
+  expect(response.statusCode, response.body).toBe(200);
+  expect(
+    response
+      .json()
+      .data.some((c: { branchNodeCode: string }) => c.branchNodeCode === 'OUTPUT_DATA_REVIEW'),
+  ).toBe(true);
+  await db.userOrgRel.updateMany({
+    where: { userId: f.owner.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  const lost = await post('/expert-assignments/my-tasks', {}, f.owner.headers);
+  expect(lost.statusCode, lost.body).toBe(200);
+  expect(
+    lost.json().data.some((c: { assignmentId: number }) => c.assignmentId === f.orgAssignment.id),
+  ).toBe(false);
+  const returned = await f.review({
+    action: 'RETURN',
+    reportIds: [f.orgReport.id],
+    reason: '修正报量',
+  });
+  expect(returned.statusCode, returned.body).toBe(200);
+  const personal = await post(
+    '/expert-assignments/my-tasks',
+    { status: 'ACCEPTED' },
+    f.individual.headers,
+  );
+  expect(personal.statusCode, personal.body).toBe(200);
+  expect(personal.json().data).toContainEqual(
+    expect.objectContaining({
+      assignmentId: f.orgAssignment.id,
+      branchNodeCode: 'STANDARD_TRAINING',
+    }),
+  );
+});
+
+// 13第十五批：仅定向 expert report button compatibility。
+test('expert report button compatibility: training gates entry, live production allows reporting and own Shanghai daily report disables the button without read writes', async () => {
+  const f = await productionOutputFixture();
+  const read = async () => {
+    const response = await post(
+      '/expert-assignments/my-tasks',
+      { status: 'ACCEPTED' },
+      f.individual.headers,
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    return response
+      .json()
+      .data.find((c: { assignmentId: number }) => c.assignmentId === f.orgAssignment.id);
+  };
+  expect(await read()).toMatchObject({
+    branchNodeCode: 'STANDARD_TRAINING',
+    operations: { canReportOutput: false },
+  });
+  const confirm = await app.inject({
+    method: 'POST',
+    url: `/api/v1/projects/standard-materials/confirm-read?projectId=${f.projectId}`,
+    headers: f.individual.headers,
+  });
+  expect(confirm.statusCode, confirm.body).toBe(200);
+  const before = await candidateCardState(f.projectId);
+  expect(await read()).toMatchObject({
+    branchNodeCode: 'PRODUCTION_TASK',
+    operations: { canReportOutput: true },
+  });
+  expect(await candidateCardState(f.projectId)).toEqual(before);
+  const saved = await f.submit([
+    { memberId: f.orgMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 0 },
+  ]);
+  expect(saved.statusCode, saved.body).toBe(200);
+  expect(await read()).toBeUndefined();
+  await db.userOrgRel.updateMany({
+    where: { userId: f.individual.user.id, orgId: f.organization.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  expect(await read()).toBeUndefined();
+});
+
+test('expert report button compatibility: project owner can enter proxy reporting before subtasks exist while review and lost owner rights disable entry', async () => {
+  const f = await productionSubtaskFixture();
+  expect((await post('/auth/switch-role', { role: 'EXPERT' }, f.owner.headers)).statusCode).toBe(
+    200,
+  );
+  // 仅保留其他人在项，验证按钮来自真实代报资格。
+  await db.projectMember.updateMany({
+    where: { projectId: f.projectId, userId: f.owner.user.id },
+    data: { status: 'LEFT', leftAt: new Date() },
+  });
+  const read = async () => {
+    const response = await post(
+      '/expert-assignments/my-tasks',
+      { status: 'ACCEPTED' },
+      f.owner.headers,
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    return response
+      .json()
+      .data.find((c: { assignmentId: number }) => c.assignmentId === f.orgAssignment.id);
+  };
+  expect(await db.projectSubtask.count({ where: { projectId: f.projectId } })).toBe(0);
+  expect(await read()).toMatchObject({ operations: { canReportOutput: true } });
+  const submitted = await post(
+    '/production-tasks/report/save',
+    {
+      projectId: f.projectId,
+      reports: [
+        {
+          memberId: f.orgMember.id,
+          reportDate: new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10),
+          quantity: 1,
+        },
+      ],
+    },
+    f.owner.headers,
+  );
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  expect(await read()).toMatchObject({
+    branchNodeCode: 'OUTPUT_DATA_REVIEW',
+    operations: { canReportOutput: false },
+  });
+  await db.projectExpertAssignmentOwner.updateMany({
+    where: { assignmentId: f.orgAssignment.id, userId: f.owner.user.id },
+    data: { status: 'REMOVED' },
+  });
+  expect((await read())?.operations.canReportOutput ?? false).toBe(false);
+});
+
+// 13第十六批：仅定向 expert production card visibility。
+test('expert production card visibility: zero daily reporting hides production, return restores correction and yesterday restores ordinary production without read writes', async () => {
+  const f = await productionOutputFixture();
+  const confirmed = await app.inject({
+    method: 'POST',
+    url: `/api/v1/projects/standard-materials/confirm-read?projectId=${f.projectId}`,
+    headers: f.individual.headers,
+  });
+  expect(confirmed.statusCode, confirmed.body).toBe(200);
+  const read = async () => {
+    const response = await post(
+      '/expert-assignments/my-tasks',
+      { status: 'ACCEPTED' },
+      f.individual.headers,
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    return response
+      .json()
+      .data.find((c: { assignmentId: number }) => c.assignmentId === f.orgAssignment.id);
+  };
+  expect(await read()).toMatchObject({ branchNodeCode: 'PRODUCTION_TASK' });
+  const saved = await f.submit([
+    { memberId: f.orgMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 0 },
+  ]);
+  expect(saved.statusCode, saved.body).toBe(200);
+  const report = await db.projectOutputReport.findFirstOrThrow({
+    where: { projectId: f.projectId, memberId: f.orgMember.id },
+  });
+  const before = await candidateCardState(f.projectId);
+  expect(await read()).toBeUndefined();
+  expect(await candidateCardState(f.projectId)).toEqual(before);
+  const returned = await f.review({
+    action: 'RETURN',
+    reportIds: [report.id],
+    reason: '修正零报量',
+  });
+  expect(returned.statusCode, returned.body).toBe(200);
+  expect(await read()).toMatchObject({
+    branchNodeCode: 'PRODUCTION_TASK',
+    operations: { canReportOutput: false },
+  });
+  const corrected = await f.correct(report.id);
+  expect(corrected.statusCode, corrected.body).toBe(200);
+  expect(await read()).toBeUndefined();
+  // 历史日期夹具模拟上海跨日，不修改运行时钟或业务接口。
+  const yesterday = new Date(new Date(f.day).getTime() - 86400000);
+  await db.projectOutputReport.update({
+    where: { id: report.id },
+    data: { reportDate: yesterday },
+  });
+  const restoredState = await candidateCardState(f.projectId);
+  expect(await read()).toMatchObject({
+    branchNodeCode: 'PRODUCTION_TASK',
+    operations: { canReportOutput: true },
+  });
+  expect(await candidateCardState(f.projectId)).toEqual(restoredState);
+});
+
+test('expert production card visibility: effective personal transfer retains training and same-day correction but hides completed daily production', async () => {
+  const f = await personnelTransferProgressFixture(true);
+  const personal = await f.load();
+  expect((await f.respond()).statusCode).toBe(200);
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const paper = entered.json().data;
+  expect(
+    (
+      await post(
+        '/entrance-exams/submit',
+        {
+          projectId: f.targetProject.id,
+          attemptId: paper.attemptId,
+          integritySigned: true,
+          answers: [{ questionId: paper.questions[0].questionId, answerContent: '个人答案' }],
+        },
+        f.individual.headers,
+      )
+    ).statusCode,
+  ).toBe(200);
+  const record = await db.entranceExamGradingRecord.findFirstOrThrow({
+    where: { attemptId: paper.attemptId },
+  });
+  const manager = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.slice(7),
+    'desktop',
+  );
+  await new ExamGradingCommandService(db).manual(
+    {
+      projectId: f.targetProject.id,
+      examId: f.exam.id,
+      attemptId: paper.attemptId,
+      gradingRecordId: record.id,
+      items: [{ questionId: paper.questions[0].questionId, correctness: 'CORRECT' }],
+    },
+    manager,
+  );
+  const { todayText } = await import('../src/modules/personnel/personnel-domain.js');
+  await db.projectMemberMovement.update({
+    where: { id: personal.id },
+    data: { plannedEffectiveDate: new Date(todayText(new Date())) },
+  });
+  const flow = await db.approvalFlow.findUniqueOrThrow({
+    where: { id: personal.flowId! },
+    include: { nodes: true },
+  });
+  const node = flow.nodes.find(
+    (n) => n.nodeSeq === flow.currentNode && n.nodeStatus === 'PENDING',
+  )!;
+  const approved = await post(
+    '/project-personnel/movements/process',
+    {
+      projectId: f.projectId,
+      movementId: personal.id,
+      flowNo: flow.flowNo,
+      flowVersionNo: flow.versionNo,
+      nodeId: node.id,
+      nodeVersionNo: node.versionNo,
+      action: 'APPROVE',
+    },
+    f.manager.headers,
+  );
+  expect(approved.statusCode, approved.body).toBe(200);
+  const { memberInclude, qualifiedForEntry } =
+    await import('../src/modules/personnel/personnel-access.js');
+  const target = await db.projectMember.findFirstOrThrow({
+    where: { projectId: f.targetProject.id, admissionAttemptId: paper.attemptId },
+    include: memberInclude,
+  });
+  expect(target).toMatchObject({
+    status: 'ACTIVE',
+    expertAssignmentId: null,
+    organizationId: null,
+  });
+  expect(qualifiedForEntry(target, true)).toBe(true);
+
+  await db.project.update({
+    where: { id: f.targetProject.id },
+    data: { currentNodeCode: 'PRODUCTION_TASK', quantityUnit: '条' },
+  });
+  const read = async () => {
+    const response = await post('/expert-assignments/my-tasks', {}, f.individual.headers);
+    expect(response.statusCode, response.body).toBe(200);
+    return response.json().data.find((c: { movementId: number }) => c.movementId === personal.id);
+  };
+  expect(await read()).toMatchObject({ assignmentId: null, branchNodeCode: 'STANDARD_TRAINING' });
+  const confirm = await app.inject({
+    method: 'POST',
+    url: `/api/v1/projects/standard-materials/confirm-read?projectId=${f.targetProject.id}`,
+    headers: f.individual.headers,
+  });
+  expect(confirm.statusCode, confirm.body).toBe(200);
+  expect(await read()).toMatchObject({
+    branchNodeCode: 'PRODUCTION_TASK',
+    operations: { canReportOutput: true },
+  });
+  const saved = await post(
+    '/production-tasks/report/save',
+    {
+      projectId: f.targetProject.id,
+      reports: [{ memberId: target.id, reportDate: todayText(new Date()), quantity: 0 }],
+    },
+    f.individual.headers,
+  );
+  expect(saved.statusCode, saved.body).toBe(200);
+  const state = await candidateCardState(f.targetProject.id);
+  expect(await read()).toBeUndefined();
+  expect(await candidateCardState(f.targetProject.id)).toEqual(state);
+  const report = await db.projectOutputReport.findFirstOrThrow({
+    where: { projectId: f.targetProject.id, memberId: target.id },
+  });
+  const returned = await post(
+    '/production-tasks/report/review',
+    {
+      projectId: f.targetProject.id,
+      action: 'RETURN',
+      reportIds: [report.id],
+      reason: '修正转项报量',
+    },
+    f.manager.headers,
+  );
+  expect(returned.statusCode, returned.body).toBe(200);
+  expect(await read()).toMatchObject({
+    assignmentId: null,
+    branchNodeCode: 'PRODUCTION_TASK',
+    operations: { canReportOutput: false },
+  });
+  await db.projectMember.update({
+    where: { id: target.id },
+    data: { status: 'LEFT', leftAt: new Date() },
+  });
+  expect(await read()).toBeUndefined();
+});
+
+// 13第十七批仅定向 production plan card writes，不重复历史通过项。
+async function productionPlanCardFixture() {
+  const f = await productionPlanFixture();
+  await db.project.update({
+    where: { id: f.projectId },
+    data: { currentNodeCode: 'PRODUCTION_TASK' },
+  });
+  for (const [userId, perspective] of [
+    [f.manager.user.id, 'PROJECT_MANAGER'],
+    [f.handler.user.id, 'EXPERT_RECRUITMENT_HANDLER'],
+  ])
+    await db.projectRoleNodeSnapshot.create({
+      data: {
+        projectId: f.projectId,
+        userId: userId!,
+        perspective: perspective!,
+        branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL',
+        branchPriority: 100,
+        sourceBizType: 'PROJECT_MEMBER_MOVEMENT',
+        sourceBizId: 2147483647,
+        sourceEventAt: new Date('2026-10-01Z'),
+        calculatedAt: new Date('2026-10-01Z'),
+      },
+    });
+  const unrelated = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'PM',
+      taskType: 'SUBTASK_CREATE',
+      status: 'OPEN',
+    },
+  });
+  return { ...f, unrelated };
+}
+test('production plan card writes: late confirmation repairs stale cards from real creation source and stays silent', async () => {
+  const f = await productionPlanCardFixture();
+  const project = await db.project.findUniqueOrThrow({ where: { id: f.projectId } });
+  const events = await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } });
+  const response = await f.confirm({ ...productionPlanExample, needWrittenExam: false });
+  expect(response.statusCode, response.body).toBe(200);
+  expect(response.json().data.currentNodeCode).toBe('PRODUCTION_TASK');
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'SUBTASK_CREATE',
+    sourceBizType: 'PROJECT',
+    sourceBizId: f.projectId,
+    sourceEventAt: project.createdAt,
+  });
+  expect(
+    await managementCard(f.projectId, f.handler.user.id, 'EXPERT_RECRUITMENT_HANDLER'),
+  ).toBeNull();
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.unrelated.id } })).toEqual(
+    f.unrelated,
+  );
+  expect(
+    await db.projectTaskRound.findMany({
+      where: {
+        projectId: f.projectId,
+        taskType: 'MAIN_PRODUCTION_PLAN',
+      },
+    }),
+  ).toMatchObject([{ status: 'COMPLETED', participated: true }]);
+  const state = async () => ({
+    project: await db.project.findUniqueOrThrow({ where: { id: f.projectId } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const confirmed = await state();
+  expect((await f.confirm()).statusCode).toBe(400);
+  expect((await f.query()).statusCode).toBe(200);
+  expect(await state()).toEqual(confirmed);
+  expect(confirmed.project.versionNo).toBe(project.versionNo);
+  expect(await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+});
+test('production plan card writes: snapshot failure rolls back plan details, node, rounds and card cleanup', async () => {
+  const f = await productionPlanCardFixture();
+  await db.project.update({
+    where: { id: f.projectId },
+    data: { currentNodeCode: 'PRODUCTION_PLAN' },
+  });
+  const state = async () => ({
+    project: await db.project.findUniqueOrThrow({ where: { id: f.projectId } }),
+    plans: await db.projectProductionPlan.findMany({ orderBy: { id: 'asc' } }),
+    crowds: await db.projectProductionCrowd.findMany({ orderBy: { id: 'asc' } }),
+    stages: await db.projectProductionStage.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  const before = await state();
+  const faulty = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction(
+            (tx) =>
+              callback(
+                new Proxy(tx, {
+                  get(transaction, property) {
+                    if (property === 'projectRoleNodeSnapshot')
+                      return {
+                        ...transaction.projectRoleNodeSnapshot,
+                        deleteMany: async (args: Prisma.ProjectRoleNodeSnapshotDeleteManyArgs) => {
+                          await transaction.projectRoleNodeSnapshot.deleteMany(args);
+                          throw new Error('plan snapshot write fault');
+                        },
+                      };
+                    return Reflect.get(transaction, property);
+                  },
+                }),
+              ),
+            { timeout: 30000 },
+          );
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const principal = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization!.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  await expect(
+    new ProjectProductionPlanService(faulty).confirm(
+      f.projectId,
+      productionPlanExample as ProductionPlanInput,
+      principal,
+    ),
+  ).rejects.toThrow('plan snapshot write fault');
+  expect(await state()).toEqual(before);
+});
+
+// 13第十八批仅定向 exam lifecycle card writes，不重复历史通过项。
+async function staleExamCard(projectId: number, userId: string, perspective: string) {
+  await db.projectRoleNodeSnapshot.deleteMany({ where: { projectId, userId, perspective } });
+  return db.projectRoleNodeSnapshot.create({
+    data: {
+      projectId,
+      userId,
+      perspective,
+      branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL',
+      branchPriority: 100,
+      sourceBizType: 'PROJECT_MEMBER_MOVEMENT',
+      sourceBizId: 2147483647,
+      sourceEventAt: new Date('2026-10-01Z'),
+      calculatedAt: new Date('2026-10-01Z'),
+    },
+  });
+}
+async function examCardWriteState() {
+  return {
+    projects: await db.project.findMany({ orderBy: { id: 'asc' } }),
+    exams: await db.projectEntranceExam.findMany({ orderBy: { id: 'asc' } }),
+    versions: await db.entranceExamVersion.findMany({ orderBy: { id: 'asc' } }),
+    papers: await db.entranceExamPaper.findMany({ orderBy: { id: 'asc' } }),
+    questions: await db.entranceExamQuestion.findMany({ orderBy: { id: 'asc' } }),
+    grading: await db.entranceExamGradingRound.findMany({ orderBy: { id: 'asc' } }),
+    attempts: await db.entranceExamAttempt.findMany({ orderBy: { id: 'asc' } }),
+    movements: await db.projectMemberMovement.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  };
+}
+function examCardFaultDb() {
+  return new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction(
+            (tx) =>
+              callback(
+                new Proxy(tx, {
+                  get(transaction, property) {
+                    if (property === 'projectRoleNodeSnapshot')
+                      return {
+                        ...transaction.projectRoleNodeSnapshot,
+                        deleteMany: async (args: Prisma.ProjectRoleNodeSnapshotDeleteManyArgs) => {
+                          await transaction.projectRoleNodeSnapshot.deleteMany(args);
+                          throw new Error('exam snapshot fault');
+                        },
+                        upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                          await transaction.projectRoleNodeSnapshot.upsert(args);
+                          throw new Error('exam snapshot fault');
+                        },
+                      };
+                    return Reflect.get(transaction, property);
+                  },
+                }),
+              ),
+            { timeout: 30000 },
+          );
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+test('exam lifecycle card writes: publish edit close restore real independent cards, preserve rounds and stay silent', async () => {
+  const f = await examPublishFixture();
+  await db.project.update({
+    where: { id: f.projectId },
+    data: { currentNodeCode: 'PRODUCTION_TASK' },
+  });
+  const unrelated = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'PM',
+      taskType: 'SUBTASK_CREATE',
+      status: 'OPEN',
+    },
+  });
+  const events = await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } });
+  await staleExamCard(f.projectId, f.manager.user.id, 'PROJECT_MANAGER');
+  const published = await f.publish();
+  expect(published.statusCode, published.body).toBe(200);
+  const exam = published.json().data;
+  for (const command of ['publish', 'edit', 'close']) {
+    if (command !== 'publish') {
+      await staleExamCard(f.projectId, f.manager.user.id, 'PROJECT_MANAGER');
+      const response =
+        command === 'edit'
+          ? await f.edit(exam.examId, exam.currentVersionId)
+          : await post(
+              '/entrance-exams/close',
+              { projectId: f.projectId, examId: exam.examId },
+              f.manager.headers,
+            );
+      expect(response.statusCode, response.body).toBe(200);
+    }
+    expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+      branchNodeCode: 'SUBTASK_CREATE',
+      sourceBizType: 'PROJECT',
+      sourceBizId: f.projectId,
+    });
+    expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: unrelated.id } })).toEqual(
+      unrelated,
+    );
+  }
+  expect(await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+});
+test.each(['publish', 'edit', 'close'])(
+  'exam lifecycle card writes: %s snapshot failure rolls back config node rounds and cards',
+  async (command) => {
+    const f = await examPublishFixture();
+    let exam;
+    if (command !== 'publish') {
+      const response = await f.publish();
+      expect(response.statusCode, response.body).toBe(200);
+      exam = response.json().data;
+    }
+    await staleExamCard(f.projectId, f.manager.user.id, 'PROJECT_MANAGER');
+    const before = await examCardWriteState();
+    const principal = await new AuthService(db, config).authenticate(
+      f.manager.headers.authorization!.replace(/^Bearer /, ''),
+      'desktop',
+    );
+    const service = new ExamCommandService(examCardFaultDb(), registry);
+    await expect(
+      command === 'close'
+        ? service.close({ projectId: f.projectId, examId: exam.examId }, principal)
+        : service.save(
+            command === 'edit'
+              ? {
+                  ...f.payload,
+                  examId: exam.examId,
+                  expectedCurrentVersionId: exam.currentVersionId,
+                }
+              : f.payload,
+            principal,
+            command === 'edit',
+          ),
+    ).rejects.toThrow('exam snapshot fault');
+    expect(await examCardWriteState()).toEqual(before);
+  },
+);
+test('exam lifecycle card writes: entry repairs stale personal card and repeated binding stays silent', async () => {
+  const f = await examCandidateFixture();
+  const events = await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } });
+  const rounds = await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } });
+  await staleExamCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL');
+  const response = await f.enter();
+  expect(response.statusCode, response.body).toBe(200);
+  expect(
+    await managementCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL'),
+  ).toMatchObject({
+    branchNodeCode: 'ENTRANCE_EXAM',
+    sourceBizType: 'ENTRANCE_EXAM',
+    sourceBizId: f.exam.id,
+    sourceEventAt: f.exam.createdAt,
+  });
+  const attempt = await db.entranceExamAttempt.findUniqueOrThrow({
+    where: { id: response.json().data.attemptId },
+  });
+  await staleExamCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL');
+  expect((await f.enter()).json().data).toEqual(response.json().data);
+  expect(await db.entranceExamAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).toEqual(
+    attempt,
+  );
+  const state = await examCardWriteState();
+  expect((await f.current()).statusCode).toBe(200);
+  expect(await examCardWriteState()).toEqual(state);
+  expect(state.rounds).toEqual(rounds);
+  expect(state.events).toEqual(events);
+});
+test('exam lifecycle card writes: entry snapshot failure rolls back new attempt and card cleanup', async () => {
+  const f = await examCandidateFixture();
+  await staleExamCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL');
+  const before = await examCardWriteState();
+  const principal = await new AuthService(db, config).authenticate(
+    f.individual.headers.authorization!.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  await expect(
+    new ExamCandidateService(examCardFaultDb()).enter(f.projectId, principal),
+  ).rejects.toThrow('exam snapshot fault');
+  expect(await examCardWriteState()).toEqual(before);
+});
+test('exam lifecycle card writes: closing last available exam removes personal exam card and cancels only its independent round', async () => {
+  const f = await examCandidateFixture();
+  await staleExamCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL');
+  const rounds = await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } });
+  const events = await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } });
+  const response = await post(
+    '/entrance-exams/close',
+    { projectId: f.projectId, examId: f.exam.id },
+    f.manager.headers,
+  );
+  expect(response.statusCode, response.body).toBe(200);
+  expect(await managementCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL')).toBeNull();
+  expect(
+    await db.projectTaskRound.findMany({ where: { role: 'EXPERT' }, orderBy: { id: 'asc' } }),
+  ).toEqual(
+    rounds
+      .filter((r) => r.role === 'EXPERT')
+      .map((r) =>
+        r.userId === f.individual.user.id && r.taskType === 'ENTRANCE_EXAM' && r.status === 'OPEN'
+          ? { ...r, status: 'CANCELLED', finishedAt: expect.any(Date) }
+          : r,
+      ),
+  );
+  expect(await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+});
+
+// 13第十九批仅定向 recruitment handler card writes，不重复历史通过项。
+async function recruitmentHandlerCardFixture() {
+  const f = await expertResponseFixture();
+  const rejected = await f.respond(f.personal.id, { decision: 'REJECT', rejectReason: '暂不接单' });
+  expect(rejected.statusCode, rejected.body).toBe(200);
+  await db.project.update({
+    where: { id: f.projectId },
+    data: { currentNodeCode: 'PRODUCTION_TASK' },
+  });
+  await refreshManagementCards(f.projectId);
+  const unrelated = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'PM',
+      taskType: 'SUBTASK_CREATE',
+      status: 'OPEN',
+    },
+  });
+  await staleExamCard(f.projectId, f.manager.user.id, 'PROJECT_MANAGER');
+  const change = (handlerUserId: string) =>
+    post(
+      '/projects/expert-recruitment-handler/change',
+      { projectId: f.projectId, handlerUserId },
+      f.manager.headers,
+    );
+  const state = async () => ({
+    project: await db.project.findUniqueOrThrow({ where: { id: f.projectId } }),
+    relations: await db.projectManagerRecruitment.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  return { ...f, unrelated, change, state };
+}
+test('recruitment handler card writes: retry handoff repairs cards, restores independent source and retains round history and read purity', async () => {
+  const f = await recruitmentHandlerCardFixture();
+  const before = await f.state();
+  const retry = await db.projectTaskRound.findFirstOrThrow({
+    where: {
+      projectId: f.projectId,
+      userId: f.handler.user.id,
+      taskType: 'EXPERT_RECRUITMENT_RETRY',
+      status: 'OPEN',
+    },
+  });
+  const assignment = await db.projectExpertAssignment.findUniqueOrThrow({
+    where: { id: f.personal.id },
+  });
+  const handoff = await f.change(f.manager.user.id);
+  expect(handoff.statusCode, handoff.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'EXPERT_RECRUITMENT_RETRY',
+    sourceBizId: f.personal.id,
+    sourceEventAt: assignment.rejectedAt,
+  });
+  expect(
+    await managementCard(f.projectId, f.handler.user.id, 'EXPERT_RECRUITMENT_HANDLER'),
+  ).toBeNull();
+  expect(
+    await managementCard(f.projectId, f.manager.user.id, 'EXPERT_RECRUITMENT_HANDLER'),
+  ).toBeNull();
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: retry.id } })).toMatchObject({
+    status: 'CANCELLED',
+    participated: retry.participated,
+  });
+  const next = await db.projectTaskRound.findFirstOrThrow({
+    where: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      taskType: 'EXPERT_RECRUITMENT_RETRY',
+      status: 'OPEN',
+    },
+  });
+  expect(next.participated).toBe(false);
+  const events = (await f.state()).events.filter(
+    (e) => !before.events.some((old) => old.id === e.id),
+  );
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({
+    eventType: 'PROJECT_TASKS_RECONCILED',
+    status: 'PENDING',
+    payload: {
+      cardChangedRecipients: expect.arrayContaining([
+        { userId: f.handler.user.id, role: 'PM' },
+        { userId: f.manager.user.id, role: 'PM' },
+      ]),
+    },
+  });
+  const after = await f.state();
+  expect(after.project).toEqual(before.project);
+  expect((await f.detail(f.handler.headers)).statusCode).toBe(403);
+  const query = await app.inject({
+    url: `/api/v1/projects/expert-recruitments/handler-candidates?projectId=${f.projectId}`,
+    headers: f.manager.headers,
+  });
+  expect(query.statusCode, query.body).toBe(200);
+  expect((await f.detail()).statusCode).toBe(200);
+  expect(await f.state()).toEqual(after);
+  const back = await f.change(f.handler.user.id);
+  expect(back.statusCode, back.body).toBe(200);
+  expect(await managementCard(f.projectId, f.manager.user.id)).toMatchObject({
+    branchNodeCode: 'SUBTASK_CREATE',
+    sourceBizType: 'PROJECT',
+    sourceBizId: f.projectId,
+    sourceEventAt: before.project.createdAt,
+  });
+  expect(
+    await managementCard(f.projectId, f.handler.user.id, 'EXPERT_RECRUITMENT_HANDLER'),
+  ).toMatchObject({ branchNodeCode: 'EXPERT_RECRUITMENT_RETRY', sourceBizId: f.personal.id });
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.unrelated.id } })).toEqual(
+    f.unrelated,
+  );
+  expect(
+    await db.projectTaskRound.count({
+      where: { projectId: f.projectId, taskType: 'EXPERT_RECRUITMENT_RETRY', status: 'COMPLETED' },
+    }),
+  ).toBe(0);
+  const stable = await f.state();
+  const repeated = await f.change(f.handler.user.id);
+  expect(repeated.statusCode, repeated.body).toBe(200);
+  const final = await f.state();
+  expect(final.rounds).toEqual(stable.rounds);
+  const repeatedEvents = final.events.filter((e) => !stable.events.some((old) => old.id === e.id));
+  expect(repeatedEvents).toHaveLength(1);
+  expect(repeatedEvents[0]!.payload).toMatchObject({
+    cardChangedRecipients: [],
+    taskChangedRecipients: [],
+  });
+});
+test.each(['snapshot', 'outbox'])(
+  'recruitment handler card writes: %s failure rolls back relation, rounds, cards and event',
+  async (fault) => {
+    const f = await recruitmentHandlerCardFixture();
+    const before = await f.state();
+    let cardsWritten = 0;
+    const faulty = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+            db.$transaction(
+              (tx) =>
+                callback(
+                  new Proxy(tx, {
+                    get(transaction, property) {
+                      if (property === 'projectRoleNodeSnapshot')
+                        return {
+                          ...transaction.projectRoleNodeSnapshot,
+                          deleteMany: async (
+                            args: Prisma.ProjectRoleNodeSnapshotDeleteManyArgs,
+                          ) => {
+                            await transaction.projectRoleNodeSnapshot.deleteMany(args);
+                            cardsWritten++;
+                            if (fault === 'snapshot') throw new Error('handler snapshot fault');
+                            return result;
+                          },
+                          upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                            await transaction.projectRoleNodeSnapshot.upsert(args);
+                            cardsWritten++;
+                            if (fault === 'snapshot') throw new Error('handler snapshot fault');
+                            return result;
+                          },
+                        };
+                      if (property === 'projectEventOutbox' && fault === 'outbox')
+                        return {
+                          ...transaction.projectEventOutbox,
+                          create: async () => {
+                            expect(cardsWritten).toBeGreaterThan(0);
+                            throw new Error('handler outbox fault');
+                          },
+                        };
+                      return Reflect.get(transaction, property);
+                    },
+                  }),
+                ),
+              { timeout: 30000 },
+            );
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const principal = await new AuthService(db, config).authenticate(
+      f.manager.headers.authorization!.replace(/^Bearer /, ''),
+      'desktop',
+    );
+    const { ProjectRecruitmentHandlerService } =
+      await import('../src/modules/projects/project-recruitment-handler.service.js');
+    await expect(
+      new ProjectRecruitmentHandlerService(faulty).change(
+        { projectId: f.projectId, handlerUserId: f.manager.user.id },
+        principal,
+      ),
+    ).rejects.toThrow(`handler ${fault} fault`);
+    expect(cardsWritten).toBeGreaterThan(0);
+    expect(await f.state()).toEqual(before);
+  },
+);
+
+// 13第二十批：转项本人考试等待来源，不重复前十九批。
+test('transfer exam card sources: real personal response and entry create exact target snapshot, submission removes it and reads stay pure', async () => {
+  const f = await personnelTransferProgressFixture(true);
+  const movement = await f.load();
+  const snapshot = () =>
+    db.projectRoleNodeSnapshot.findMany({
+      where: {
+        projectId: f.targetProject.id,
+        userId: f.individual.user.id,
+        perspective: 'EXPERT_INDIVIDUAL',
+      },
+    });
+  expect(await snapshot()).toEqual([]);
+  const eventsBefore = await db.projectEventOutbox.findMany({ select: { id: true } });
+  const response = await f.respond();
+  expect(response.statusCode, response.body).toBe(200);
+  expect(await snapshot()).toMatchObject([
+    {
+      branchNodeCode: 'ENTRANCE_EXAM',
+      sourceBizType: 'PROJECT_MEMBER_TRANSFER',
+      sourceBizId: movement.id,
+      sourceEventAt: movement.createdAt,
+    },
+  ]);
+  expect(
+    await db.projectExpertAssignment.count({
+      where: { projectId: f.targetProject.id, expertUserId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  const event = await db.projectEventOutbox.findFirstOrThrow({
+    where: {
+      id: { notIn: eventsBefore.map((e) => e.id) },
+      projectId: f.targetProject.id,
+      operation: 'TRANSFER_RESPONSE',
+    },
+  });
+  expect(event.payload).toMatchObject({
+    cardChangedRecipients: expect.arrayContaining([
+      { userId: f.individual.user.id, role: 'EXPERT' },
+    ]),
+  });
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const paper = entered.json().data;
+  expect(await snapshot()).toMatchObject([
+    { sourceBizId: movement.id, sourceEventAt: movement.createdAt },
+  ]);
+  // 已入场继续绑定原卷；考试关闭不撤销尚在答题窗口中的任务。
+  await db.projectEntranceExam.update({ where: { id: f.exam.id }, data: { status: 'CLOSED' } });
+  await db.$transaction((tx) => refreshManagementCardSnapshots(tx, f.targetProject.id));
+  expect(await snapshot()).toHaveLength(1);
+  const state = async () => ({
+    snapshots: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.count(),
+  });
+  const beforeRead = await state();
+  const { queryTransferTasks } = await import('../src/modules/expert/expert-transfer-query.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.individual.headers.authorization.slice(7),
+    'desktop',
+  );
+  expect(await db.$transaction((tx) => queryTransferTasks(tx, {}, principal))).toMatchObject([
+    {
+      movementId: movement.id,
+      branchNodeCode: 'ENTRANCE_EXAM',
+      operations: { canAccept: false, canReportOutput: false },
+    },
+  ]);
+  expect(await state()).toEqual(beforeRead);
+  const submitted = await post(
+    '/entrance-exams/submit',
+    {
+      projectId: f.targetProject.id,
+      attemptId: paper.attemptId,
+      integritySigned: true,
+      answers: [{ questionId: paper.questions[0].questionId, answerContent: '本次转项答案' }],
+    },
+    f.individual.headers,
+  );
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  expect(await snapshot()).toEqual([]);
+  expect(await db.$transaction((tx) => queryTransferTasks(tx, {}, principal))).toEqual([]);
+  expect(
+    await db.projectTaskRound.count({
+      where: {
+        projectId: f.targetProject.id,
+        userId: principal.userId,
+        taskType: 'MEMBER_MOVEMENT_APPROVAL',
+      },
+    }),
+  ).toBe(0);
+});
+
+test('transfer exam card sources: snapshot and outbox failures roll back confirmation, flow, cards and rounds together', async () => {
+  const f = await personnelTransferProgressFixture(true);
+  const movement = await f.load();
+  const principal = await new AuthService(db, config).authenticate(
+    f.individual.headers.authorization.slice(7),
+    'desktop',
+  );
+  const state = async () => ({
+    movement: await f.load(),
+    snapshots: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    logs: await db.approvalActionLog.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.count(),
+  });
+  const before = await state();
+  const { respondTransfer } = await import('../src/modules/personnel/personnel-transfer.js');
+  for (const delegate of ['projectRoleNodeSnapshot', 'projectEventOutbox'] as const) {
+    const failing = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+            db.$transaction(
+              (tx) =>
+                fn(
+                  new Proxy(tx, {
+                    get(t, k) {
+                      if (k === delegate && k === 'projectRoleNodeSnapshot')
+                        return {
+                          ...t.projectRoleNodeSnapshot,
+                          upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                            const result = await t.projectRoleNodeSnapshot.upsert(args);
+                            if (
+                              args.create.projectId === f.targetProject.id &&
+                              args.create.userId === principal.userId
+                            )
+                              throw new Error('transfer card fault');
+                            return result;
+                          },
+                        };
+                      if (k === delegate && k === 'projectEventOutbox')
+                        return {
+                          ...t.projectEventOutbox,
+                          create: async (args: Prisma.ProjectEventOutboxCreateArgs) => {
+                            const result = await t.projectEventOutbox.create(args);
+                            if (args.data.projectId === f.targetProject.id)
+                              throw new Error('transfer card fault');
+                            return result;
+                          },
+                        };
+                      return Reflect.get(t, k);
+                    },
+                  }),
+                ),
+              { timeout: 30_000 },
+            );
+        return Reflect.get(target, key);
+      },
+    });
+    await expect(
+      respondTransfer(failing, { movementId: movement.id, decision: 'ACCEPT' }, principal),
+    ).rejects.toThrow('transfer card fault');
+    expect(await state()).toEqual(before);
+  }
+});
+
+// 13第二十一批：完整来源同步独立考试/培训轮次，不重复前二十批。
+async function ownerIndependentProgressFixture() {
+  const f = await productionQualityFixture();
+  const { replaceProjectOwners } = await import('../src/modules/expert/expert-owner-command.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.owner.headers.authorization!.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  const change = (client = db, userId = f.individual.user.id) =>
+    replaceProjectOwners(
+      client,
+      { assignmentId: f.orgAssignment.id, projectOwnerUserId: userId },
+      principal,
+      'OWNER_INDEPENDENT_PROGRESS',
+    );
+  const state = async () => ({
+    assignments: await db.projectExpertAssignment.findMany({ orderBy: { id: 'asc' } }),
+    owners: await db.projectExpertAssignmentOwner.findMany({ orderBy: { id: 'asc' } }),
+    members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  return { ...f, change, state };
+}
+
+test('owner independent progress: real promotion retains training under report review, demotion and repeated synchronization preserve history and reads stay pure', async () => {
+  const f = await ownerIndependentProgressFixture();
+  const where = {
+    projectId: f.projectId,
+    userId: f.individual.user.id,
+    role: 'EXPERT',
+    taskType: 'STANDARD_TRAINING',
+    status: 'OPEN',
+  };
+  const training = await db.projectTaskRound.findFirstOrThrow({ where });
+  await f.change();
+  expect(await db.projectTaskRound.findMany({ where })).toEqual([training]);
+  expect(
+    await managementCard(f.projectId, f.individual.user.id, 'EXPERT_PROJECT_OWNER'),
+  ).toMatchObject({ branchNodeCode: 'OUTPUT_DATA_REVIEW', sourceBizId: f.orgReport.id });
+  expect(await managementCard(f.projectId, f.individual.user.id, 'EXPERT_MEMBER')).toMatchObject({
+    branchNodeCode: 'STANDARD_TRAINING',
+    sourceBizId: f.orgMember.id,
+  });
+  const before = await f.state();
+  await f.change();
+  expect(await f.state()).toEqual(before);
+  const read = await post('/expert-assignments/my-tasks', {}, f.individual.headers);
+  expect(read.statusCode, read.body).toBe(200);
+  expect(await f.state()).toEqual(before);
+  await f.change(db, f.owner.user.id);
+  expect(await db.projectTaskRound.findMany({ where })).toEqual([training]);
+  expect(
+    await managementCard(f.projectId, f.individual.user.id, 'EXPERT_PROJECT_OWNER'),
+  ).toBeNull();
+  // 实际组织失权后显式同步，只取消本域轮次，不记为完成。
+  await db.userOrgRel.updateMany({
+    where: { orgId: f.organization.id, userId: f.individual.user.id },
+    data: { joinStatus: 'LEFT' },
+  });
+  const { refreshOwnerProgress } = await import('../src/modules/expert/expert-owner-command.js');
+  await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id"=${f.projectId} FOR UPDATE`;
+    await refreshOwnerProgress(tx, f.projectId, [f.individual.user.id], new Date());
+  });
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: training.id } })).toMatchObject(
+    { status: 'CANCELLED', participated: training.participated },
+  );
+});
+
+test('owner independent progress: outbox failure after opening hidden training rolls back owners, rounds, cards and events', async () => {
+  const f = await ownerIndependentProgressFixture();
+  await db.projectTaskRound.deleteMany({
+    where: {
+      projectId: f.projectId,
+      userId: f.individual.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+    },
+  });
+  const before = await f.state();
+  let trainingWritten = false;
+  const faulty = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction(
+            (tx) =>
+              callback(
+                new Proxy(tx, {
+                  get(transaction, property) {
+                    if (property === 'projectTaskRound')
+                      return {
+                        ...transaction.projectTaskRound,
+                        create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                          const result = await transaction.projectTaskRound.create(args);
+                          if (
+                            result.userId === f.individual.user.id &&
+                            result.taskType === 'STANDARD_TRAINING'
+                          )
+                            trainingWritten = true;
+                          return result;
+                        },
+                      };
+                    if (property === 'projectEventOutbox')
+                      return {
+                        ...transaction.projectEventOutbox,
+                        create: async (args: Prisma.ProjectEventOutboxCreateArgs) => {
+                          await transaction.projectEventOutbox.create(args);
+                          expect(trainingWritten).toBe(true);
+                          throw new Error('independent progress outbox fault');
+                        },
+                      };
+                    return Reflect.get(transaction, property);
+                  },
+                }),
+              ),
+            { timeout: 30000 },
+          );
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  await expect(f.change(faulty)).rejects.toThrow('independent progress outbox fault');
+  expect(trainingWritten).toBe(true);
+  expect(await f.state()).toEqual(before);
+});
+
+// 13第二十二批：转项流程的独立来源轮次，不重复前二十一批。
+test('transfer independent progress: confirmation opens target exam, withdrawal cancels it and source training and history survive', async () => {
+  const f = await personnelTransferProgressFixture(true);
+  const userId = f.individual.user.id;
+  const sourceRound = await db.projectTaskRound.findFirstOrThrow({
+    where: {
+      projectId: f.projectId,
+      userId,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+      status: 'OPEN',
+    },
+  });
+  const historical = await db.projectTaskRound.create({
+    data: {
+      projectId: f.targetProject.id,
+      userId,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+      status: 'CANCELLED',
+      openedAt: new Date('2026-10-01Z'),
+      finishedAt: new Date('2026-10-02Z'),
+    },
+  });
+  const accepted = await f.respond();
+  expect(accepted.statusCode, accepted.body).toBe(200);
+  const targetRound = await db.projectTaskRound.findFirstOrThrow({
+    where: {
+      projectId: f.targetProject.id,
+      userId,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+      status: 'OPEN',
+    },
+  });
+  expect(targetRound).toMatchObject({ participated: false, finishedAt: null });
+  expect(targetRound.id).not.toBe(historical.id);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: sourceRound.id } })).toEqual(
+    sourceRound,
+  );
+  const beforeRead = await examCardWriteState();
+  expect((await f.respond()).statusCode).toBe(409);
+  const { queryTransferTasks } = await import('../src/modules/expert/expert-transfer-query.js');
+  const principal = await new AuthService(db, config).authenticate(
+    f.individual.headers.authorization.slice(7),
+    'desktop',
+  );
+  expect(await db.$transaction((tx) => queryTransferTasks(tx, {}, principal))).toMatchObject([
+    { movementId: (await f.load()).id, branchNodeCode: 'ENTRANCE_EXAM' },
+  ]);
+  expect(await examCardWriteState()).toEqual(beforeRead);
+  const withdrawn = await f.withdraw();
+  expect(withdrawn.statusCode, withdrawn.body).toBe(200);
+  expect(
+    await db.projectTaskRound.findUniqueOrThrow({ where: { id: targetRound.id } }),
+  ).toMatchObject({ status: 'CANCELLED', participated: false, finishedAt: expect.any(Date) });
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: historical.id } })).toEqual(
+    historical,
+  );
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: sourceRound.id } })).toEqual(
+    sourceRound,
+  );
+  expect(await managementCard(f.targetProject.id, userId, 'EXPERT_INDIVIDUAL')).toBeNull();
+  expect(
+    await db.projectTaskRound.count({
+      where: { projectId: f.targetProject.id, userId, taskType: 'ENTRANCE_EXAM', status: 'OPEN' },
+    }),
+  ).toBe(0);
+  const after = await examCardWriteState();
+  expect((await f.withdraw()).statusCode).toBe(409);
+  expect(await examCardWriteState()).toEqual(after);
+});
+
+test.each(['round', 'outbox'] as const)(
+  'transfer independent progress: %s write fault rolls back new target round, flow, cards and events',
+  async (fault) => {
+    const f = await personnelTransferProgressFixture(true);
+    const movement = await f.load();
+    const principal = await new AuthService(db, config).authenticate(
+      f.individual.headers.authorization.slice(7),
+      'desktop',
+    );
+    const state = async () => ({
+      ...(await examCardWriteState()),
+      flows: await db.approvalFlow.findMany({ orderBy: { id: 'asc' } }),
+      nodes: await db.approvalNode.findMany({ orderBy: { id: 'asc' } }),
+      actions: await db.approvalActionLog.findMany({ orderBy: { id: 'asc' } }),
+      members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+    });
+    const before = await state();
+    let targetRoundWritten = false;
+    const failing = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (fn: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+            db.$transaction(
+              (tx) =>
+                fn(
+                  new Proxy(tx, {
+                    get(t, k) {
+                      if (k === 'projectTaskRound')
+                        return {
+                          ...t.projectTaskRound,
+                          create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                            const result = await t.projectTaskRound.create(args);
+                            if (
+                              args.data.projectId === f.targetProject.id &&
+                              args.data.userId === principal.userId &&
+                              args.data.taskType === 'ENTRANCE_EXAM'
+                            ) {
+                              targetRoundWritten = true;
+                              if (fault === 'round') throw new Error('transfer progress fault');
+                            }
+                            return result;
+                          },
+                        };
+                      if (k === 'projectEventOutbox' && fault === 'outbox')
+                        return {
+                          ...t.projectEventOutbox,
+                          create: async (args: Prisma.ProjectEventOutboxCreateArgs) => {
+                            const result = await t.projectEventOutbox.create(args);
+                            if (args.data.projectId === f.targetProject.id) {
+                              expect(targetRoundWritten).toBe(true);
+                              throw new Error('transfer progress fault');
+                            }
+                            return result;
+                          },
+                        };
+                      return Reflect.get(t, k);
+                    },
+                  }),
+                ),
+              { timeout: 30000 },
+            );
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const { respondTransfer } = await import('../src/modules/personnel/personnel-transfer.js');
+    await expect(
+      respondTransfer(failing, { movementId: movement.id, decision: 'ACCEPT' }, principal),
+    ).rejects.toThrow('transfer progress fault');
+    expect(targetRoundWritten).toBe(true);
+    expect(await state()).toEqual(before);
+  },
+);
+
+// 13第二十三批：配置命令同步独立考试/培训轮次，仅运行本批。
+function independentExamPayload(
+  projectId: number,
+  reviewerUserId: string,
+  examName = '配置轮次考试',
+) {
+  return {
+    ...structuredClone(examConfigExample),
+    projectId,
+    examName,
+    gradingRounds: [{ gradingMode: 'MANUAL', reviewerUserIds: [reviewerUserId] }],
+  };
+}
+async function independentExamRounds(projectId: number, userId: string) {
+  return db.projectTaskRound.findMany({
+    where: { projectId, userId, role: 'EXPERT', taskType: 'ENTRANCE_EXAM' },
+    orderBy: { id: 'asc' },
+  });
+}
+test('exam config independent progress: last closure cancels only exam, republishing opens a new round and entered old version survives edits and closure', async () => {
+  const f = await examCandidateFixture();
+  const userId = f.individual.user.id;
+  const original = (await independentExamRounds(f.projectId, userId)).find(
+    (r) => r.status === 'OPEN',
+  )!;
+  expect(original).toBeDefined();
+  const training = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'PM',
+      taskType: 'SUBTASK_CREATE',
+    },
+  });
+  const events = await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } });
+  const closed = await post(
+    '/entrance-exams/close',
+    { projectId: f.projectId, examId: f.exam.id },
+    f.manager.headers,
+  );
+  expect(closed.statusCode, closed.body).toBe(200);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: original.id } })).toMatchObject(
+    { status: 'CANCELLED', participated: false, finishedAt: expect.any(Date) },
+  );
+  const history = await independentExamRounds(f.projectId, userId);
+  const payload = independentExamPayload(f.projectId, f.manager.user.id);
+  const published = await post('/entrance-exams/publish', payload, f.manager.headers);
+  expect(published.statusCode, published.body).toBe(200);
+  const exam = published.json().data;
+  const reopened = (await independentExamRounds(f.projectId, userId)).find(
+    (r) => r.status === 'OPEN',
+  )!;
+  expect(reopened.id).not.toBe(original.id);
+  expect(
+    (await independentExamRounds(f.projectId, userId)).filter((r) => r.status !== 'OPEN'),
+  ).toEqual(history);
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const attempt = await db.entranceExamAttempt.findUniqueOrThrow({
+    where: { id: entered.json().data.attemptId },
+  });
+  const edited = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/entrance-exams/edit',
+    headers: f.manager.headers,
+    payload: { ...payload, examId: exam.examId, expectedCurrentVersionId: exam.currentVersionId },
+  });
+  expect(edited.statusCode, edited.body).toBe(200);
+  const closeAgain = await post(
+    '/entrance-exams/close',
+    { projectId: f.projectId, examId: exam.examId },
+    f.manager.headers,
+  );
+  expect(closeAgain.statusCode, closeAgain.body).toBe(200);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: reopened.id } })).toEqual(
+    reopened,
+  );
+  expect(await managementCard(f.projectId, userId, 'EXPERT_INDIVIDUAL')).toMatchObject({
+    branchNodeCode: 'ENTRANCE_EXAM',
+    sourceBizId: exam.examId,
+  });
+  expect(await db.entranceExamAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).toEqual(
+    attempt,
+  );
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: training.id } })).toEqual(
+    training,
+  );
+  expect((await f.enter()).json().data).toEqual(entered.json().data);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: reopened.id } })).toEqual(
+    reopened,
+  );
+  const beforeRead = await examCardWriteState();
+  expect((await f.current()).statusCode).toBe(200);
+  expect(
+    (
+      await post(
+        '/entrance-exams/close',
+        { projectId: f.projectId, examId: exam.examId },
+        f.manager.headers,
+      )
+    ).statusCode,
+  ).toBe(409);
+  expect(await examCardWriteState()).toEqual(beforeRead);
+  expect(await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+});
+test('exam config independent progress: another transfer exam preserves the round, last closure cancels, publish restores and bound transfer remains independent of source training', async () => {
+  const f = await personnelTransferProgressFixture(true);
+  await db.projectProductionPlan.create({
+    data: {
+      projectId: f.targetProject.id,
+      operatorHeadcount: 1,
+      operatorCpd: 1,
+      totalExpectedOutput: 1,
+      needWrittenExam: true,
+      maxActiveExamCount: 2,
+      confirmedBy: f.user.uid,
+      confirmedAt: new Date(),
+      createdBy: f.user.uid,
+    },
+  });
+  expect((await f.respond()).statusCode).toBe(200);
+  const userId = f.individual.user.id;
+  const source = await independentExamRounds(f.targetProject.id, userId);
+  const sourceTraining = await db.projectTaskRound.findMany({
+    where: { projectId: f.projectId, userId, taskType: 'STANDARD_TRAINING' },
+    orderBy: { id: 'asc' },
+  });
+  const payload = independentExamPayload(f.targetProject.id, f.manager.user.id);
+  const second = await post('/entrance-exams/publish', payload, f.manager.headers);
+  expect(second.statusCode, second.body).toBe(200);
+  expect(await independentExamRounds(f.targetProject.id, userId)).toEqual(source);
+  const closed = await post(
+    '/entrance-exams/close',
+    { projectId: f.targetProject.id, examId: f.exam.id },
+    f.manager.headers,
+  );
+  expect(closed.statusCode, closed.body).toBe(200);
+  expect(await independentExamRounds(f.targetProject.id, userId)).toEqual(source);
+  const last = await post(
+    '/entrance-exams/close',
+    { projectId: f.targetProject.id, examId: second.json().data.examId },
+    f.manager.headers,
+  );
+  expect(last.statusCode, last.body).toBe(200);
+  expect(await independentExamRounds(f.targetProject.id, userId)).toMatchObject([
+    { status: 'CANCELLED', participated: false },
+  ]);
+  const restored = await post(
+    '/entrance-exams/publish',
+    { ...payload, examName: '恢复转项考试' },
+    f.manager.headers,
+  );
+  expect(restored.statusCode, restored.body).toBe(200);
+  const opened = (await independentExamRounds(f.targetProject.id, userId)).find(
+    (r) => r.status === 'OPEN',
+  )!;
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  expect(
+    (
+      await post(
+        '/entrance-exams/close',
+        { projectId: f.targetProject.id, examId: restored.json().data.examId },
+        f.manager.headers,
+      )
+    ).statusCode,
+  ).toBe(200);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: opened.id } })).toEqual(opened);
+  expect(
+    await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId, userId, taskType: 'STANDARD_TRAINING' },
+      orderBy: { id: 'asc' },
+    }),
+  ).toEqual(sourceTraining);
+});
+test.each(
+  ['publish', 'edit', 'close'].flatMap((command) =>
+    ['round', 'card'].map((fault) => ({ command, fault })),
+  ),
+)(
+  'exam config independent progress: $command $fault failure rolls back configuration and independent progress after actual writes',
+  async ({ command, fault }) => {
+    const f = await examCandidateFixture();
+    const userId = f.individual.user.id;
+    if (command === 'publish') {
+      const closed = await post(
+        '/entrance-exams/close',
+        { projectId: f.projectId, examId: f.exam.id },
+        f.manager.headers,
+      );
+      expect(closed.statusCode, closed.body).toBe(200);
+    } else if (command === 'edit') {
+      await db.projectTaskRound.deleteMany({
+        where: { projectId: f.projectId, userId, role: 'EXPERT', taskType: 'ENTRANCE_EXAM' },
+      });
+    }
+    const before = await examCardWriteState();
+    const principal = await new AuthService(db, config).authenticate(
+      f.manager.headers.authorization.slice(7),
+      'desktop',
+    );
+    let roundWritten = false;
+    let cardWritten = false;
+    const faulty = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+            db.$transaction(
+              (tx) =>
+                callback(
+                  new Proxy(tx, {
+                    get(transaction, property) {
+                      if (property === 'projectTaskRound')
+                        return {
+                          ...transaction.projectTaskRound,
+                          create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                            const result = await transaction.projectTaskRound.create(args);
+                            if (
+                              result.userId === userId &&
+                              result.role === 'EXPERT' &&
+                              result.taskType === 'ENTRANCE_EXAM'
+                            ) {
+                              roundWritten = true;
+                              if (fault === 'round') throw new Error('config independent fault');
+                            }
+                            return result;
+                          },
+                          update: async (args: Prisma.ProjectTaskRoundUpdateArgs) => {
+                            const result = await transaction.projectTaskRound.update(args);
+                            if (
+                              result.userId === userId &&
+                              result.role === 'EXPERT' &&
+                              result.taskType === 'ENTRANCE_EXAM'
+                            ) {
+                              roundWritten = true;
+                              if (fault === 'round') throw new Error('config independent fault');
+                            }
+                            return result;
+                          },
+                        };
+                      if (property === 'projectRoleNodeSnapshot')
+                        return {
+                          ...transaction.projectRoleNodeSnapshot,
+                          upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                            await transaction.projectRoleNodeSnapshot.upsert(args);
+                            cardWritten = true;
+                            expect(roundWritten).toBe(true);
+                            throw new Error('config independent fault');
+                          },
+                          deleteMany: async (
+                            args: Prisma.ProjectRoleNodeSnapshotDeleteManyArgs,
+                          ) => {
+                            await transaction.projectRoleNodeSnapshot.deleteMany(args);
+                            cardWritten = true;
+                            expect(roundWritten).toBe(true);
+                            throw new Error('config independent fault');
+                          },
+                        };
+                      return Reflect.get(transaction, property);
+                    },
+                  }),
+                ),
+              { timeout: 30000 },
+            );
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const service = new ExamCommandService(faulty, registry);
+    const input = {
+      ...independentExamPayload(f.projectId, f.manager.user.id),
+      examId: f.exam.id,
+      expectedCurrentVersionId: f.version.id,
+    };
+    await expect(
+      command === 'close'
+        ? service.close(input, principal)
+        : service.save(input, principal, command === 'edit'),
+    ).rejects.toThrow('config independent fault');
+    expect(roundWritten).toBe(true);
+    expect(cardWritten).toBe(fault === 'card');
+    expect(await examCardWriteState()).toEqual(before);
+  },
+);
+
+// 13第二十四批：只定向 ordinary expert exam reads，不重复历史集成。
+async function ordinaryExamCards(f: Awaited<ReturnType<typeof examCandidateFixture>>) {
+  const before = await examCardWriteState();
+  const response = await post(
+    '/expert-assignments/my-tasks',
+    { status: 'ACCEPTED' },
+    f.individual.headers,
+  );
+  expect(response.statusCode, response.body).toBe(200);
+  expect(await examCardWriteState()).toEqual(before);
+  return response
+    .json()
+    .data.filter((c: { assignmentId: number }) => c.assignmentId === f.personal.id);
+}
+test('ordinary expert exam reads: registration closure hides unentered task while bound historical paper survives edit and close until deadline', async () => {
+  const f = await examCandidateFixture();
+  expect(await ordinaryExamCards(f)).toMatchObject([{ branchNodeCode: 'ENTRANCE_EXAM' }]);
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const edited = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/entrance-exams/edit',
+    headers: f.manager.headers,
+    payload: {
+      ...independentExamPayload(f.projectId, f.manager.user.id),
+      examId: f.exam.id,
+      expectedCurrentVersionId: f.version.id,
+    },
+  });
+  expect(edited.statusCode, edited.body).toBe(200);
+  const closed = await post(
+    '/entrance-exams/close',
+    { projectId: f.projectId, examId: f.exam.id },
+    f.manager.headers,
+  );
+  expect(closed.statusCode, closed.body).toBe(200);
+  expect(await ordinaryExamCards(f)).toMatchObject([{ branchNodeCode: 'ENTRANCE_EXAM' }]);
+  expect((await f.enter()).json().data).toEqual(entered.json().data);
+  await db.entranceExamAttempt.update({
+    where: { id: entered.json().data.attemptId },
+    data: { answerDeadlineAt: new Date(0) },
+  });
+  expect(await ordinaryExamCards(f)).toEqual([]);
+  await db.entranceExamAttempt.delete({ where: { id: entered.json().data.attemptId } });
+  expect(await ordinaryExamCards(f)).toEqual([]);
+});
+test('ordinary expert exam reads: broken bound paper is hidden and arbitration removes stale card without completing its independent round', async () => {
+  const f = await examCandidateFixture();
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const data = entered.json().data;
+  await db.entranceExamAttempt.update({ where: { id: data.attemptId }, data: { paperId: null } });
+  expect(await ordinaryExamCards(f)).toEqual([]);
+  await db.$transaction((tx) => refreshManagementCardSnapshots(tx, f.projectId, new Date()));
+  expect(await managementCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL')).toBeNull();
+  expect(
+    (await independentExamRounds(f.projectId, f.individual.user.id)).every((r) => !r.participated),
+  ).toBe(true);
+  await db.entranceExamAttempt.update({
+    where: { id: data.attemptId },
+    data: { paperId: data.paperId },
+  });
+  expect(await ordinaryExamCards(f)).toMatchObject([{ branchNodeCode: 'ENTRANCE_EXAM' }]);
+  await db.user.update({ where: { id: f.individual.user.id }, data: { status: 'DISABLED' } });
+  const { ordinaryExamTask } = await import('../src/modules/expert/expert-exam-task.js');
+  expect(
+    await db.$transaction((tx) =>
+      ordinaryExamTask(tx, f.projectId, f.individual.user.id, new Date()),
+    ),
+  ).toBeNull();
+});
+test('ordinary expert exam reads: stale assignment binding, cancellation and registration deadline never revive a task', async () => {
+  const f = await examCandidateFixture();
+  await db.entranceExamVersion.update({
+    where: { id: f.version.id },
+    data: { registrationDeadline: new Date(0) },
+  });
+  expect(await ordinaryExamCards(f)).toEqual([]);
+  await db.entranceExamVersion.update({
+    where: { id: f.version.id },
+    data: { registrationDeadline: new Date('2099-01-01') },
+  });
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const attemptId = entered.json().data.attemptId;
+  await db.entranceExamAttempt.update({
+    where: { id: attemptId },
+    data: { sourceBizId: f.personal.id + 10000 },
+  });
+  expect(await ordinaryExamCards(f)).toEqual([]);
+  await db.entranceExamAttempt.update({
+    where: { id: attemptId },
+    data: { sourceBizId: f.personal.id, cancelledAt: new Date() },
+  });
+  expect(await ordinaryExamCards(f)).toEqual([]);
+});
+
+// 13第二十五批：只定向 production plan independent progress，不重复历史集成。
+async function productionPlanIndependentFixture(keepTraining = false) {
+  const f = await personnelEntryFixture();
+  const saved = await f.save();
+  expect(saved.statusCode, saved.body).toBe(200);
+  await db.projectProductionPlan.delete({ where: { projectId: f.projectId } });
+  // 模拟遗留缺轮次，与已完成历史并存；补录计划须修复真实来源。
+  if (!keepTraining)
+    await db.projectTaskRound.deleteMany({
+      where: {
+        projectId: f.projectId,
+        role: 'EXPERT',
+        taskType: 'STANDARD_TRAINING',
+        status: 'OPEN',
+      },
+    });
+  const history = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.individual.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+      status: 'COMPLETED',
+      participated: true,
+      finishedAt: new Date(),
+    },
+  });
+  const stale = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+    },
+  });
+  const principal = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  const state = async () => ({
+    project: await db.project.findUniqueOrThrow({ where: { id: f.projectId } }),
+    plans: await db.projectProductionPlan.findMany({ orderBy: { id: 'asc' } }),
+    crowds: await db.projectProductionCrowd.findMany({ orderBy: { id: 'asc' } }),
+    stages: await db.projectProductionStage.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+  });
+  return { ...f, history, stale, principal, state };
+}
+
+test.each([false, true])(
+  'production plan independent progress: late needWrittenExam=%s reconciles real training and stale rounds silently while preserving history and pure reads',
+  async (needWrittenExam) => {
+    const f = await productionPlanIndependentFixture(needWrittenExam);
+    const before = await f.state();
+    const response = await post(
+      `/projects/production-plan/confirm?projectId=${f.projectId}`,
+      { ...productionPlanExample, needWrittenExam },
+      f.manager.headers,
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.history.id } })).toEqual(
+      f.history,
+    );
+    expect(
+      await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.stale.id } }),
+    ).toMatchObject({ status: 'CANCELLED', participated: false, finishedAt: expect.any(Date) });
+    expect(
+      await db.projectTaskRound.count({
+        where: {
+          projectId: f.projectId,
+          userId: f.individual.user.id,
+          role: 'EXPERT',
+          taskType: 'STANDARD_TRAINING',
+          status: 'OPEN',
+        },
+      }),
+    ).toBe(needWrittenExam ? 0 : 1);
+    expect(
+      await db.projectRoleNodeSnapshot.count({
+        where: {
+          projectId: f.projectId,
+          userId: f.individual.user.id,
+          perspective: 'EXPERT_MEMBER',
+          branchNodeCode: 'STANDARD_TRAINING',
+        },
+      }),
+    ).toBe(needWrittenExam ? 0 : 1);
+    const after = await f.state();
+    expect(after.events).toEqual(before.events);
+    expect(
+      (
+        await post(
+          `/projects/production-plan/confirm?projectId=${f.projectId}`,
+          productionPlanExample,
+          f.manager.headers,
+        )
+      ).statusCode,
+    ).toBe(400);
+    const read = await post('/expert-assignments/my-tasks', {}, f.individual.headers);
+    expect(read.statusCode, read.body).toBe(200);
+    expect(
+      (
+        await app.inject({
+          url: `/api/v1/projects/production-plan?projectId=${f.projectId}`,
+          headers: f.manager.headers,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(await f.state()).toEqual(after);
+    if (needWrittenExam) {
+      const training = before.rounds.filter(
+        (r) => r.role === 'EXPERT' && r.taskType === 'STANDARD_TRAINING' && r.status === 'OPEN',
+      );
+      expect(training.length).toBeGreaterThan(0);
+      for (const round of training)
+        expect(
+          await db.projectTaskRound.findUniqueOrThrow({ where: { id: round.id } }),
+        ).toMatchObject({ status: 'CANCELLED', participated: false });
+    }
+  },
+);
+
+test('production plan independent progress: fault after independent round creation rolls back plan details, main progress, stale cancellation and cards', async () => {
+  const f = await productionPlanIndependentFixture();
+  const before = await f.state();
+  const faulty = new Proxy(db, {
+    get(target, key) {
+      if (key === '$transaction')
+        return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          db.$transaction(
+            (tx) =>
+              work(
+                new Proxy(tx, {
+                  get(t, k) {
+                    if (k === 'projectTaskRound')
+                      return {
+                        ...t.projectTaskRound,
+                        create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                          const result = await t.projectTaskRound.create(args);
+                          if (
+                            args.data.role === 'EXPERT' &&
+                            args.data.taskType === 'STANDARD_TRAINING'
+                          )
+                            throw new Error('plan independent round fault');
+                          return result;
+                        },
+                      };
+                    return Reflect.get(t, k);
+                  },
+                }),
+              ),
+            { timeout: 30_000 },
+          );
+      return Reflect.get(target, key);
+    },
+  });
+  await expect(
+    new ProjectProductionPlanService(faulty).confirm(
+      f.projectId,
+      { ...productionPlanExample, needWrittenExam: false } as ProductionPlanInput,
+      f.principal,
+    ),
+  ).rejects.toThrow('plan independent round fault');
+  expect(await f.state()).toEqual(before);
+});
+
+// 13第二十六批：仅定向 materials independent progress。
+async function materialsIndependentState(projectId: number) {
+  const where = { projectId };
+  return {
+    project: await db.project.findUniqueOrThrow({ where: { id: projectId } }),
+    members: await db.projectMember.findMany({ where, orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ where, orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ where, orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ where, orderBy: { id: 'asc' } }),
+    attachments: await db.projectAttachment.findMany({ where, orderBy: { id: 'asc' } }),
+  };
+}
+
+test('materials independent progress: update repairs missing training and cancels stale exams silently, preserves history and pure reads', async () => {
+  const f = await materialsConfirmationFixture();
+  const history = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.expert.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+      status: 'COMPLETED',
+      participated: true,
+      finishedAt: new Date(),
+    },
+  });
+  const stale = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+    },
+  });
+  const before = await materialsIndependentState(f.projectId);
+  const update = () =>
+    post(
+      '/projects/standard-materials/update',
+      {
+        projectId: f.projectId,
+        standardContent: '独立轮次材料修订',
+      },
+      f.manager.headers,
+    );
+  const response = await update();
+  expect(response.statusCode, response.body).toBe(200);
+  const training = await db.projectTaskRound.findMany({
+    where: {
+      projectId: f.projectId,
+      userId: f.expert.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+      status: 'OPEN',
+    },
+  });
+  expect(training).toHaveLength(1);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: history.id } })).toEqual(
+    history,
+  );
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({
+    status: 'CANCELLED',
+    participated: false,
+  });
+  expect((await update()).statusCode).toBe(200);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: training[0]!.id } })).toEqual(
+    training[0],
+  );
+  const after = await materialsIndependentState(f.projectId);
+  expect(after.events).toEqual(before.events);
+  const read = await app.inject({
+    url: `/api/v1/projects/standard-materials/detail?projectId=${f.projectId}`,
+    headers: f.expert.headers,
+  });
+  expect(read.statusCode, read.body).toBe(200);
+  expect((await post('/expert-assignments/my-tasks', {}, f.expert.headers)).statusCode).toBe(200);
+  expect(await materialsIndependentState(f.projectId)).toEqual(after);
+  expect((await f.confirmRead()).statusCode).toBe(200);
+  expect(
+    await db.projectTaskRound.findUniqueOrThrow({ where: { id: training[0]!.id } }),
+  ).toMatchObject({ status: 'COMPLETED', participated: true });
+  const confirmed = await materialsIndependentState(f.projectId);
+  expect((await f.confirmRead()).json().data.readConfirmationTransitioned).toBe(false);
+  const repeated = await materialsIndependentState(f.projectId);
+  expect(repeated.rounds).toEqual(confirmed.rounds);
+  expect(repeated.members).toEqual(confirmed.members);
+  expect(repeated.events).toEqual(confirmed.events);
+  expect(repeated.project).toEqual(confirmed.project);
+  expect(
+    repeated.cards.map((c) => [
+      c.id,
+      c.branchNodeCode,
+      c.sourceBizType,
+      c.sourceBizId,
+      c.sourceEventAt,
+    ]),
+  ).toEqual(
+    confirmed.cards.map((c) => [
+      c.id,
+      c.branchNodeCode,
+      c.sourceBizType,
+      c.sourceBizId,
+      c.sourceEventAt,
+    ]),
+  );
+});
+
+test('materials independent progress: terminal confirmation cancels own stale independent rounds without completing them or touching another user', async () => {
+  const f = await materialsConfirmationFixture();
+  await db.project.update({ where: { id: f.projectId }, data: { currentNodeCode: 'COMPLETED' } });
+  const rounds = await Promise.all(
+    ['ENTRANCE_EXAM', 'STANDARD_TRAINING'].map((taskType) =>
+      db.projectTaskRound.create({
+        data: { projectId: f.projectId, userId: f.expert.user.id, role: 'EXPERT', taskType },
+      }),
+    ),
+  );
+  const other = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+    },
+  });
+  const before = await materialsIndependentState(f.projectId);
+  const response = await f.confirmRead();
+  expect(response.statusCode, response.body).toBe(200);
+  for (const round of rounds)
+    expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: round.id } })).toMatchObject({
+      status: 'CANCELLED',
+      participated: false,
+      finishedAt: expect.any(Date),
+    });
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: other.id } })).toEqual(other);
+  const after = await materialsIndependentState(f.projectId);
+  expect(after.events).toEqual(before.events);
+  // 终态仅为夹具，不代表存在真实结项命令；材料更新负责全项目清理。
+  const update = await post(
+    '/projects/standard-materials/update',
+    { projectId: f.projectId, standardContent: '终态修订' },
+    f.manager.headers,
+  );
+  expect(update.statusCode, update.body).toBe(200);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: other.id } })).toMatchObject({
+    status: 'CANCELLED',
+    participated: false,
+  });
+});
+
+for (const operation of ['update', 'confirm'] as const)
+  test(`materials independent progress: ${operation} rolls back actual round changes, members, materials and cards after arbitration write failure`, async () => {
+    const f = await materialsConfirmationFixture();
+    const stale = await db.projectTaskRound.create({
+      data: {
+        projectId: f.projectId,
+        userId: f.expert.user.id,
+        role: 'EXPERT',
+        taskType: 'ENTRANCE_EXAM',
+      },
+    });
+    const before = await materialsIndependentState(f.projectId);
+    let changed = false;
+    const faulty = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+            db.$transaction(
+              (tx) =>
+                work(
+                  new Proxy(tx, {
+                    get(t, k) {
+                      if (k === 'projectRoleNodeSnapshot')
+                        return new Proxy(t.projectRoleNodeSnapshot, {
+                          get(delegate, method) {
+                            if (method === 'upsert')
+                              return async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                                await delegate.upsert(args);
+                                expect(
+                                  (
+                                    await tx.projectTaskRound.findUniqueOrThrow({
+                                      where: { id: stale.id },
+                                    })
+                                  ).status,
+                                ).toBe('CANCELLED');
+                                expect(
+                                  await tx.projectTaskRound.count({
+                                    where: {
+                                      projectId: f.projectId,
+                                      userId: f.expert.user.id,
+                                      taskType: 'STANDARD_TRAINING',
+                                      status: operation === 'update' ? 'OPEN' : 'COMPLETED',
+                                    },
+                                  }),
+                                ).toBe(1);
+                                changed = true;
+                                throw new Error(`materials independent ${operation} fault`);
+                              };
+                            return Reflect.get(delegate, method);
+                          },
+                        });
+                      return Reflect.get(t, k);
+                    },
+                  }),
+                ),
+              { timeout: 30000 },
+            );
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const account = operation === 'update' ? f.manager : f.expert;
+    const principal = await new AuthService(db, config).authenticate(
+      account.headers.authorization.slice(7),
+      'desktop',
+    );
+    const service = new ProjectMaterialsService(faulty, registry);
+    await expect(
+      operation === 'update'
+        ? service.update({ projectId: f.projectId, standardContent: '须回滚材料' }, principal)
+        : service.confirmRead(f.projectId, principal),
+    ).rejects.toThrow(`materials independent ${operation} fault`);
+    expect(changed).toBe(true);
+    expect(await materialsIndependentState(f.projectId)).toEqual(before);
+  });
+
+// 13第二十七批：只定向 entry independent progress，不重复历史集成。
+test('entry independent progress: ordinary entry repairs missing round, preserves history and other users, repeats and reads stay silent', async () => {
+  const f = await examCandidateFixture();
+  const where = {
+    projectId: f.projectId,
+    userId: f.individual.user.id,
+    role: 'EXPERT',
+    taskType: 'ENTRANCE_EXAM',
+  };
+  await db.projectTaskRound.updateMany({
+    where: { ...where, status: 'OPEN' },
+    data: { status: 'CANCELLED', finishedAt: new Date() },
+  });
+  const history = await db.projectTaskRound.findMany({ where, orderBy: { id: 'asc' } });
+  const other = await db.projectTaskRound.create({ data: { ...where, userId: f.manager.user.id } });
+  const events = await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } });
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const rounds = await db.projectTaskRound.findMany({ where: { ...where, status: 'OPEN' } });
+  expect(rounds).toHaveLength(1);
+  expect(rounds[0]).toMatchObject({ participated: false, finishedAt: null });
+  for (const old of history)
+    expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: old.id } })).toEqual(old);
+  expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: other.id } })).toEqual(other);
+  // 已绑定旧卷关闭后仍可答题；入场修复轮次不能以当前配置替换绑定。
+  await db.projectEntranceExam.update({ where: { id: f.exam.id }, data: { status: 'CLOSED' } });
+  const attempts = await db.entranceExamAttempt.findMany({ orderBy: { id: 'asc' } });
+  expect((await f.enter()).json().data).toEqual(entered.json().data);
+  expect(await db.entranceExamAttempt.findMany({ orderBy: { id: 'asc' } })).toEqual(attempts);
+  expect(await db.projectTaskRound.findMany({ where: { ...where, status: 'OPEN' } })).toEqual(
+    rounds,
+  );
+  const before = await examCardWriteState();
+  expect((await f.current()).statusCode).toBe(200);
+  await ordinaryExamCards(f);
+  expect(await examCardWriteState()).toEqual(before);
+  expect(await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+});
+
+test('entry independent progress: transfer entry repairs exact target round without ordinary assignment or changes to source rounds', async () => {
+  const f = await personnelTransferProgressFixture(true);
+  const response = await f.respond();
+  expect(response.statusCode, response.body).toBe(200);
+  const where = {
+    projectId: f.targetProject.id,
+    userId: f.individual.user.id,
+    role: 'EXPERT',
+    taskType: 'ENTRANCE_EXAM',
+  };
+  await db.projectTaskRound.updateMany({
+    where: { ...where, status: 'OPEN' },
+    data: { status: 'CANCELLED', finishedAt: new Date() },
+  });
+  const source = await db.projectTaskRound.findMany({
+    where: { projectId: f.projectId },
+    orderBy: { id: 'asc' },
+  });
+  const events = await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } });
+  const entered = await f.enter();
+  expect(entered.statusCode, entered.body).toBe(200);
+  const rounds = await db.projectTaskRound.findMany({ where: { ...where, status: 'OPEN' } });
+  expect(rounds).toHaveLength(1);
+  const movement = await f.load();
+  expect(movement.targetExamAttemptId).toBe(entered.json().data.attemptId);
+  expect(
+    await db.projectExpertAssignment.count({
+      where: { projectId: f.targetProject.id, expertUserId: f.individual.user.id },
+    }),
+  ).toBe(0);
+  expect((await f.enter()).json().data).toEqual(entered.json().data);
+  expect(await db.projectTaskRound.findMany({ where: { ...where, status: 'OPEN' } })).toEqual(
+    rounds,
+  );
+  expect(
+    await db.projectTaskRound.findMany({
+      where: { projectId: f.projectId },
+      orderBy: { id: 'asc' },
+    }),
+  ).toEqual(source);
+  expect(await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+});
+
+for (const fault of ['round', 'card'] as const) {
+  test(`entry independent progress: ${fault} failure rolls back actual attempt binding, independent round and cards`, async () => {
+    const f = await examCandidateFixture();
+    await db.projectTaskRound.deleteMany({
+      where: {
+        projectId: f.projectId,
+        userId: f.individual.user.id,
+        role: 'EXPERT',
+        taskType: 'ENTRANCE_EXAM',
+        status: 'OPEN',
+      },
+    });
+    await staleExamCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL');
+    const before = await examCardWriteState();
+    let roundWritten = false;
+    let cardWritten = false;
+    const faulty = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+            db.$transaction(
+              (tx) =>
+                callback(
+                  new Proxy(tx, {
+                    get(transaction, property) {
+                      if (property === 'projectTaskRound')
+                        return {
+                          ...transaction.projectTaskRound,
+                          create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                            const result = await transaction.projectTaskRound.create(args);
+                            if (
+                              result.userId === f.individual.user.id &&
+                              result.taskType === 'ENTRANCE_EXAM'
+                            ) {
+                              roundWritten = true;
+                              expect(
+                                await transaction.entranceExamAttempt.count({
+                                  where: {
+                                    candidateUserId: f.individual.user.id,
+                                    enteredAt: { not: null },
+                                  },
+                                }),
+                              ).toBe(1);
+                              if (fault === 'round') throw new Error('entry independent fault');
+                            }
+                            return result;
+                          },
+                        };
+                      if (property === 'projectRoleNodeSnapshot')
+                        return {
+                          ...transaction.projectRoleNodeSnapshot,
+                          upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                            const result = await transaction.projectRoleNodeSnapshot.upsert(args);
+                            if (roundWritten) {
+                              cardWritten = true;
+                              throw new Error('entry independent fault');
+                            }
+                            return result;
+                          },
+                        };
+                      return Reflect.get(transaction, property);
+                    },
+                  }),
+                ),
+              { timeout: 30000 },
+            );
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const principal = await new AuthService(db, config).authenticate(
+      f.individual.headers.authorization!.replace(/^Bearer /, ''),
+      'desktop',
+    );
+    await expect(new ExamCandidateService(faulty).enter(f.projectId, principal)).rejects.toThrow(
+      'entry independent fault',
+    );
+    expect(roundWritten).toBe(true);
+    expect(cardWritten).toBe(fault === 'card');
+    expect(await examCardWriteState()).toEqual(before);
+  });
+}
+
+// 13第二十八批：只定向 grading independent progress。
+async function gradingIndependentFixture(mode: 'MANUAL' | 'AUTO' = 'MANUAL') {
+  const f = await candidateSubmissionFixture(mode);
+  await db.entranceExamGradingRound.delete({ where: { id: f.rounds[1]!.id } });
+  const submitted = await f.submitExam();
+  expect(submitted.statusCode, submitted.body).toBe(200);
+  const record = await db.entranceExamGradingRecord.findFirstOrThrow({
+    where: { attemptId: f.input.attemptId },
+  });
+  // 真实新来源与遗留轮次均须纳入，阅卷卡片不能代替独立轮次。
+  await db.projectExpertAssignment.create({
+    data: {
+      assignmentNo: 'grading-independent-source',
+      projectId: f.projectId,
+      subjectType: 'INDIVIDUAL',
+      expertUserId: f.manager.user.id,
+      status: 'ACCEPTED',
+      createdBy: f.manager.user.uid,
+    },
+  });
+  const history = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+      status: 'CANCELLED',
+      finishedAt: new Date(),
+    },
+  });
+  const stale = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.individual.user.id,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+    },
+  });
+  const unrelated = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: f.manager.user.id,
+      role: 'PM',
+      taskType: 'SUBTASK_CREATE',
+    },
+  });
+  const body = {
+    projectId: f.projectId,
+    examId: f.exam.id,
+    attemptId: f.input.attemptId,
+    gradingRecordId: record.id,
+    items: [f.questionId, f.optional.id].map((questionId) => ({
+      questionId,
+      correctness: 'CORRECT' as const,
+    })),
+  };
+  const principal = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization!.replace(/^Bearer /, ''),
+    'desktop',
+  );
+  return { ...f, record, body, principal, history, stale, unrelated };
+}
+async function gradingIndependentState(projectId: number) {
+  return {
+    ...(await materialsIndependentState(projectId)),
+    attempts: await db.entranceExamAttempt.findMany({ orderBy: { id: 'asc' } }),
+    records: await db.entranceExamGradingRecord.findMany({ orderBy: { id: 'asc' } }),
+    items: await db.entranceExamGradingItem.findMany({ orderBy: { id: 'asc' } }),
+  };
+}
+for (const operation of ['manual', 'mock-success', 'mock-failed'] as const) {
+  test(`grading independent progress: ${operation} repairs real sources, cancels stale rounds, preserves history and replay/read purity`, async () => {
+    const f = await gradingIndependentFixture(operation === 'manual' ? 'MANUAL' : 'AUTO');
+    let callback: AutoCallbackInput | undefined;
+    const execute = async () => {
+      if (operation === 'manual')
+        return post('/entrance-exams/grading/manual', f.body, f.manager.headers);
+      if (!callback) {
+        const claimed = await new ExamAutoService(db).claim(f.record.id);
+        expect(claimed).not.toBeNull();
+        callback = {
+          ...claimed!,
+          status: operation === 'mock-failed' ? 'FAILED' : 'SUCCEEDED',
+          items: operation === 'mock-failed' ? null : f.body.items,
+          errorMessage: operation === 'mock-failed' ? '模拟失败' : null,
+        } as AutoCallbackInput;
+      }
+      return autoHttpCallback(callback);
+    };
+    const response = await execute();
+    expect(response.statusCode, response.body).toBe(200);
+    const open = (await independentExamRounds(f.projectId, f.manager.user.id)).filter(
+      (r) => r.status === 'OPEN',
+    );
+    expect(open).toHaveLength(1);
+    expect(open[0]).toMatchObject({ participated: false, finishedAt: null });
+    expect(
+      await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.stale.id } }),
+    ).toMatchObject({
+      status: 'CANCELLED',
+      participated: false,
+      finishedAt: expect.any(Date),
+    });
+    for (const old of [f.history, f.unrelated])
+      expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: old.id } })).toEqual(old);
+    expect(await db.projectMember.count({ where: { admissionAttemptId: f.input.attemptId } })).toBe(
+      operation === 'mock-failed' ? 0 : 1,
+    );
+    const before = await gradingIndependentState(f.projectId);
+    expect((await execute()).statusCode).toBe(operation === 'manual' ? 409 : 200);
+    expect((await f.current()).statusCode).toBe(200);
+    expect((await post('/expert-assignments/my-tasks', {}, f.individual.headers)).statusCode).toBe(
+      200,
+    );
+    expect(await gradingIndependentState(f.projectId)).toEqual(before);
+    expect(before.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            cardChangedRecipients: expect.arrayContaining([
+              { userId: f.manager.user.id, role: 'EXPERT' },
+            ]),
+          }),
+        }),
+      ]),
+    );
+  });
+}
+for (const fault of ['round', 'event'] as const) {
+  test(`grading independent progress: ${fault} failure after actual writes rolls back grades, admission, rounds and cards`, async () => {
+    const f = await gradingIndependentFixture();
+    const before = await gradingIndependentState(f.projectId);
+    let roundWritten = false;
+    let cardsWritten = false;
+    const faulty = new Proxy(db, {
+      get(target, key) {
+        if (key === '$transaction')
+          return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+            db.$transaction(
+              (tx) =>
+                callback(
+                  new Proxy(tx, {
+                    get(transaction, property) {
+                      if (property === 'projectTaskRound')
+                        return {
+                          ...transaction.projectTaskRound,
+                          create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                            const result = await transaction.projectTaskRound.create(args);
+                            if (result.role === 'EXPERT' && result.taskType === 'ENTRANCE_EXAM') {
+                              roundWritten = true;
+                              expect(
+                                await transaction.projectMember.count({
+                                  where: { admissionAttemptId: f.input.attemptId },
+                                }),
+                              ).toBe(1);
+                              if (fault === 'round') throw new Error('grading independent fault');
+                            }
+                            return result;
+                          },
+                        };
+                      if (property === 'projectRoleNodeSnapshot')
+                        return {
+                          ...transaction.projectRoleNodeSnapshot,
+                          upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                            const result = await transaction.projectRoleNodeSnapshot.upsert(args);
+                            if (roundWritten) cardsWritten = true;
+                            return result;
+                          },
+                        };
+                      if (property === 'projectEventOutbox')
+                        return {
+                          ...transaction.projectEventOutbox,
+                          create: async (args: Prisma.ProjectEventOutboxCreateArgs) => {
+                            const result = await transaction.projectEventOutbox.create(args);
+                            if (
+                              args.data.eventType === 'EXAM_REVIEW_QUEUE_CHANGED' &&
+                              roundWritten
+                            ) {
+                              expect(cardsWritten).toBe(true);
+                              throw new Error('grading independent fault');
+                            }
+                            return result;
+                          },
+                        };
+                      return Reflect.get(transaction, property);
+                    },
+                  }),
+                ),
+              { timeout: 30000 },
+            );
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(new ExamGradingCommandService(faulty).manual(f.body, f.principal)).rejects.toThrow(
+      'grading independent fault',
+    );
+    expect(roundWritten).toBe(true);
+    expect(cardsWritten).toBe(fault === 'event');
+    expect(await gradingIndependentState(f.projectId)).toEqual(before);
+  });
+}
+
+// 13第二十九批：仅定向 recruitment independent progress。
+async function recruitmentIndependentFixture() {
+  const f = await expertRecruitmentFixture();
+  const expert = await projectManagerAccount(8, 100, false);
+  const assignment = await db.projectExpertAssignment.create({
+    data: {
+      assignmentNo: 'recruit-independent-source',
+      projectId: f.projectId,
+      subjectType: 'INDIVIDUAL',
+      expertUserId: expert.user.id,
+      status: 'ACCEPTED',
+      acceptedAt: new Date(),
+      createdBy: f.manager.user.uid,
+    },
+  });
+  const member = await db.projectMember.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      expertAssignmentId: assignment.id,
+      admittedAt: new Date(),
+      joinedAt: new Date(),
+      createdBy: f.manager.user.uid,
+    },
+  });
+  const history = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+      status: 'COMPLETED',
+      participated: true,
+      finishedAt: new Date(),
+    },
+  });
+  const stale = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+    },
+  });
+  const unrelated = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'OUTPUT_REPORT_CORRECTION',
+    },
+  });
+  const state = async () => ({
+    ...(await materialsIndependentState(f.projectId)),
+    assignments: await db.projectExpertAssignment.findMany({ orderBy: { id: 'asc' } }),
+    recruitments: await db.projectManagerRecruitment.findMany({ orderBy: { id: 'asc' } }),
+  });
+  return { ...f, expert, member, history, stale, unrelated, state };
+}
+for (const operation of ['submit', 'handler', 'manager'] as const) {
+  test(`recruitment independent progress: ${operation} repairs real training, cancels stale exams and preserves history, replay and pure reads`, async () => {
+    const f = await recruitmentIndependentFixture();
+    const execute = () =>
+      operation === 'submit'
+        ? f.submit()
+        : operation === 'handler'
+          ? post(
+              '/projects/expert-recruitment-handler/change',
+              {
+                projectId: f.projectId,
+                handlerUserId: f.manager.user.id,
+              },
+              f.manager.headers,
+            )
+          : f.recruit(f.individual.user.id);
+    const result = await execute();
+    expect(result.statusCode, result.body).toBe(200);
+    const rounds = await db.projectTaskRound.findMany({ where: { projectId: f.projectId } });
+    expect(rounds).toContainEqual(
+      expect.objectContaining({
+        userId: f.expert.user.id,
+        role: 'EXPERT',
+        taskType: 'STANDARD_TRAINING',
+        status: 'OPEN',
+        participated: false,
+      }),
+    );
+    expect(
+      await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.stale.id } }),
+    ).toMatchObject({ status: 'CANCELLED', participated: false });
+    for (const round of [f.history, f.unrelated])
+      expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: round.id } })).toEqual(
+        round,
+      );
+    expect(await managementCard(f.projectId, f.expert.user.id, 'EXPERT_INDIVIDUAL')).toMatchObject({
+      branchNodeCode: 'STANDARD_TRAINING',
+      sourceBizId: f.member.id,
+    });
+    const event = await db.projectEventOutbox.findFirstOrThrow({ orderBy: { createdAt: 'desc' } });
+    expect(event.payload).toMatchObject({
+      cardChangedRecipients: expect.arrayContaining([{ userId: f.expert.user.id, role: 'EXPERT' }]),
+    });
+    const stable = await f.state();
+    expect((await execute()).statusCode).toBe(
+      operation === 'handler' ? 200 : operation === 'submit' ? 409 : 400,
+    );
+    expect((await f.state()).rounds).toEqual(stable.rounds);
+    const beforeRead = await f.state();
+    const detail = await f.detail(
+      operation === 'manager' ? f.individual.headers : f.manager.headers,
+    );
+    expect(detail.statusCode, detail.body).toBe(200);
+    expect(await f.state()).toEqual(beforeRead);
+  });
+  for (const fault of ['round', 'outbox'] as const) {
+    test(`recruitment independent progress: ${operation} ${fault} fault rolls back actual business, independent rounds, cards and outbox writes`, async () => {
+      const f = await recruitmentIndependentFixture();
+      const before = await f.state();
+      let roundWritten = false;
+      let cardsWritten = false;
+      const faulty = new Proxy(db, {
+        get(target, key) {
+          if (key === '$transaction')
+            return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+              db.$transaction(
+                (tx) =>
+                  work(
+                    new Proxy(tx, {
+                      get(t, k) {
+                        if (k === 'projectTaskRound')
+                          return {
+                            ...t.projectTaskRound,
+                            create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                              const result = await t.projectTaskRound.create(args);
+                              if (
+                                result.role === 'EXPERT' &&
+                                result.taskType === 'STANDARD_TRAINING'
+                              ) {
+                                roundWritten = true;
+                                if (fault === 'round') throw new Error('recruit independent fault');
+                              }
+                              return result;
+                            },
+                          };
+                        if (k === 'projectRoleNodeSnapshot')
+                          return {
+                            ...t.projectRoleNodeSnapshot,
+                            upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                              const result = await t.projectRoleNodeSnapshot.upsert(args);
+                              if (roundWritten) cardsWritten = true;
+                              return result;
+                            },
+                          };
+                        if (k === 'projectEventOutbox')
+                          return {
+                            ...t.projectEventOutbox,
+                            create: async (args: Prisma.ProjectEventOutboxCreateArgs) => {
+                              await t.projectEventOutbox.create(args);
+                              expect(roundWritten).toBe(true);
+                              expect(cardsWritten).toBe(true);
+                              throw new Error('recruit independent fault');
+                            },
+                          };
+                        return Reflect.get(t, k);
+                      },
+                    }),
+                  ),
+                { timeout: 30000 },
+              );
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      const principal = await new AuthService(db, config).authenticate(
+        (operation === 'manager' ? f.headers : f.manager.headers).authorization!.replace(
+          /^Bearer /,
+          '',
+        ),
+        'desktop',
+      );
+      const { ProjectRecruitmentService } =
+        await import('../src/modules/projects/project-recruitment.service.js');
+      const { ProjectRecruitmentHandlerService } =
+        await import('../src/modules/projects/project-recruitment-handler.service.js');
+      const execute =
+        operation === 'submit'
+          ? new ProjectRecruitmentService(faulty).submit(
+              {
+                projectId: f.projectId,
+                assignments: [{ ...f.item, subjectType: 'INDIVIDUAL' }],
+              },
+              principal,
+            )
+          : operation === 'handler'
+            ? new ProjectRecruitmentHandlerService(faulty).change(
+                {
+                  projectId: f.projectId,
+                  handlerUserId: f.manager.user.id,
+                },
+                principal,
+              )
+            : new ProjectManagerService(faulty).recruit(
+                { projectId: f.projectId, candidateUserId: f.individual.user.id },
+                principal,
+              );
+      await expect(execute).rejects.toThrow('recruit independent fault');
+      expect(roundWritten).toBe(true);
+      expect(await f.state()).toEqual(before);
+    });
+  }
+}
+
+// 13第三十批：仅定向 cancellation and movement independent progress。
+async function cancellationMovementIndependentFixture(operation: 'cancel' | 'removal') {
+  const candidate = operation === 'cancel' ? await candidateSubmissionFixture() : null;
+  const movement = operation === 'removal' ? await personnelMovementCreateFixture() : null;
+  const projectId = candidate?.projectId ?? movement!.projectId;
+  const expert = await projectManagerAccount(8, 100, false);
+  const assignment = await db.projectExpertAssignment.create({
+    data: {
+      assignmentNo: 'cancel-movement-independent',
+      projectId,
+      subjectType: 'INDIVIDUAL',
+      expertUserId: expert.user.id,
+      status: 'ACCEPTED',
+      acceptedAt: new Date(),
+      createdBy: expert.user.uid,
+    },
+  });
+  const admission = candidate
+    ? await db.entranceExamAttempt.create({
+        data: {
+          attemptNo: 'cancel-independent-admitted',
+          examId: candidate.exam.id,
+          candidateUserId: expert.user.id,
+          candidateUid: expert.user.uid,
+          candidateName: '独立培训成员',
+          sourceBizType: 'EXPERT_ORDER',
+          sourceBizId: assignment.id,
+          finalResult: 'ADMITTED',
+          createdBy: expert.user.uid,
+        },
+      })
+    : null;
+  const member = await db.projectMember.create({
+    data: {
+      projectId,
+      userId: expert.user.id,
+      expertAssignmentId: assignment.id,
+      admissionAttemptId: admission?.id,
+      admittedAt: new Date(),
+      joinedAt: new Date(),
+      createdBy: expert.user.uid,
+    },
+  });
+  const history = await db.projectTaskRound.create({
+    data: {
+      projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+      status: 'COMPLETED',
+      participated: true,
+      finishedAt: new Date(),
+    },
+  });
+  const stale = await db.projectTaskRound.create({
+    data: { projectId, userId: expert.user.id, role: 'EXPERT', taskType: 'ENTRANCE_EXAM' },
+  });
+  const unrelated = await db.projectTaskRound.create({
+    data: {
+      projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'OUTPUT_REPORT_CORRECTION',
+    },
+  });
+  const input = candidate?.input ?? {
+    ...movement!.body,
+    movementType: 'REMOVAL' as const,
+    targetProjectId: null,
+    plannedEffectiveDate: shanghaiDay(new Date()),
+  };
+  const headers = candidate?.individual.headers ?? movement!.manager.headers;
+  const principal = await new AuthService(db, config).authenticate(
+    headers.authorization.slice(7),
+    'desktop',
+  );
+  const execute = (client = db) =>
+    candidate
+      ? new ExamCandidateCommandService(client, registry).cancel(candidate.input, principal)
+      : new PersonnelMovementService(client).create(
+          input as Parameters<PersonnelMovementService['create']>[0],
+          principal,
+        );
+  const state = async () => ({
+    ...(await candidateCardState(projectId)),
+    members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+    movements: await db.projectMemberMovement.findMany({ orderBy: { id: 'asc' } }),
+    flows: await db.approvalFlow.findMany({ orderBy: { id: 'asc' } }),
+  });
+  return {
+    projectId,
+    expert,
+    member,
+    history,
+    stale,
+    unrelated,
+    execute,
+    state,
+    candidate,
+    movement,
+  };
+}
+for (const operation of ['cancel', 'removal'] as const) {
+  test(`cancellation and movement independent progress: ${operation} repairs real training, cancels invalid rounds and preserves history, replay and pure reads`, async () => {
+    const f = await cancellationMovementIndependentFixture(operation);
+    await f.execute();
+    expect(
+      await db.projectTaskRound.findMany({ where: { projectId: f.projectId } }),
+    ).toContainEqual(
+      expect.objectContaining({
+        userId: f.expert.user.id,
+        taskType: 'STANDARD_TRAINING',
+        status: 'OPEN',
+        participated: false,
+      }),
+    );
+    expect(
+      await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.stale.id } }),
+    ).toMatchObject({ status: 'CANCELLED', participated: false });
+    for (const row of [f.history, f.unrelated])
+      expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: row.id } })).toEqual(row);
+    expect(await managementCard(f.projectId, f.expert.user.id, 'EXPERT_INDIVIDUAL')).toMatchObject({
+      branchNodeCode: 'STANDARD_TRAINING',
+      sourceBizId: f.member.id,
+    });
+    const event = await db.projectEventOutbox.findFirstOrThrow({
+      where: {
+        projectId: f.projectId,
+        operation: operation === 'cancel' ? 'entrance-exam.candidate.cancel' : 'CREATE_MOVEMENT',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(event.payload).toMatchObject({
+      cardChangedRecipients: expect.arrayContaining([{ userId: f.expert.user.id, role: 'EXPERT' }]),
+    });
+    if (f.candidate) {
+      expect(
+        await db.projectTaskRound.count({
+          where: {
+            projectId: f.projectId,
+            userId: f.candidate.individual.user.id,
+            taskType: 'ENTRANCE_EXAM',
+            status: 'OPEN',
+          },
+        }),
+      ).toBe(0);
+    } else {
+      expect(
+        await db.projectMember.findUniqueOrThrow({ where: { id: f.movement!.orgMember.id } }),
+      ).toMatchObject({ status: 'REMOVED' });
+      expect(
+        await db.projectTaskRound.count({
+          where: {
+            projectId: f.projectId,
+            userId: f.movement!.orgMember.userId,
+            taskType: { in: ['ENTRANCE_EXAM', 'STANDARD_TRAINING'] },
+            status: 'OPEN',
+          },
+        }),
+      ).toBe(0);
+    }
+    const stable = await f.state();
+    await expect(f.execute()).rejects.toMatchObject({ status: operation === 'cancel' ? 400 : 409 });
+    expect(await f.state()).toEqual(stable);
+    const read = await post('/expert-assignments/my-tasks', {}, f.expert.headers);
+    expect(read.statusCode, read.body).toBe(200);
+    expect(await f.state()).toEqual(stable);
+  });
+  for (const fault of ['round', 'outbox'] as const) {
+    test(`cancellation and movement independent progress: ${operation} ${fault} fault rolls back actual business, rounds, cards and event writes`, async () => {
+      const f = await cancellationMovementIndependentFixture(operation);
+      const before = await f.state();
+      let roundWritten = false,
+        cardsWritten = false;
+      const faulty = new Proxy(db, {
+        get(target, key) {
+          if (key === '$transaction')
+            return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+              db.$transaction(
+                (tx) =>
+                  work(
+                    new Proxy(tx, {
+                      get(t, k) {
+                        if (k === 'projectTaskRound')
+                          return {
+                            ...t.projectTaskRound,
+                            create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                              const row = await t.projectTaskRound.create(args);
+                              if (
+                                row.userId === f.expert.user.id &&
+                                row.taskType === 'STANDARD_TRAINING'
+                              ) {
+                                roundWritten = true;
+                                if (fault === 'round')
+                                  throw new Error('cancel movement independent fault');
+                              }
+                              return row;
+                            },
+                          };
+                        if (k === 'projectRoleNodeSnapshot')
+                          return {
+                            ...t.projectRoleNodeSnapshot,
+                            upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                              const row = await t.projectRoleNodeSnapshot.upsert(args);
+                              if (roundWritten) cardsWritten = true;
+                              return row;
+                            },
+                          };
+                        if (k === 'projectEventOutbox')
+                          return {
+                            ...t.projectEventOutbox,
+                            create: async (args: Prisma.ProjectEventOutboxCreateArgs) => {
+                              await t.projectEventOutbox.create(args);
+                              expect(roundWritten).toBe(true);
+                              expect(cardsWritten).toBe(true);
+                              throw new Error('cancel movement independent fault');
+                            },
+                          };
+                        return Reflect.get(t, k);
+                      },
+                    }),
+                  ),
+                { timeout: 30000 },
+              );
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      await expect(f.execute(faulty)).rejects.toThrow('cancel movement independent fault');
+      expect(roundWritten).toBe(true);
+      expect(await f.state()).toEqual(before);
+    });
+  }
+}
+
+// 13第三十一批：普通入项写入口的全项目独立轮次。
+async function personnelEntryIndependentFixture(operation: 'save' | 'due') {
+  const f = await personnelEntryFixture();
+  const now = new Date();
+  const today = shanghaiDay(now);
+  if (operation === 'due')
+    await db.projectMember.update({
+      where: { id: f.orgMember.id },
+      data: { status: 'PENDING_ENTRY', entryDecision: 'YES', plannedEntryDate: new Date(today) },
+    });
+  const expert = await projectManagerAccount(8, 100, false);
+  const assignment = await db.projectExpertAssignment.create({
+    data: {
+      assignmentNo: 'entry-independent-other',
+      projectId: f.projectId,
+      subjectType: 'INDIVIDUAL',
+      expertUserId: expert.user.id,
+      status: 'ACCEPTED',
+      acceptedAt: now,
+      createdBy: expert.user.uid,
+    },
+  });
+  const member = await db.projectMember.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      expertAssignmentId: assignment.id,
+      admittedAt: now,
+      joinedAt: now,
+      createdBy: expert.user.uid,
+    },
+  });
+  const history = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+      status: 'COMPLETED',
+      participated: true,
+      finishedAt: now,
+    },
+  });
+  const stale = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+    },
+  });
+  const unrelated = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'OUTPUT_REPORT_CORRECTION',
+    },
+  });
+  const principal = await new AuthService(db, config).authenticate(
+    f.manager.headers.authorization.slice(7),
+    'desktop',
+  );
+  const execute = (client = db) =>
+    operation === 'save'
+      ? new PersonnelService(client).saveEntry(
+          {
+            projectId: f.projectId,
+            memberIds: [f.orgMember.id],
+            entryDecision: 'YES',
+            plannedEntryDate: today,
+          },
+          principal,
+          now,
+        )
+      : new PersonnelService(client).processDue(now);
+  const state = async () => ({
+    ...(await candidateCardState(f.projectId)),
+    members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+  });
+  return { ...f, expert, member, history, stale, unrelated, execute, state };
+}
+for (const operation of ['save', 'due'] as const) {
+  test(`personnel entry independent progress: ${operation} repairs other members, preserves history and pure reads, and is idempotent`, async () => {
+    const f = await personnelEntryIndependentFixture(operation);
+    const result = await f.execute();
+    if (operation === 'due') expect(result).toEqual({ activated: 1, skipped: 0, failed: 0 });
+    expect(
+      await db.projectMember.findUniqueOrThrow({ where: { id: f.orgMember.id } }),
+    ).toMatchObject({ status: 'ACTIVE' });
+    expect(
+      await db.projectTaskRound.findMany({ where: { projectId: f.projectId } }),
+    ).toContainEqual(
+      expect.objectContaining({
+        userId: f.expert.user.id,
+        taskType: 'STANDARD_TRAINING',
+        status: 'OPEN',
+        participated: false,
+      }),
+    );
+    expect(
+      await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.stale.id } }),
+    ).toMatchObject({ status: 'CANCELLED', participated: false });
+    for (const row of [f.history, f.unrelated])
+      expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: row.id } })).toEqual(row);
+    expect(await managementCard(f.projectId, f.expert.user.id, 'EXPERT_INDIVIDUAL')).toMatchObject({
+      branchNodeCode: 'STANDARD_TRAINING',
+      sourceBizId: f.member.id,
+    });
+    const event = await db.projectEventOutbox.findFirstOrThrow({
+      where: {
+        projectId: f.projectId,
+        operation: operation === 'save' ? 'SAVE_ENTRY' : 'PROCESS_DUE_ENTRY',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(event.payload).toMatchObject({
+      cardChangedRecipients: expect.arrayContaining([{ userId: f.expert.user.id, role: 'EXPERT' }]),
+    });
+    const stable = await f.state();
+    if (operation === 'save') await expect(f.execute()).rejects.toMatchObject({ status: 409 });
+    else expect(await f.execute()).toEqual({ activated: 0, skipped: 0, failed: 0 });
+    expect(await f.state()).toEqual(stable);
+    const read = await post('/expert-assignments/my-tasks', {}, f.expert.headers);
+    expect(read.statusCode, read.body).toBe(200);
+    const roster = await f.roster();
+    expect(roster.statusCode, roster.body).toBe(200);
+    expect(await f.state()).toEqual(stable);
+  });
+  for (const fault of ['round', 'outbox'] as const) {
+    test(`personnel entry independent progress: ${operation} ${fault} fault rolls back members, project, rounds, cards and event`, async () => {
+      const f = await personnelEntryIndependentFixture(operation);
+      const before = await f.state();
+      let roundWritten = false,
+        cardsWritten = false;
+      const faulty = new Proxy(db, {
+        get(target, key) {
+          if (key === '$transaction')
+            return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+              db.$transaction(
+                (tx) =>
+                  work(
+                    new Proxy(tx, {
+                      get(t, k) {
+                        if (k === 'projectTaskRound')
+                          return {
+                            ...t.projectTaskRound,
+                            create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                              const row = await t.projectTaskRound.create(args);
+                              if (
+                                row.userId === f.expert.user.id &&
+                                row.taskType === 'STANDARD_TRAINING'
+                              ) {
+                                roundWritten = true;
+                                if (fault === 'round') throw new Error('entry independent fault');
+                              }
+                              return row;
+                            },
+                          };
+                        if (k === 'projectRoleNodeSnapshot')
+                          return {
+                            ...t.projectRoleNodeSnapshot,
+                            upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                              const row = await t.projectRoleNodeSnapshot.upsert(args);
+                              if (roundWritten) cardsWritten = true;
+                              return row;
+                            },
+                          };
+                        if (k === 'projectEventOutbox')
+                          return {
+                            ...t.projectEventOutbox,
+                            create: async (args: Prisma.ProjectEventOutboxCreateArgs) => {
+                              await t.projectEventOutbox.create(args);
+                              expect(roundWritten).toBe(true);
+                              expect(cardsWritten).toBe(true);
+                              throw new Error('entry independent fault');
+                            },
+                          };
+                        return Reflect.get(t, k);
+                      },
+                    }),
+                  ),
+                { timeout: 30000 },
+              );
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      if (operation === 'save')
+        await expect(f.execute(faulty)).rejects.toThrow('entry independent fault');
+      else expect(await f.execute(faulty)).toEqual({ activated: 0, skipped: 0, failed: 1 });
+      expect(roundWritten).toBe(true);
+      if (fault === 'outbox') expect(cardsWritten).toBe(true);
+      expect(await f.state()).toEqual(before);
+    });
+  }
+}
+
+// 13第三十二批：仅定向 production independent progress。
+const productionIndependentOperations = [
+  'create',
+  'save',
+  'verify',
+  'return',
+  'correct',
+  'submit',
+  'reject',
+  'accept',
+] as const;
+type ProductionIndependentOperation = (typeof productionIndependentOperations)[number];
+async function productionIndependentFixture(operation: ProductionIndependentOperation) {
+  const f = await productionOutputFixture();
+  if (['verify', 'return', 'correct', 'submit', 'reject', 'accept'].includes(operation)) {
+    const saved = await f.submit([
+      { memberId: f.personalMember.id, subtaskId: f.pool.id, reportDate: f.day, quantity: 10 },
+    ]);
+    expect(saved.statusCode, saved.body).toBe(200);
+  }
+  if (operation === 'correct') {
+    const savedReport = await db.projectOutputReport.findFirstOrThrow({
+      where: { projectId: f.projectId },
+    });
+    expect(
+      (await f.review({ action: 'RETURN', reportIds: [savedReport.id], reason: '修正数据' }))
+        .statusCode,
+    ).toBe(200);
+  }
+  if (['submit', 'reject', 'accept'].includes(operation))
+    expect((await f.review()).statusCode).toBe(200);
+  const acceptanceInput = {
+    projectId: f.projectId,
+    subtaskId: f.pool.id,
+    actualQuantity: 10,
+    actualDeliveryDate: '2099-12-31',
+  };
+  if (['reject', 'accept'].includes(operation))
+    expect(
+      (await post('/production-tasks/acceptance/submit', acceptanceInput, f.manager.headers))
+        .statusCode,
+    ).toBe(200);
+  const report = await db.projectOutputReport.findFirst({ where: { projectId: f.projectId } });
+  // 独立第三人没有生产动作，仍须按真实入项事实补轮；保留其历史与无关轮次。
+  const expert = await projectManagerAccount(8, 100, false);
+  const now = new Date();
+  const assignment = await db.projectExpertAssignment.create({
+    data: {
+      assignmentNo: 'production-independent-other',
+      projectId: f.projectId,
+      subjectType: 'INDIVIDUAL',
+      expertUserId: expert.user.id,
+      status: 'ACCEPTED',
+      acceptedAt: now,
+      createdBy: expert.user.uid,
+    },
+  });
+  const member = await db.projectMember.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      expertAssignmentId: assignment.id,
+      admittedAt: now,
+      joinedAt: now,
+      createdBy: expert.user.uid,
+    },
+  });
+  const history = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'STANDARD_TRAINING',
+      status: 'COMPLETED',
+      participated: true,
+      finishedAt: now,
+    },
+  });
+  const stale = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'ENTRANCE_EXAM',
+    },
+  });
+  const unrelated = await db.projectTaskRound.create({
+    data: {
+      projectId: f.projectId,
+      userId: expert.user.id,
+      role: 'EXPERT',
+      taskType: 'MEMBER_MOVEMENT_APPROVAL',
+    },
+  });
+  const headers =
+    operation === 'save' || operation === 'correct'
+      ? f.individual.headers
+      : operation === 'reject' || operation === 'accept'
+        ? f.headers
+        : f.manager.headers;
+  const principal = await new AuthService(db, config).authenticate(
+    headers.authorization!.slice(7),
+    'desktop',
+  );
+  const execute = async (client = db) => {
+    const { ProductionService } = await import('../src/modules/production/production.service.js');
+    const { OutputReportService } =
+      await import('../src/modules/production/output-report.service.js');
+    const { AcceptanceService } = await import('../src/modules/production/acceptance.service.js');
+    const output = new OutputReportService(client);
+    if (operation === 'create')
+      return new ProductionService(client).create(
+        {
+          projectId: f.projectId,
+          subtaskName: '独立轮次新子任务',
+          distributionMode: 'POOL',
+          expectedDeliveryDate: '2099-12-31',
+          expectedQuantity: 10,
+        },
+        principal,
+        now,
+      );
+    if (operation === 'save')
+      return output.save(
+        {
+          projectId: f.projectId,
+          reports: [
+            {
+              memberId: f.personalMember.id,
+              subtaskId: f.pool.id,
+              reportDate: f.day,
+              quantity: 10,
+            },
+          ],
+        },
+        principal,
+        now,
+      );
+    if (operation === 'verify' || operation === 'return')
+      return output.review(
+        {
+          projectId: f.projectId,
+          subtaskId: f.pool.id,
+          action: operation === 'verify' ? 'VERIFY' : 'RETURN',
+          reportIds: [report!.id],
+          ...(operation === 'return' ? { reason: '修正数据' } : {}),
+        },
+        principal,
+        now,
+      );
+    if (operation === 'correct')
+      return output.correct(
+        {
+          projectId: f.projectId,
+          reportId: report!.id,
+          quantity: 10,
+        },
+        principal,
+        now,
+      );
+    if (operation === 'submit')
+      return new AcceptanceService(client).submit(acceptanceInput, principal, now);
+    return new AcceptanceService(client).review(
+      {
+        projectId: f.projectId,
+        subtaskId: f.pool.id,
+        decision: operation === 'accept' ? 'ACCEPT' : 'REJECT',
+        ...(operation === 'reject' ? { rejectReason: '返工' } : {}),
+      },
+      principal,
+      now,
+    );
+  };
+  const state = async () => ({
+    ...(await candidateCardState(f.projectId)),
+    project: await db.project.findUnique({ where: { id: f.projectId } }),
+    tasks: await db.projectSubtask.findMany({ orderBy: { id: 'asc' } }),
+    assignees: await db.projectSubtaskAssignee.findMany({ orderBy: { id: 'asc' } }),
+    reports: await db.projectOutputReport.findMany({ orderBy: { id: 'asc' } }),
+    members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+  });
+  return { ...f, expert, member, history, stale, unrelated, execute, state, principal, report };
+}
+for (const operation of productionIndependentOperations) {
+  test(`production independent progress: ${operation} repairs other members, preserves history, exact cards, event audience and pure reads`, async () => {
+    const f = await productionIndependentFixture(operation);
+    const before = await f.state();
+    await f.execute();
+    expect(
+      await db.projectTaskRound.findMany({ where: { projectId: f.projectId } }),
+    ).toContainEqual(
+      expect.objectContaining({
+        userId: f.expert.user.id,
+        taskType: 'STANDARD_TRAINING',
+        status: 'OPEN',
+        participated: false,
+      }),
+    );
+    expect(
+      await db.projectTaskRound.findUniqueOrThrow({ where: { id: f.stale.id } }),
+    ).toMatchObject({ status: 'CANCELLED', participated: false });
+    for (const row of [f.history, f.unrelated])
+      expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: row.id } })).toEqual(row);
+    expect(await managementCard(f.projectId, f.expert.user.id, 'EXPERT_INDIVIDUAL')).toMatchObject({
+      branchNodeCode: 'STANDARD_TRAINING',
+      sourceBizId: f.member.id,
+    });
+    const after = await f.state();
+    const events = after.events.filter((e) => !before.events.some((b) => b.id === e.id));
+    if (operation === 'verify') expect(events).toEqual([]);
+    else {
+      expect(events).toHaveLength(1);
+      expect(events[0]!.payload).toMatchObject({
+        cardChangedRecipients: expect.arrayContaining([
+          { userId: f.expert.user.id, role: 'EXPERT' },
+        ]),
+      });
+      expect(events[0]!.eventType).toBe(
+        ['save', 'return', 'correct'].includes(operation)
+          ? 'OUTPUT_REPORT_STATE_CHANGED'
+          : 'PROJECT_SUBTASK_CHANGED',
+      );
+    }
+    await expect(f.execute()).rejects.toMatchObject({ status: 409 });
+    expect(await f.state()).toEqual(after);
+    for (const response of [
+      await f.list(),
+      await f.reports(),
+      await post('/expert-assignments/my-tasks', {}, f.expert.headers),
+    ])
+      expect(response.statusCode, response.body).toBe(200);
+    expect(await f.state()).toEqual(after);
+  });
+  for (const fault of ['round', 'card'] as const) {
+    test(`production independent progress: ${operation} ${fault} failure after actual writes rolls back production facts, independent rounds, cards and events`, async () => {
+      const f = await productionIndependentFixture(operation);
+      const before = await f.state();
+      let roundWritten = false,
+        cardWritten = false;
+      const faulty = new Proxy(db, {
+        get(target, key) {
+          if (key === '$transaction')
+            return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+              target.$transaction(
+                (tx) =>
+                  work(
+                    new Proxy(tx, {
+                      get(t, k) {
+                        if (k === 'projectTaskRound')
+                          return {
+                            ...t.projectTaskRound,
+                            create: async (args: Prisma.ProjectTaskRoundCreateArgs) => {
+                              const row = await t.projectTaskRound.create(args);
+                              if (
+                                row.userId === f.expert.user.id &&
+                                row.taskType === 'STANDARD_TRAINING'
+                              ) {
+                                roundWritten = true;
+                                if (fault === 'round')
+                                  throw new Error('production independent fault');
+                              }
+                              return row;
+                            },
+                          };
+                        if (k === 'projectRoleNodeSnapshot')
+                          return {
+                            ...t.projectRoleNodeSnapshot,
+                            upsert: async (args: Prisma.ProjectRoleNodeSnapshotUpsertArgs) => {
+                              const row = await t.projectRoleNodeSnapshot.upsert(args);
+                              if (roundWritten) {
+                                cardWritten = true;
+                                if (fault === 'card')
+                                  throw new Error('production independent fault');
+                              }
+                              return row;
+                            },
+                          };
+                        if (k === 'projectEventOutbox')
+                          return {
+                            ...t.projectEventOutbox,
+                            create: async (args: Prisma.ProjectEventOutboxCreateArgs) => {
+                              const row = await t.projectEventOutbox.create(args);
+                              expect(roundWritten).toBe(true);
+                              expect(cardWritten).toBe(true);
+                              if (fault === 'card') throw new Error('production independent fault');
+                              return row;
+                            },
+                          };
+                        return Reflect.get(t, k);
+                      },
+                    }),
+                  ),
+                { timeout: 30000 },
+              );
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      await expect(f.execute(faulty)).rejects.toThrow('production independent fault');
+      expect(roundWritten).toBe(true);
+      if (fault === 'card') expect(cardWritten).toBe(true);
+      expect(await f.state()).toEqual(before);
+    });
+  }
+}
+
+// 13第四十批：考试配置变更的真实HTTP链路，保持静默与历史答卷绑定。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  test(`workbench exam config lifecycle HTTP: ${transport} closure and republication preserve exact sources, historical binding and silence`, async () => {
+    const f = await examCandidateFixture();
+    await withWorkbenchWire(async (wire, request) => {
+      const sessions = new Map<string, Record<string, string>>();
+      for (const account of [f.manager, f.individual]) {
+        if (transport === 'Bearer') {
+          sessions.set(account.user.id, account.headers);
+          continue;
+        }
+        await db.verificationChallenge.updateMany({
+          where: { phoneE164: account.user.phoneE164 },
+          data: { createdAt: new Date(Date.now() - 61_000) },
+        });
+        const phoneValue = account.user.phoneE164.slice(3);
+        await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+        const headers = workbenchCookie(
+          await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+        );
+        await wire('/auth/switch-role', headers, {
+          role: account.user.id === f.manager.user.id ? 'PM' : 'EXPERT',
+        });
+        sessions.set(account.user.id, headers);
+      }
+      const manager = sessions.get(f.manager.user.id)!;
+      const expert = sessions.get(f.individual.user.id)!;
+      const original = (await independentExamRounds(f.projectId, f.individual.user.id)).find(
+        (r) => r.status === 'OPEN',
+      )!;
+      expect(original).toBeDefined();
+      const unrelated = await db.projectTaskRound.create({
+        data: {
+          projectId: f.projectId,
+          userId: f.manager.user.id,
+          role: 'PM',
+          taskType: 'SUBTASK_CREATE',
+        },
+      });
+      const events = await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } });
+      const close = (examId: number, expected = 200) =>
+        wire('/entrance-exams/close', manager, { projectId: f.projectId, examId }, expected);
+      await close(f.exam.id);
+      expect(
+        await db.projectTaskRound.findUniqueOrThrow({ where: { id: original.id } }),
+      ).toMatchObject({
+        status: 'CANCELLED',
+        participated: false,
+        finishedAt: expect.any(Date),
+      });
+      expect(
+        await managementCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL'),
+      ).toBeNull();
+      const history = await independentExamRounds(f.projectId, f.individual.user.id);
+      const afterClose = await examCardWriteState();
+      await close(f.exam.id, 409);
+      expect(await examCardWriteState()).toEqual(afterClose);
+
+      const payload = independentExamPayload(f.projectId, f.manager.user.id);
+      await wire('/entrance-exams/publish', expert, payload, 403);
+      expect(await examCardWriteState()).toEqual(afterClose);
+      const exam = await wire('/entrance-exams/publish', manager, payload);
+      const reopened = (await independentExamRounds(f.projectId, f.individual.user.id)).find(
+        (r) => r.status === 'OPEN',
+      )!;
+      expect(reopened).toBeDefined();
+      expect(reopened.id).not.toBe(original.id);
+      expect(
+        (await independentExamRounds(f.projectId, f.individual.user.id)).filter(
+          (r) => r.status !== 'OPEN',
+        ),
+      ).toEqual(history);
+      expect(
+        await managementCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL'),
+      ).toMatchObject({
+        branchNodeCode: 'ENTRANCE_EXAM',
+        sourceBizId: exam.examId,
+      });
+      const entered = await wire('/entrance-exams/enter', expert, { projectId: f.projectId });
+      const attempt = await db.entranceExamAttempt.findUniqueOrThrow({
+        where: { id: entered.attemptId },
+      });
+      expect(attempt).toMatchObject({ examId: exam.examId, examVersionId: exam.currentVersionId });
+      const edited = await request(
+        '/entrance-exams/edit',
+        manager,
+        {
+          ...payload,
+          examId: exam.examId,
+          expectedCurrentVersionId: exam.currentVersionId,
+        },
+        'PUT',
+      );
+      expect(edited.status, edited.body).toBe(200);
+      await close(exam.examId);
+      expect(await db.entranceExamAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).toEqual(
+        attempt,
+      );
+      expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: reopened.id } })).toEqual(
+        reopened,
+      );
+      expect(await db.projectTaskRound.findUniqueOrThrow({ where: { id: unrelated.id } })).toEqual(
+        unrelated,
+      );
+      expect(
+        await managementCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL'),
+      ).toMatchObject({
+        branchNodeCode: 'ENTRANCE_EXAM',
+        sourceBizId: exam.examId,
+      });
+      const after = await examCardWriteState();
+      expect(await wire('/entrance-exams/enter', expert, { projectId: f.projectId })).toEqual(
+        entered,
+      );
+      // 重复入场是写命令，会重新仲裁卡片；仅计算/更新时间允许变化。
+      const afterRepeat = await examCardWriteState();
+      const withoutCardCalculationTimes = (state: typeof after) => ({
+        ...state,
+        cards: state.cards.map((card) => ({ ...card, calculatedAt: null, updatedAt: null })),
+      });
+      expect(withoutCardCalculationTimes(afterRepeat)).toEqual(withoutCardCalculationTimes(after));
+      await wire(`/entrance-exams/current?projectId=${f.projectId}`, expert);
+      await wire('/expert-assignments/my-tasks', expert, {});
+      await wire('/projects/workbench/board/subtasks', manager, { projectId: f.projectId });
+      await wire('/projects/workbench/board/subtasks', expert, { projectId: f.projectId }, 403);
+      await close(exam.examId, 409);
+      expect(await examCardWriteState()).toEqual(afterRepeat);
+      expect(await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+    });
+  });
+}
+
+// 13第三十三批：真实 TCP/HTTP，不复跑此前 inject 集成；只连接文件顶部校验的专用 _test 库。
+async function withWorkbenchWire(
+  run: (
+    wire: ReturnType<typeof workbenchWire>,
+    request: ReturnType<typeof workbenchHttp>,
+  ) => Promise<void>,
+) {
+  const server = await createApp(config, db, undefined, storage);
+  try {
+    const address = await server.listen({ host: '127.0.0.1', port: 0 });
+    await run(workbenchWire(address), workbenchHttp(address));
+  } finally {
+    await server.close();
+  }
+}
+
+function workbenchHttp(address: string) {
+  return async (
+    path: string,
+    headers: Record<string, string>,
+    body?: object,
+    method = body === undefined ? 'GET' : 'POST',
+  ) => {
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    // 原生HTTP保留调用方的来源和Cookie，不自动添加浏览器头或存储会话。
+    return new Promise<{ status: number; body: string; headers: IncomingHttpHeaders }>(
+      (resolve, reject) => {
+        const outgoing = nodeHttpRequest(
+          `${address}/api/v1${path}`,
+          {
+            method,
+            signal: AbortSignal.timeout(15_000),
+            headers: {
+              ...headers,
+              ...(payload === undefined
+                ? {}
+                : {
+                    'content-type': 'application/json',
+                    'content-length': Buffer.byteLength(payload),
+                  }),
+            },
+          },
+          (incoming) => {
+            const chunks: Buffer[] = [];
+            incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
+            incoming.on('error', reject);
+            incoming.on('end', () =>
+              resolve({
+                status: incoming.statusCode!,
+                body: Buffer.concat(chunks).toString('utf8'),
+                headers: incoming.headers,
+              }),
+            );
+          },
+        );
+        outgoing.on('error', reject);
+        outgoing.end(payload);
+      },
+    );
+  };
+}
+
+function workbenchWire(address: string) {
+  const request = workbenchHttp(address);
+  return async (
+    path: string,
+    headers: Record<string, string> = desktop,
+    body?: object,
+    expected = 200,
+  ) => {
+    const response = await request(path, headers, body);
+    expect(response.status, path).toBe(expected);
+    const envelope = JSON.parse(response.body);
+    expect(envelope.code, path).toBe(expected);
+    expect(typeof envelope.message).toBe('string');
+    if (expected !== 200) expect(envelope.data).toBeNull();
+    return envelope.data;
+  };
+}
+
+async function workbenchWireState() {
+  return {
+    projects: await db.project.findMany({ orderBy: { id: 'asc' } }),
+    members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+    subtasks: await db.projectSubtask.findMany({ orderBy: { id: 'asc' } }),
+    reports: await db.projectOutputReport.findMany({ orderBy: { id: 'asc' } }),
+    quality: await db.projectOutputQuality.findMany({ orderBy: { id: 'asc' } }),
+    rounds: await db.projectTaskRound.findMany({ orderBy: { id: 'asc' } }),
+    cards: await db.projectRoleNodeSnapshot.findMany({ orderBy: { id: 'asc' } }),
+    events: await db.projectEventOutbox.findMany({ orderBy: { id: 'asc' } }),
+    organizations: await db.organization.findMany({ orderBy: { id: 'asc' } }),
+    relations: await db.userOrgRel.findMany({ orderBy: { id: 'asc' } }),
+  };
+}
+
+test('workbench real HTTP: 109-114 role scopes, decimal serialization, trends and read-only facts', async () => {
+  const f = await productionQualityFixture();
+  const before = await workbenchWireState();
+  await withWorkbenchWire(async (wire) => {
+    for (const headers of [f.headers, f.manager.headers, f.owner.headers]) {
+      expect(await wire('/projects/workbench/statistics?mode=BOARD', headers)).toEqual({
+        mode: 'BOARD',
+        totalProjectCount: 1,
+        startupProjectCount: 0,
+        assemblyProjectCount: 0,
+        productionProjectCount: 1,
+      });
+      const list = await wire('/projects/workbench/board/projects', headers, { size: 1 });
+      expect(list).toMatchObject({ total: 1, pages: 1, current: 1, size: 1 });
+      expect(list.records).toHaveLength(1);
+      expect(list.records[0]).toMatchObject({ projectId: f.projectId, progressQuantity: 0 });
+      const subtasks = await wire('/projects/workbench/board/subtasks', headers, {
+        projectId: f.projectId,
+      });
+      expect(subtasks).toHaveLength(2);
+      expect(subtasks.find((s: { subtaskId: number }) => s.subtaskId === f.pool.id)).toMatchObject({
+        quantityUnit: f.pool.quantityUnit,
+        reportedQuantity: headers === f.owner.headers ? 2.8766 : 10,
+      });
+      const risks = await wire('/projects/workbench/board/risks', headers, {
+        projectId: f.projectId,
+      });
+      expect(Object.keys(risks).sort()).toEqual(['members', 'project', 'subtasks', 'viewScope']);
+      expect(risks.viewScope).toBe(headers === f.owner.headers ? 'ORGANIZATION' : 'FULL_PROJECT');
+      for (const metric of ['QUANTITY', 'ACCURACY', 'CPD']) {
+        const trends = await wire('/projects/workbench/board/trends', headers, {
+          projectId: f.projectId,
+          metric,
+          startDate: f.day,
+          endDate: f.day,
+        });
+        expect(trends).toMatchObject({ metric, dates: [f.day], viewScope: risks.viewScope });
+        if (headers === f.headers) expect(trends.series).toEqual([]);
+        else {
+          const org = trends.series.find(
+            (s: { memberId: number }) => s.memberId === f.orgMember.id,
+          );
+          expect(org.values).toEqual([
+            metric === 'QUANTITY' ? 2.8766 : metric === 'CPD' ? 0.41 : null,
+          ]);
+          expect(
+            trends.series.some((s: { memberId: number }) => s.memberId === f.personalMember.id),
+          ).toBe(headers === f.manager.headers);
+        }
+      }
+    }
+    const tasks = await wire('/projects/workbench/statistics?mode=TASK', f.manager.headers);
+    expect(tasks).toMatchObject({
+      mode: 'TASK',
+      pendingTaskCount: 1,
+      involvedProjectCount: 1,
+    });
+    expect(Object.keys(tasks).sort()).toEqual([
+      'completedTaskCount',
+      'involvedProjectCount',
+      'mode',
+      'pendingTaskCount',
+    ]);
+    expect(Number.isInteger(tasks.completedTaskCount)).toBe(true);
+    expect(tasks.completedTaskCount).toBeGreaterThanOrEqual(0);
+    expect(
+      (await wire('/projects/workbench/statistics?mode=TASK', f.individual.headers))
+        .pendingTaskCount,
+    ).toBe(1);
+    expect(
+      await wire(`/organizations/overview?orgId=${f.organization.id}`, f.owner.headers),
+    ).toEqual({
+      orgId: f.organization.id,
+      memberTotal: 2,
+      activeProjectMemberTotal: 2,
+      todayScheduledTotal: 0,
+      todayPresentTotal: 0,
+      pendingApprovalTotal: 0,
+    });
+  });
+  expect(await workbenchWireState()).toEqual(before);
+});
+
+test('workbench real HTTP: current sessions, lost organization access and ordinary experts never inherit management', async () => {
+  const f = await productionQualityFixture();
+  await withWorkbenchWire(async (wire) => {
+    const concrete = ['subtasks', 'risks', 'trends'];
+    const query = { projectId: f.projectId, metric: 'QUANTITY', startDate: f.day, endDate: f.day };
+    for (const endpoint of concrete) {
+      const body = endpoint === 'trends' ? query : { projectId: f.projectId };
+      await wire(`/projects/workbench/board/${endpoint}`, f.individual.headers, body, 403);
+      await wire(`/projects/workbench/board/${endpoint}`, f.owner.headers, body);
+    }
+    await wire(
+      `/organizations/overview?orgId=${f.organization.id}`,
+      f.individual.headers,
+      undefined,
+      403,
+    );
+    // 切换通过真实HTTP完成；只改变本会话，不继承同账号原NAV项目权限。
+    await wire('/auth/switch-role', f.headers, { role: 'EXPERT' });
+    await wire('/projects/workbench/board/subtasks', f.headers, { projectId: f.projectId }, 403);
+    expect(
+      (await wire('/projects/workbench/statistics?mode=BOARD', f.headers)).totalProjectCount,
+    ).toBe(0);
+    await wire('/projects/workbench/board/subtasks', f.manager.headers, { projectId: f.projectId });
+    await wire('/auth/switch-role', f.headers, { role: 'NAVIGATOR' });
+    await wire('/projects/workbench/board/subtasks', f.headers, { projectId: f.projectId });
+    await db.userOrgRel.updateMany({
+      where: { orgId: f.organization.id, userId: f.owner.user.id },
+      data: { joinStatus: 'LEFT' },
+    });
+    const before = await workbenchWireState();
+    for (const endpoint of concrete)
+      await wire(
+        `/projects/workbench/board/${endpoint}`,
+        f.owner.headers,
+        endpoint === 'trends' ? query : { projectId: f.projectId },
+        403,
+      );
+    await wire('/projects/workbench/board/projects', f.owner.headers, {}, 403);
+    await wire(
+      `/organizations/overview?orgId=${f.organization.id}`,
+      f.owner.headers,
+      undefined,
+      403,
+    );
+    expect(await workbenchWireState()).toEqual(before);
+  });
+});
+
+test('workbench real HTTP: authentication, source rejection, query/body contracts and date validation', async () => {
+  const f = await productionQualityFixture();
+  const before = await workbenchWireState();
+  await withWorkbenchWire(async (wire) => {
+    for (const endpoint of ['projects', 'subtasks', 'risks', 'trends'])
+      await wire(`/projects/workbench/board/${endpoint}`, desktop, { projectId: f.projectId }, 401);
+    await wire('/projects/workbench/statistics?mode=BOARD', desktop, undefined, 401);
+    await wire(`/organizations/overview?orgId=${f.organization.id}`, desktop, undefined, 401);
+    await wire('/projects/workbench/statistics?mode=OTHER', f.headers, undefined, 400);
+    await wire('/projects/workbench/statistics', f.headers, undefined, 400);
+    for (const body of [{}, { projectId: 0 }, { projectId: 1.5 }, { projectId: 2147483648 }])
+      for (const endpoint of ['subtasks', 'risks'])
+        await wire(`/projects/workbench/board/${endpoint}`, f.headers, body, 400);
+    await wire('/projects/workbench/board/projects', f.headers, { size: 101 }, 400);
+    for (const dates of [
+      { startDate: '2026-02-30', endDate: '2026-03-01' },
+      { startDate: '2026-10-28', endDate: '2026-10-27' },
+      { startDate: '2025-01-01', endDate: '2026-01-02' },
+    ])
+      await wire(
+        '/projects/workbench/board/trends',
+        f.headers,
+        { projectId: f.projectId, metric: 'QUANTITY', ...dates },
+        400,
+      );
+    await wire('/organizations/overview', f.owner.headers, undefined, 400);
+    await wire('/organizations/overview?orgId=invalid', f.owner.headers, undefined, 400);
+    await wire(
+      '/projects/workbench/board/risks',
+      { ...f.headers, origin: 'https://untrusted.example' },
+      { projectId: f.projectId },
+      403,
+    );
+    await wire('/projects/workbench/board/subtasks', f.headers, { projectId: 2147483647 }, 403);
+  });
+  expect(await workbenchWireState()).toEqual(before);
+});
+
+// 13第三十四批：Cookie仅由真实HTTP登录获得；短信提供方沿用专用测试环境mock。
+function workbenchCookie(response: { status: number; headers: IncomingHttpHeaders }) {
+  expect(response.status).toBe(200);
+  const cookies = response.headers['set-cookie'];
+  expect(cookies).toHaveLength(1);
+  const cookie = cookies![0]!;
+  expect(cookie).toContain('HttpOnly');
+  expect(cookie).toContain('Path=/');
+  expect(cookie).toContain('SameSite=Lax');
+  expect(cookie.includes('; Secure')).toBe(config.cookieSecure);
+  const name = config.cookieSecure ? '__Host-tyde_session' : 'tyde_session';
+  expect(cookie.startsWith(`${name}=`)).toBe(true);
+  return { ...web, cookie: cookie.split(';')[0]! };
+}
+
+function workbenchReadRequests(projectId: number, orgId: string, day: string) {
+  return [
+    { path: '/projects/workbench/statistics?mode=BOARD' },
+    { path: '/projects/workbench/statistics?mode=TASK' },
+    { path: '/projects/workbench/board/projects', body: {} },
+    { path: '/projects/workbench/board/subtasks', body: { projectId } },
+    { path: '/projects/workbench/board/risks', body: { projectId } },
+    {
+      path: '/projects/workbench/board/trends',
+      body: { projectId, metric: 'QUANTITY', startDate: day, endDate: day },
+    },
+    { path: `/organizations/overview?orgId=${orgId}` },
+  ];
+}
+
+// 13第三十五批：108项目基础详情的Cookie真实HTTP专项，不复跑109—114。
+test('workbench detail Cookie HTTP: live role scopes match Bearer and organization loss is immediate', async () => {
+  const f = await productionQualityFixture();
+  const path = '/projects/workbench/board/project-detail';
+  const body = { projectId: f.projectId };
+  const creator = await db.session.findUniqueOrThrow({
+    where: { tokenDigest: digest(f.headers.authorization.slice(7)) },
+    include: { user: true },
+  });
+  await withWorkbenchWire(async (wire, request) => {
+    for (const account of [
+      { user: creator.user, headers: f.headers, role: 'NAVIGATOR', expected: 200 },
+      { ...f.manager, role: 'PM', expected: 200 },
+      { ...f.owner, role: 'EXPERT', expected: 200 },
+      { ...f.individual, role: 'EXPERT', expected: 403 },
+    ]) {
+      await db.verificationChallenge.updateMany({
+        where: { phoneE164: account.user.phoneE164 },
+        data: { createdAt: new Date(Date.now() - 61_000) },
+      });
+      const phoneValue = account.user.phoneE164.slice(3);
+      await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+      const browser = workbenchCookie(
+        await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+      );
+      await wire('/auth/switch-role', browser, { role: account.role });
+      const before = await workbenchWireState();
+      const detail = await wire(path, browser, body, account.expected);
+      expect(detail).toEqual(await wire(path, account.headers, body, account.expected));
+      if (account.expected === 200) {
+        expect(detail).toMatchObject({ projectId: f.projectId, status: 'PUBLISHED' });
+        for (const field of ['extJson', 'versionNo', 'createdBy', 'attachments'])
+          expect(detail).not.toHaveProperty(field);
+      }
+      expect(await workbenchWireState()).toEqual(before);
+      if (account.user.id === f.owner.user.id) {
+        await db.userOrgRel.updateMany({
+          where: { orgId: f.organization.id, userId: account.user.id },
+          data: { joinStatus: 'LEFT' },
+        });
+        const afterLoss = await workbenchWireState();
+        await wire(path, browser, body, 403);
+        await wire(path, account.headers, body, 403);
+        expect(await workbenchWireState()).toEqual(afterLoss);
+      }
+      await wire('/auth/logout', browser, {});
+      await wire(path, browser, body, 401);
+    }
+  });
+});
+
+test('workbench detail Cookie HTTP: isolated sessions, refresh rotation and logout preserve other sessions', async () => {
+  const f = await productionQualityFixture();
+  const path = '/projects/workbench/board/project-detail';
+  const body = { projectId: f.projectId };
+  await withWorkbenchWire(async (wire, request) => {
+    const login = { account: phone, password: registration.password };
+    const first = await request('/auth/login', web, login);
+    const firstHeaders = workbenchCookie(first);
+    const second = workbenchCookie(await request('/auth/login', web, login));
+    await wire(path, firstHeaders, body, 403);
+    await wire('/auth/switch-role', firstHeaders, { role: 'NAVIGATOR' });
+    const before = await workbenchWireState();
+    const detail = await wire(path, firstHeaders, body);
+    await wire(path, second, body, 403);
+    const current = workbenchCookie(
+      await request('/auth/refresh', web, {
+        refreshToken: JSON.parse(first.body).data.refreshToken,
+      }),
+    );
+    expect(current.cookie).not.toBe(firstHeaders.cookie);
+    await wire(path, firstHeaders, body, 401);
+    expect(await wire(path, current, body)).toEqual(detail);
+    const loggedOut = await request('/auth/logout', current, {});
+    expect(loggedOut.status).toBe(200);
+    expect(loggedOut.headers['set-cookie']?.[0]).toContain('Expires=Thu, 01 Jan 1970');
+    await wire(path, current, body, 401);
+    await wire(path, second, body, 403);
+    await wire('/auth/switch-role', second, { role: 'NAVIGATOR' });
+    expect(await wire(path, second, body)).toEqual(detail);
+    expect(await wire(path, f.headers, body)).toEqual(detail);
+    expect(await workbenchWireState()).toEqual(before);
+    await wire('/auth/logout', second, {});
+  });
+});
+
+test('workbench detail Cookie HTTP: CORS, source and parameter rejection never mutate business state', async () => {
+  const f = await productionQualityFixture();
+  const path = '/projects/workbench/board/project-detail';
+  const body = { projectId: f.projectId };
+  await withWorkbenchWire(async (wire, request) => {
+    const browser = workbenchCookie(
+      await request('/auth/login', web, { account: phone, password: registration.password }),
+    );
+    await wire('/auth/switch-role', browser, { role: 'NAVIGATOR' });
+    const before = await workbenchWireState();
+    const preflight = {
+      origin: web.origin,
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'Content-Type, X-Tyde-Client',
+    };
+    const allowed = await request(path, preflight, undefined, 'OPTIONS');
+    expect(allowed.status).toBe(204);
+    expect(allowed.body).toBe('');
+    expect(allowed.headers['access-control-allow-origin']).toBe(web.origin);
+    expect(allowed.headers['access-control-allow-credentials']).toBe('true');
+    expect(allowed.headers.vary).toContain('Access-Control-Request-Headers');
+    for (const headers of [
+      { ...preflight, origin: 'https://evil.test' },
+      { ...preflight, 'access-control-request-headers': 'Authorization' },
+    ]) {
+      const denied = await request(path, headers, undefined, 'OPTIONS');
+      expect(denied.status).toBe(403);
+      expect(denied.headers['access-control-allow-methods']).toBeUndefined();
+    }
+    await wire(path, web, body, 401);
+    for (const headers of [
+      { ...browser, origin: 'https://evil.test' },
+      { ...browser, authorization: f.headers.authorization },
+      { ...browser, 'x-tyde-client': 'desktop' },
+      { 'x-tyde-client': 'web', cookie: browser.cookie },
+    ])
+      await wire(path, headers, body, 403);
+    for (const invalid of [{}, { projectId: 0 }, { projectId: 1.5 }, { projectId: 2147483648 }])
+      await wire(path, browser, invalid, 400);
+    await wire(path, browser, { projectId: 2147483647 }, 403);
+    const valid = await request(path, browser, body);
+    expect(valid.status).toBe(200);
+    expect(valid.headers['access-control-allow-origin']).toBe(web.origin);
+    expect(valid.headers['access-control-allow-credentials']).toBe('true');
+    expect(await workbenchWireState()).toEqual(before);
+    await wire('/auth/logout', browser, {});
+  });
+});
+
+test('workbench Cookie HTTP: three roles match Bearer reads and preserve business facts', async () => {
+  const f = await productionQualityFixture();
+  await withWorkbenchWire(async (wire, request) => {
+    const creator = await db.session.findUniqueOrThrow({
+      where: { tokenDigest: digest(f.headers.authorization.slice(7)) },
+      include: { user: true },
+    });
+    const accounts = [
+      { user: creator.user, headers: f.headers, role: 'NAVIGATOR' },
+      { ...f.manager, role: 'PM' },
+      { ...f.owner, role: 'EXPERT' },
+    ];
+    for (const account of accounts) {
+      const phoneValue = account.user.phoneE164.slice(3);
+      // 仅准备本批登录验证码冷却时间，不伪造web会话。
+      await db.verificationChallenge.updateMany({
+        where: { phoneE164: account.user.phoneE164 },
+        data: { createdAt: new Date(Date.now() - 61_000) },
+      });
+      await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+      const browser = workbenchCookie(
+        await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+      );
+      await wire('/auth/switch-role', browser, { role: account.role });
+      const before = await workbenchWireState();
+      for (const { path, body } of workbenchReadRequests(f.projectId, f.organization.id, f.day)) {
+        const expected =
+          path.startsWith('/organizations/') && account.role !== 'EXPERT' ? 403 : 200;
+        expect(await wire(path, browser, body, expected)).toEqual(
+          await wire(path, account.headers, body, expected),
+        );
+      }
+      expect(await workbenchWireState()).toEqual(before);
+      if (account.role === 'EXPERT') {
+        await db.userOrgRel.updateMany({
+          where: { orgId: f.organization.id, userId: account.user.id },
+          data: { joinStatus: 'LEFT' },
+        });
+        const afterLoss = await workbenchWireState();
+        for (const { path, body } of workbenchReadRequests(f.projectId, f.organization.id, f.day))
+          if (!path.includes('/statistics')) await wire(path, browser, body, 403);
+        expect(await workbenchWireState()).toEqual(afterLoss);
+      }
+      await wire('/auth/logout', browser, {});
+      await wire('/projects/workbench/statistics?mode=BOARD', browser, undefined, 401);
+    }
+  });
+});
+
+test('workbench Cookie HTTP: role isolation, refresh rotation and logout revoke only current session', async () => {
+  const f = await productionQualityFixture();
+  await withWorkbenchWire(async (wire, request) => {
+    const loginBody = { account: phone, password: registration.password };
+    const first = await request('/auth/login', web, loginBody);
+    const firstHeaders = workbenchCookie(first);
+    const secondHeaders = workbenchCookie(await request('/auth/login', web, loginBody));
+    expect(
+      (await wire('/projects/workbench/statistics?mode=BOARD', firstHeaders)).totalProjectCount,
+    ).toBe(0);
+    await wire('/auth/switch-role', firstHeaders, { role: 'NAVIGATOR' });
+    await wire('/projects/workbench/board/subtasks', firstHeaders, { projectId: f.projectId });
+    await wire(
+      '/projects/workbench/board/subtasks',
+      secondHeaders,
+      { projectId: f.projectId },
+      403,
+    );
+    const rotated = await request('/auth/refresh', web, {
+      refreshToken: JSON.parse(first.body).data.refreshToken,
+    });
+    const current = workbenchCookie(rotated);
+    expect(current.cookie).not.toBe(firstHeaders.cookie);
+    await wire('/projects/workbench/statistics?mode=BOARD', firstHeaders, undefined, 401);
+    await wire('/projects/workbench/board/subtasks', current, { projectId: f.projectId });
+    const before = await workbenchWireState();
+    const loggedOut = await request('/auth/logout', current, {});
+    expect(loggedOut.status).toBe(200);
+    expect(loggedOut.headers['set-cookie']?.[0]).toContain('Expires=Thu, 01 Jan 1970');
+    for (const { path, body } of workbenchReadRequests(f.projectId, f.organization.id, f.day))
+      await wire(path, current, body, 401);
+    await wire('/projects/workbench/statistics?mode=BOARD', secondHeaders);
+    await wire('/projects/workbench/board/subtasks', f.headers, { projectId: f.projectId });
+    expect(await workbenchWireState()).toEqual(before);
+    await wire('/auth/logout', secondHeaders, {});
+  });
+});
+
+test('workbench Cookie HTTP: credentialed CORS, preflight and invalid transport are read-only', async () => {
+  const f = await productionQualityFixture();
+  await withWorkbenchWire(async (wire, request) => {
+    const browser = workbenchCookie(
+      await request('/auth/login', web, {
+        account: phone,
+        password: registration.password,
+      }),
+    );
+    await wire('/auth/switch-role', browser, { role: 'NAVIGATOR' });
+    const before = await workbenchWireState();
+    for (const { path, body } of workbenchReadRequests(f.projectId, f.organization.id, f.day)) {
+      const preflightHeaders = {
+        origin: web.origin,
+        'access-control-request-method': body === undefined ? 'GET' : 'POST',
+        'access-control-request-headers': 'Content-Type, X-Tyde-Client',
+      };
+      const allowed = await request(path, preflightHeaders, undefined, 'OPTIONS');
+      expect(allowed.status).toBe(204);
+      expect(allowed.body).toBe('');
+      expect(allowed.headers['access-control-allow-origin']).toBe(web.origin);
+      expect(allowed.headers['access-control-allow-credentials']).toBe('true');
+      expect(allowed.headers.vary).toContain('Access-Control-Request-Headers');
+      const rejected = await request(
+        path,
+        { ...preflightHeaders, origin: 'https://evil.test' },
+        undefined,
+        'OPTIONS',
+      );
+      expect(rejected.status).toBe(403);
+      expect(rejected.headers['access-control-allow-origin']).toBeUndefined();
+      const forbiddenHeader = await request(
+        path,
+        { ...preflightHeaders, 'access-control-request-headers': 'Authorization' },
+        undefined,
+        'OPTIONS',
+      );
+      expect(forbiddenHeader.status).toBe(403);
+      expect(forbiddenHeader.headers['access-control-allow-methods']).toBeUndefined();
+      for (const headers of [
+        { ...browser, origin: 'https://evil.test' },
+        { ...browser, authorization: f.headers.authorization },
+        { ...browser, 'x-tyde-client': 'desktop' },
+      ])
+        await wire(path, headers, body, 403);
+      if (body !== undefined)
+        await wire(path, { 'x-tyde-client': 'web', cookie: browser.cookie }, body, 403);
+    }
+    const valid = await request('/projects/workbench/board/subtasks', browser, {
+      projectId: f.projectId,
+    });
+    expect(valid.status).toBe(200);
+    expect(valid.headers['access-control-allow-origin']).toBe(web.origin);
+    expect(valid.headers['access-control-allow-credentials']).toBe('true');
+    expect(await workbenchWireState()).toEqual(before);
+    await wire('/auth/logout', browser, {});
+  });
+});
+
+// 13第三十八批：两项目转项来源与事件受众的真实HTTP链路。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  test(`workbench transfer lifecycle HTTP: ${transport} acceptance and withdrawal preserve source training and exact per-project audiences`, async () => {
+    const f = await personnelTransferProgressFixture(true);
+    const movement = await f.load();
+    const userId = f.individual.user.id;
+    const training = await db.projectTaskRound.findFirstOrThrow({
+      where: { projectId: f.projectId, userId, taskType: 'STANDARD_TRAINING', status: 'OPEN' },
+    });
+    const historical = await db.projectTaskRound.create({
+      data: {
+        projectId: f.targetProject.id,
+        userId,
+        role: 'EXPERT',
+        taskType: 'ENTRANCE_EXAM',
+        status: 'CANCELLED',
+        openedAt: new Date('2026-10-01Z'),
+        finishedAt: new Date('2026-10-02Z'),
+      },
+    });
+    const state = async () => ({
+      ...(await workbenchWireState()),
+      movement: await f.load(),
+      attempts: await db.entranceExamAttempt.findMany({ orderBy: { id: 'asc' } }),
+      responses: await db.projectExpertAssignmentMember.findMany({ orderBy: { id: 'asc' } }),
+    });
+    await withWorkbenchWire(async (wire, request) => {
+      const sessions = new Map<string, Record<string, string>>();
+      for (const account of [f.individual, f.manager]) {
+        if (transport === 'Bearer') {
+          sessions.set(account.user.id, account.headers);
+          continue;
+        }
+        await db.verificationChallenge.updateMany({
+          where: { phoneE164: account.user.phoneE164 },
+          data: { createdAt: new Date(Date.now() - 61_000) },
+        });
+        const phoneValue = account.user.phoneE164.slice(3);
+        await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+        const headers = workbenchCookie(
+          await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+        );
+        await wire('/auth/switch-role', headers, {
+          role: account.user.id === userId ? 'EXPERT' : 'PM',
+        });
+        sessions.set(account.user.id, headers);
+      }
+      const member = sessions.get(userId)!;
+      const manager = sessions.get(f.manager.user.id)!;
+      let examRoundId: number | undefined;
+      for (const accepted of [true, false]) {
+        const before = await state();
+        const path = accepted
+          ? '/expert-assignments/respond'
+          : '/project-personnel/movements/withdraw';
+        const body = accepted
+          ? { movementId: movement.id, decision: 'ACCEPT' }
+          : { projectId: f.projectId, movementId: movement.id };
+        const headers = accepted ? member : manager;
+        await wire(path, headers, body);
+        const after = await state();
+        const events = after.events.filter((e) => !before.events.some((old) => old.id === e.id));
+        expect(events).toHaveLength(2);
+        expect(events.map((e) => e.projectId).sort((a, b) => a - b)).toEqual(
+          [f.projectId, f.targetProject.id].sort((a, b) => a - b),
+        );
+        for (const event of events) {
+          expect(event).toMatchObject({
+            eventType: 'PROJECT_MEMBER_MOVEMENTS_CHANGED',
+            operation: accepted ? 'TRANSFER_RESPONSE' : 'WITHDRAW_MOVEMENT',
+            actorUserId: accepted ? userId : f.manager.user.id,
+            status: 'PENDING',
+          });
+          const oldCards = before.cards.filter((c) => c.projectId === event.projectId);
+          const newCards = after.cards.filter((c) => c.projectId === event.projectId);
+          const key = (c: (typeof newCards)[number]) => `${c.userId}:${c.perspective}`;
+          const signature = (c: (typeof newCards)[number] | undefined) =>
+            c &&
+            JSON.stringify([c.branchNodeCode, c.sourceBizType, c.sourceBizId, c.sourceEventAt]);
+          const expected = new Set<string>();
+          for (const card of [...oldCards, ...newCards]) {
+            if (
+              signature(oldCards.find((c) => key(c) === key(card))) ===
+              signature(newCards.find((c) => key(c) === key(card)))
+            )
+              continue;
+            const role =
+              card.perspective === 'NAVIGATOR'
+                ? 'NAVIGATOR'
+                : card.perspective.startsWith('EXPERT_') &&
+                    card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+                  ? 'EXPERT'
+                  : 'PM';
+            expected.add(`${card.userId}:${role}`);
+          }
+          const payload = event.payload as {
+            cardChangedRecipients: { userId: string; role: string }[];
+          };
+          const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+          expect(recipients.sort()).toEqual([...expected].sort());
+          expect(new Set(recipients).size).toBe(recipients.length);
+          expect(event.payload).toMatchObject({
+            movementIds: [movement.id],
+            sourceProjectId: f.projectId,
+            targetProjectId: f.targetProject.id,
+            affectedUserIds: [userId],
+            deliveryStatus: 'NOT_DELIVERED',
+          });
+          if (event.projectId === f.targetProject.id)
+            expect(recipients).toContain(`${userId}:EXPERT`);
+        }
+        const card = after.cards.find(
+          (c) =>
+            c.projectId === f.targetProject.id &&
+            c.userId === userId &&
+            c.perspective === 'EXPERT_INDIVIDUAL',
+        );
+        expect(card).toEqual(
+          accepted
+            ? expect.objectContaining({
+                branchNodeCode: 'ENTRANCE_EXAM',
+                sourceBizType: 'PROJECT_MEMBER_TRANSFER',
+                sourceBizId: movement.id,
+                sourceEventAt: movement.createdAt,
+              })
+            : undefined,
+        );
+        if (accepted) {
+          const round = after.rounds.find(
+            (r) =>
+              r.projectId === f.targetProject.id &&
+              r.userId === userId &&
+              r.taskType === 'ENTRANCE_EXAM' &&
+              r.status === 'OPEN',
+          );
+          expect(round).toBeDefined();
+          examRoundId = round!.id;
+          expect(examRoundId).not.toBe(historical.id);
+          expect(after.movement.flow!.currentNodeCode).toBe('TARGET_ENTRANCE_EXAM');
+        } else {
+          expect(after.rounds.find((r) => r.id === examRoundId)).toMatchObject({
+            status: 'CANCELLED',
+            participated: false,
+            finishedAt: expect.any(Date),
+          });
+          expect(after.movement.status).toBe('WITHDRAWN');
+        }
+        expect(after.rounds.find((r) => r.id === training.id)).toEqual(training);
+        expect(after.rounds.find((r) => r.id === historical.id)).toEqual(historical);
+        expect(after.attempts).toEqual(before.attempts);
+        expect(after.responses).toEqual(before.responses);
+        await wire(path, headers, body, 409);
+        await wire('/expert-assignments/my-tasks', member, {});
+        await wire('/projects/workbench/board/subtasks', manager, { projectId: f.projectId });
+        await wire('/projects/workbench/board/subtasks', manager, {
+          projectId: f.targetProject.id,
+        });
+        await wire(
+          '/projects/workbench/board/subtasks',
+          member,
+          { projectId: f.targetProject.id },
+          403,
+        );
+        expect(await state()).toEqual(after);
+      }
+    });
+  });
+}
+
+// 13第三十七批：负责人交接的真实HTTP链路，仅运行新增专项。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  test(`workbench owner lifecycle HTTP: ${transport} handoff preserves independent training, exact audiences and immediate board access`, async () => {
+    const f = await ownerIndependentProgressFixture();
+    await withWorkbenchWire(async (wire, request) => {
+      const sessions = new Map<string, Record<string, string>>();
+      for (const account of [f.owner, f.individual]) {
+        if (transport === 'Bearer') {
+          sessions.set(account.user.id, account.headers);
+          continue;
+        }
+        await db.verificationChallenge.updateMany({
+          where: { phoneE164: account.user.phoneE164 },
+          data: { createdAt: new Date(Date.now() - 61_000) },
+        });
+        const phoneValue = account.user.phoneE164.slice(3);
+        await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+        sessions.set(
+          account.user.id,
+          workbenchCookie(
+            await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+          ),
+        );
+      }
+      const owner = sessions.get(f.owner.user.id)!;
+      const member = sessions.get(f.individual.user.id)!;
+      const training = (await f.state()).rounds.filter((r) => r.taskType === 'STANDARD_TRAINING');
+      expect(training).toContainEqual(
+        expect.objectContaining({ userId: f.individual.user.id, status: 'OPEN' }),
+      );
+      await wire('/projects/workbench/board/subtasks', member, { projectId: f.projectId }, 403);
+      for (const promoted of [true, false]) {
+        const before = await f.state();
+        const target = promoted ? f.individual.user.id : f.owner.user.id;
+        const body = { assignmentId: f.orgAssignment.id, projectOwnerUserIds: [target] };
+        await wire('/expert-assignments/set-project-owners', owner, body);
+        const after = await f.state();
+        const events = after.events.filter((e) => !before.events.some((old) => old.id === e.id));
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          eventType: 'PROJECT_ASSIGNMENT_OWNERS_CHANGED',
+          operation: 'expert.set-project-owners',
+          actorUserId: f.owner.user.id,
+          status: 'PENDING',
+        });
+        const payload = events[0]!.payload as {
+          ownerUserIds: string[];
+          previousOwnerUserIds: string[];
+          cardChangedRecipients: { userId: string; role: string }[];
+        };
+        expect(payload.ownerUserIds).toEqual([target]);
+        expect(payload.previousOwnerUserIds).toEqual([
+          promoted ? f.owner.user.id : f.individual.user.id,
+        ]);
+        // 由实际来源变化独立计算完整受众，忽略快照重算时间。
+        const key = (card: (typeof after.cards)[number]) => `${card.userId}:${card.perspective}`;
+        const signature = (card: (typeof after.cards)[number] | undefined) =>
+          card &&
+          JSON.stringify([
+            card.branchNodeCode,
+            card.sourceBizType,
+            card.sourceBizId,
+            card.sourceEventAt,
+          ]);
+        const expected = new Set<string>();
+        for (const card of [...before.cards, ...after.cards]) {
+          if (
+            signature(before.cards.find((c) => key(c) === key(card))) ===
+            signature(after.cards.find((c) => key(c) === key(card)))
+          )
+            continue;
+          const role =
+            card.perspective === 'NAVIGATOR'
+              ? 'NAVIGATOR'
+              : card.perspective.startsWith('EXPERT_') &&
+                  card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+                ? 'EXPERT'
+                : 'PM';
+          expected.add(`${card.userId}:${role}`);
+        }
+        const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+        expect(recipients.sort()).toEqual([...expected].sort());
+        expect(recipients).toContain(`${f.individual.user.id}:EXPERT`);
+        expect(recipients).toContain(`${f.owner.user.id}:EXPERT`);
+        expect(new Set(recipients).size).toBe(recipients.length);
+        expect(after.rounds.filter((r) => r.taskType === 'STANDARD_TRAINING')).toEqual(training);
+        expect(
+          after.cards.find(
+            (c) => c.userId === f.individual.user.id && c.perspective === 'EXPERT_PROJECT_OWNER',
+          ),
+        ).toEqual(
+          promoted
+            ? expect.objectContaining({
+                branchNodeCode: 'OUTPUT_DATA_REVIEW',
+                sourceBizType: 'OUTPUT_REPORT',
+                sourceBizId: f.orgReport.id,
+              })
+            : undefined,
+        );
+        expect(after.cards).toContainEqual(
+          expect.objectContaining({
+            userId: f.individual.user.id,
+            perspective: 'EXPERT_MEMBER',
+            branchNodeCode: 'STANDARD_TRAINING',
+            sourceBizId: f.orgMember.id,
+          }),
+        );
+        // 重复完整集合替换为幂等成功，普通成员无权更换负责人。
+        await wire('/expert-assignments/set-project-owners', owner, body);
+        await wire('/expert-assignments/set-project-owners', member, body, 403);
+        for (const path of ['subtasks', 'risks'])
+          await wire(
+            `/projects/workbench/board/${path}`,
+            member,
+            { projectId: f.projectId },
+            promoted ? 200 : 403,
+          );
+        await wire('/expert-assignments/my-tasks', member, {});
+        expect(await f.state()).toEqual(after);
+      }
+    });
+  });
+}
+
+// 13第三十六批：仅定向 workbench source lifecycle HTTP，复用现有专用测试库及本机随机端口。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  test(`workbench source lifecycle HTTP: ${transport} return, correction and silent verification preserve independent sources and exact event audience`, async () => {
+    const f = await productionQualityFixture();
+    await withWorkbenchWire(async (wire, request) => {
+      const sessions = new Map<string, Record<string, string>>();
+      for (const account of [f.manager, f.individual, f.owner]) {
+        if (transport === 'Bearer') {
+          sessions.set(account.user.id, account.headers);
+          continue;
+        }
+        await db.verificationChallenge.updateMany({
+          where: { phoneE164: account.user.phoneE164 },
+          data: { createdAt: new Date(Date.now() - 61_000) },
+        });
+        const phoneValue = account.user.phoneE164.slice(3);
+        await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+        const headers = workbenchCookie(
+          await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+        );
+        await wire('/auth/switch-role', headers, {
+          role: account.user.id === f.manager.user.id ? 'PM' : 'EXPERT',
+        });
+        sessions.set(account.user.id, headers);
+      }
+      const manager = sessions.get(f.manager.user.id)!;
+      const reporter = sessions.get(f.individual.user.id)!;
+      const owner = sessions.get(f.owner.user.id)!;
+      const state = () => workbenchWireState();
+      const training = (await state()).rounds.filter((r) => r.taskType === 'STANDARD_TRAINING');
+      expect(training.length).toBeGreaterThan(0);
+      const reviewBody = {
+        projectId: f.projectId,
+        subtaskId: f.pool.id,
+        action: 'RETURN',
+        reportIds: [f.orgReport.id],
+        reason: '核对组织报量',
+      };
+      const correctionBody = { projectId: f.projectId, reportId: f.orgReport.id, quantity: 3.1234 };
+      const source = async (perspective: string) =>
+        db.projectRoleNodeSnapshot.findFirst({
+          where: { projectId: f.projectId, userId: f.owner.user.id, perspective },
+        });
+      expect(await source('EXPERT_PROJECT_OWNER')).toMatchObject({
+        branchNodeCode: 'OUTPUT_DATA_REVIEW',
+        sourceBizType: 'OUTPUT_REPORT',
+        sourceBizId: f.orgReport.id,
+      });
+      for (const operation of ['return', 'correct'] as const) {
+        const before = await state();
+        const path = `/production-tasks/report/${operation === 'return' ? 'review' : 'correct'}`;
+        const headers = operation === 'return' ? manager : reporter;
+        const body = operation === 'return' ? reviewBody : correctionBody;
+        await wire(path, headers, body);
+        const after = await state();
+        const events = after.events.filter(
+          (event) => !before.events.some((old) => old.id === event.id),
+        );
+        expect(events).toHaveLength(1);
+        const event = events[0]!;
+        expect(event).toMatchObject({
+          eventType: 'OUTPUT_REPORT_STATE_CHANGED',
+          operation: operation === 'return' ? 'RETURNED_FOR_CORRECTION' : 'PENDING_REVIEW',
+          actorUserId: operation === 'return' ? f.manager.user.id : f.individual.user.id,
+          status: 'PENDING',
+        });
+        // 独立比较实际可见来源差异，精确核对受众集合，重算时间不计变化。
+        const cardKey = (r: (typeof after.cards)[number]) => `${r.userId}:${r.perspective}`;
+        const signature = (r: (typeof after.cards)[number] | undefined) =>
+          r && JSON.stringify([r.branchNodeCode, r.sourceBizType, r.sourceBizId, r.sourceEventAt]);
+        const expected = new Set<string>();
+        for (const card of [...before.cards, ...after.cards]) {
+          const old = before.cards.find((r) => cardKey(r) === cardKey(card));
+          const next = after.cards.find((r) => cardKey(r) === cardKey(card));
+          if (signature(old) === signature(next)) continue;
+          const role =
+            card.perspective === 'NAVIGATOR'
+              ? 'NAVIGATOR'
+              : card.perspective.startsWith('EXPERT_') &&
+                  card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+                ? 'EXPERT'
+                : 'PM';
+          expected.add(`${card.userId}:${role}`);
+        }
+        const payload = event.payload as {
+          cardChangedRecipients: { userId: string; role: string }[];
+          reporterUserIds: string[];
+        };
+        const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+        expect(recipients.sort()).toEqual([...expected].sort());
+        expect(recipients).toContain(`${f.owner.user.id}:EXPERT`);
+        expect(new Set(recipients).size).toBe(recipients.length);
+        expect(payload.reporterUserIds).toEqual(
+          operation === 'return' ? [f.individual.user.id] : [],
+        );
+        expect(after.rounds.filter((r) => r.taskType === 'STANDARD_TRAINING')).toEqual(training);
+        expect(after.reports.find((r) => r.id === f.personalReport.id)).toEqual(
+          before.reports.find((r) => r.id === f.personalReport.id),
+        );
+        expect(await source('EXPERT_ORG_OWNER')).toEqual(
+          operation === 'return'
+            ? null
+            : expect.objectContaining({
+                branchNodeCode: 'OUTPUT_DATA_REVIEW',
+                sourceBizId: f.orgReport.id,
+              }),
+        );
+        expect(after.rounds).toContainEqual(
+          expect.objectContaining({
+            userId: f.individual.user.id,
+            taskType: 'OUTPUT_REPORT_CORRECTION',
+            status: operation === 'return' ? 'OPEN' : 'COMPLETED',
+          }),
+        );
+        await wire(path, headers, body, 409);
+        for (const viewer of [manager, owner]) {
+          await wire('/projects/workbench/board/subtasks', viewer, { projectId: f.projectId });
+          await wire('/projects/workbench/board/risks', viewer, { projectId: f.projectId });
+        }
+        await wire('/expert-assignments/my-tasks', reporter, {});
+        expect(await state()).toEqual(after);
+      }
+      const beforeVerify = await state();
+      await wire('/production-tasks/report/review', manager, {
+        projectId: f.projectId,
+        subtaskId: f.pool.id,
+        action: 'VERIFY',
+        reportIds: [f.personalReport.id, f.orgReport.id],
+      });
+      const verified = await state();
+      expect(verified.events).toEqual(beforeVerify.events);
+      expect(verified.reports.filter((r) => r.subtaskId === f.pool.id)).toHaveLength(2);
+      for (const report of verified.reports.filter((r) => r.subtaskId === f.pool.id))
+        expect(report).toMatchObject({ reviewStatus: 'VERIFIED', lockedAt: expect.any(Date) });
+      expect(verified.rounds.filter((r) => r.taskType === 'STANDARD_TRAINING')).toEqual(training);
+      expect(verified.cards.filter((r) => r.sourceBizType === 'OUTPUT_REPORT')).toEqual([]);
+    });
+  });
+}
+
+// 13第三十九批：材料与本人培训确认的真实TCP/HTTP链路。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  test(`workbench materials lifecycle HTTP: ${transport} updates and concurrent confirmations preserve exact sources, history and silence`, async () => {
+    const f = await materialsConfirmationFixture();
+    const history = await db.projectTaskRound.create({
+      data: {
+        projectId: f.projectId,
+        userId: f.expert.user.id,
+        role: 'EXPERT',
+        taskType: 'STANDARD_TRAINING',
+        status: 'COMPLETED',
+        participated: true,
+        finishedAt: new Date('2026-10-01Z'),
+      },
+    });
+    const stale = await db.projectTaskRound.create({
+      data: {
+        projectId: f.projectId,
+        userId: f.manager.user.id,
+        role: 'EXPERT',
+        taskType: 'ENTRANCE_EXAM',
+      },
+    });
+    const state = () => materialsIndependentState(f.projectId);
+    await withWorkbenchWire(async (wire, request) => {
+      const sessions = new Map<string, Record<string, string>>();
+      for (const account of [f.expert, f.manager]) {
+        if (transport === 'Bearer') {
+          sessions.set(account.user.id, account.headers);
+          continue;
+        }
+        await db.verificationChallenge.updateMany({
+          where: { phoneE164: account.user.phoneE164 },
+          data: { createdAt: new Date(Date.now() - 61_000) },
+        });
+        const phoneValue = account.user.phoneE164.slice(3);
+        await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+        const headers = workbenchCookie(
+          await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+        );
+        await wire('/auth/switch-role', headers, {
+          role: account.user.id === f.expert.user.id ? 'EXPERT' : 'PM',
+        });
+        sessions.set(account.user.id, headers);
+      }
+      const expert = sessions.get(f.expert.user.id)!;
+      const manager = sessions.get(f.manager.user.id)!;
+      const updatePath = '/projects/standard-materials/update';
+      const confirmPath = `/projects/standard-materials/confirm-read?projectId=${f.projectId}`;
+      const detailPath = `/projects/standard-materials/detail?projectId=${f.projectId}`;
+      const payload = { projectId: f.projectId, standardContent: '真实HTTP培训材料修订' };
+      const initial = await state();
+      await wire(updatePath, expert, payload, 403);
+      const denied = await request(confirmPath, manager, undefined, 'POST');
+      expect(denied.status).toBe(403);
+      expect(await state()).toEqual(initial);
+      await wire(updatePath, manager, payload);
+      const updated = await state();
+      expect(updated.events).toEqual(initial.events);
+      expect(updated.rounds.find((r) => r.id === history.id)).toEqual(history);
+      expect(updated.rounds.find((r) => r.id === stale.id)).toMatchObject({
+        status: 'CANCELLED',
+        participated: false,
+        finishedAt: expect.any(Date),
+      });
+      const training = updated.rounds.filter(
+        (r) =>
+          r.userId === f.expert.user.id &&
+          r.taskType === 'STANDARD_TRAINING' &&
+          r.status === 'OPEN',
+      );
+      expect(training).toHaveLength(1);
+      const card = () =>
+        db.projectRoleNodeSnapshot.findUniqueOrThrow({
+          where: {
+            projectId_userId_perspective: {
+              projectId: f.projectId,
+              userId: f.expert.user.id,
+              perspective: 'EXPERT_INDIVIDUAL',
+            },
+          },
+        });
+      expect(await card()).toMatchObject({
+        branchNodeCode: 'STANDARD_TRAINING',
+        sourceBizType: 'PROJECT_MEMBER',
+        sourceBizId: f.member.id,
+        sourceEventAt: f.member.joinedAt,
+      });
+      const detail = await wire(detailPath, expert);
+      expect(detail).toMatchObject({
+        standardContent: payload.standardContent,
+        canConfirmRead: true,
+      });
+      await wire('/expert-assignments/my-tasks', expert, {});
+      await wire('/projects/workbench/board/subtasks', manager, { projectId: f.projectId });
+      expect(await state()).toEqual(updated);
+      await wire(updatePath, manager, payload);
+      const repeated = await state();
+      expect(repeated.rounds.filter((r) => r.role === 'EXPERT')).toEqual(
+        updated.rounds.filter((r) => r.role === 'EXPERT'),
+      );
+      // 每次材料保存记录主线操作完成；独立考试/培训轮次才要求重复保存幂等。
+      const added = repeated.rounds.filter((r) => !updated.rounds.some((old) => old.id === r.id));
+      expect(added).toMatchObject([
+        {
+          userId: f.manager.user.id,
+          role: 'PM',
+          taskType: 'MAIN_STANDARD_TRAINING',
+          status: 'COMPLETED',
+          participated: true,
+        },
+      ]);
+      expect(repeated.events).toEqual(initial.events);
+      const confirmations = await Promise.all([
+        request(confirmPath, expert, undefined, 'POST'),
+        request(confirmPath, expert, undefined, 'POST'),
+      ]);
+      expect(confirmations.map((r) => r.status)).toEqual([200, 200]);
+      const results = confirmations.map((r) => JSON.parse(r.body).data);
+      expect(results.map((r) => r.readConfirmationTransitioned).sort()).toEqual([false, true]);
+      expect(results[0].confirmedReadAt).toBe(results[1].confirmedReadAt);
+      const confirmed = await state();
+      expect(confirmed.events).toEqual(initial.events);
+      expect(confirmed.rounds.find((r) => r.id === training[0]!.id)).toMatchObject({
+        status: 'COMPLETED',
+        participated: true,
+        finishedAt: expect.any(Date),
+      });
+      expect(confirmed.rounds.find((r) => r.id === history.id)).toEqual(history);
+      expect(confirmed.rounds.find((r) => r.id === stale.id)).toEqual(
+        updated.rounds.find((r) => r.id === stale.id),
+      );
+      expect(await card()).toMatchObject({
+        branchNodeCode: 'PRODUCTION_TASK',
+        sourceBizType: 'PROJECT_MEMBER',
+        sourceBizId: f.member.id,
+      });
+      const again = await request(confirmPath, expert, undefined, 'POST');
+      expect(again.status).toBe(200);
+      expect(JSON.parse(again.body).data.readConfirmationTransitioned).toBe(false);
+      const afterRepeat = await state();
+      expect(afterRepeat.rounds).toEqual(confirmed.rounds);
+      expect(afterRepeat.members).toEqual(confirmed.members);
+      expect(afterRepeat.events).toEqual(confirmed.events);
+      expect(afterRepeat.project).toEqual(confirmed.project);
+      expect(await wire(detailPath, expert)).toMatchObject({ canConfirmRead: false });
+      await wire('/expert-assignments/my-tasks', expert, {});
+      await wire('/projects/workbench/board/subtasks', expert, { projectId: f.projectId }, 403);
+      expect(await state()).toEqual(afterRepeat);
+    });
+  });
+}
+
+// 13第四十一批：交卷/取消的真实HTTP与完整卡片受众，不调用真实Agent。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  for (const operation of ['MANUAL', 'AUTO', 'cancel'] as const) {
+    test(`workbench candidate lifecycle HTTP: ${transport} ${operation} preserves exact audiences, independent history and read purity`, async () => {
+      const cancellation =
+        operation === 'cancel' ? await cancellationMovementIndependentFixture('cancel') : null;
+      const f =
+        cancellation?.candidate ??
+        (await candidateSubmissionFixture(operation === 'AUTO' ? 'AUTO' : 'MANUAL'));
+      if (!cancellation)
+        await db.$transaction((tx) => refreshManagementCardSnapshots(tx, f.projectId));
+      await withWorkbenchWire(async (wire, request) => {
+        let expert = f.individual.headers;
+        if (transport === 'Cookie') {
+          await db.verificationChallenge.updateMany({
+            where: { phoneE164: f.individual.user.phoneE164 },
+            data: { createdAt: new Date(Date.now() - 61_000) },
+          });
+          const phoneValue = f.individual.user.phoneE164.slice(3);
+          await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+          expert = workbenchCookie(
+            await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+          );
+        }
+        const before = await candidateCardState(f.projectId);
+        const binding = await db.entranceExamAttempt.findUniqueOrThrow({
+          where: { id: f.input.attemptId },
+        });
+        const path = operation === 'cancel' ? '/entrance-exams/cancel' : '/entrance-exams/submit';
+        const input =
+          operation === 'cancel'
+            ? { projectId: f.projectId, attemptId: f.input.attemptId }
+            : f.input;
+        // 角色拒绝、来源拒绝和缺少凭据都必须先于业务写入。
+        await wire(path, f.manager.headers, input, 403);
+        await wire(path, { ...expert, origin: 'https://untrusted.example' }, input, 403);
+        await wire(path, desktop, input, 401);
+        expect(await candidateCardState(f.projectId)).toEqual(before);
+        const result = await wire(path, expert, input);
+        expect(result.attemptId).toBe(f.input.attemptId);
+        const after = await candidateCardState(f.projectId);
+        const events = after.events.filter(
+          (event) => !before.events.some((old) => old.id === event.id),
+        );
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          eventType:
+            operation === 'cancel'
+              ? 'EXAM_RESULT_DECIDED'
+              : operation === 'MANUAL'
+                ? 'EXAM_REVIEW_QUEUE_CHANGED'
+                : 'EXAM_AUTO_DISPATCH_REQUESTED',
+          actorUserId: f.individual.user.id,
+          status: 'PENDING',
+        });
+        const key = (card: (typeof after.cards)[number]) => `${card.userId}:${card.perspective}`;
+        const signature = (card: (typeof after.cards)[number] | undefined) =>
+          card &&
+          JSON.stringify([
+            card.branchNodeCode,
+            card.sourceBizType,
+            card.sourceBizId,
+            card.sourceEventAt,
+          ]);
+        const expected = new Set<string>();
+        for (const card of [...before.cards, ...after.cards]) {
+          if (
+            signature(before.cards.find((c) => key(c) === key(card))) ===
+            signature(after.cards.find((c) => key(c) === key(card)))
+          )
+            continue;
+          const role =
+            card.perspective === 'NAVIGATOR'
+              ? 'NAVIGATOR'
+              : card.perspective.startsWith('EXPERT_') &&
+                  card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+                ? 'EXPERT'
+                : 'PM';
+          expected.add(`${card.userId}:${role}`);
+        }
+        const payload = events[0]!.payload as {
+          cardChangedRecipients: { userId: string; role: string }[];
+        };
+        const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+        expect(recipients.sort()).toEqual([...expected].sort());
+        expect(new Set(recipients).size).toBe(recipients.length);
+        expect(recipients).toContain(`${f.individual.user.id}:EXPERT`);
+        if (operation === 'AUTO')
+          expect(events[0]!.payload).toMatchObject({
+            provider: 'mock',
+            executionStatus: 'NOT_EXECUTED',
+          });
+        for (const round of before.rounds.filter(
+          (r) =>
+            r.userId === f.individual.user.id &&
+            r.taskType === 'ENTRANCE_EXAM' &&
+            r.status === 'OPEN',
+        ))
+          expect(after.rounds.find((r) => r.id === round.id)).toMatchObject({
+            status: operation === 'cancel' ? 'CANCELLED' : 'COMPLETED',
+            participated: operation !== 'cancel',
+            finishedAt: expect.any(Date),
+          });
+        expect(
+          await managementCard(f.projectId, f.individual.user.id, 'EXPERT_INDIVIDUAL'),
+        ).toBeNull();
+        expect(after.attempts.find((attempt) => attempt.id === binding.id)).toMatchObject({
+          examId: binding.examId,
+          examVersionId: binding.examVersionId,
+          paperId: binding.paperId,
+          sourceBizType: binding.sourceBizType,
+          sourceBizId: binding.sourceBizId,
+        });
+        expect(
+          after.rounds.filter(
+            (r) =>
+              r.userId === f.individual.user.id &&
+              r.taskType === 'ENTRANCE_EXAM' &&
+              r.status === 'OPEN',
+          ),
+        ).toHaveLength(0);
+        if (cancellation) {
+          expect(recipients).toContain(`${cancellation.expert.user.id}:EXPERT`);
+          expect(
+            await managementCard(f.projectId, cancellation.expert.user.id, 'EXPERT_INDIVIDUAL'),
+          ).toMatchObject({
+            branchNodeCode: 'STANDARD_TRAINING',
+            sourceBizId: cancellation.member.id,
+          });
+          expect(after.rounds).toContainEqual(
+            expect.objectContaining({
+              userId: cancellation.expert.user.id,
+              taskType: 'STANDARD_TRAINING',
+              status: 'OPEN',
+              participated: false,
+            }),
+          );
+          expect(after.rounds.find((r) => r.id === cancellation.stale.id)).toMatchObject({
+            status: 'CANCELLED',
+            participated: false,
+          });
+          for (const historical of [cancellation.history, cancellation.unrelated])
+            expect(after.rounds.find((r) => r.id === historical.id)).toEqual(historical);
+          expect(after.answers).toEqual(before.answers);
+          expect(after.records).toEqual(before.records);
+        } else {
+          expect(result).toMatchObject({
+            answerCount: 2,
+            gradingRoundCount: 2,
+            gradingStatus: 'PENDING',
+          });
+          expect(after.answers).toHaveLength(2);
+          expect(after.records.map((r) => [r.examVersionId, r.status])).toEqual([
+            [f.version.id, 'PENDING'],
+            [f.version.id, 'WAITING'],
+          ]);
+        }
+        await wire(path, expert, input, operation === 'cancel' ? 400 : 409);
+        await wire(`/entrance-exams/current?projectId=${f.projectId}`, expert);
+        await wire('/expert-assignments/my-tasks', expert, {});
+        await wire('/projects/workbench/board/subtasks', expert, { projectId: f.projectId }, 403);
+        expect(await candidateCardState(f.projectId)).toEqual(after);
+      });
+    });
+  }
+}
+
+// 13第四十三批：签名mock回调使用真实TCP/HTTP，失败重试使用真实登录Cookie。
+for (const outcome of ['SUCCEEDED', 'FAILED'] as const) {
+  test(`workbench mock callback lifecycle HTTP: ${outcome} preserves exact audiences, replay isolation and independent sources`, async () => {
+    const f = await gradingIndependentFixture('AUTO');
+    const auto = new ExamAutoService(db);
+    const claimed = await auto.claim(f.record.id);
+    expect(claimed).not.toBeNull();
+    const callback = {
+      ...claimed!,
+      status: outcome,
+      items: outcome === 'SUCCEEDED' ? f.body.items : null,
+      errorMessage: outcome === 'FAILED' ? '模拟失败' : null,
+    } as AutoCallbackInput;
+    const state = async () => ({
+      ...(await workbenchWireState()),
+      grading: await gradingIndependentState(f.projectId),
+      answers: await db.entranceExamAnswer.findMany({ orderBy: { id: 'asc' } }),
+    });
+    await withWorkbenchWire(async (wire, request) => {
+      const path = autoCallbackPath.slice('/api/v1'.length);
+      const send = (input: AutoCallbackInput, expected = 200) => {
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        return wire(
+          path,
+          {
+            'x-agent-timestamp': timestamp,
+            'x-agent-signature': signAutoCallback(autoTestSecret, timestamp, JSON.stringify(input)),
+          },
+          input,
+          expected,
+        );
+      };
+      const assertAudience = (
+        before: Awaited<ReturnType<typeof state>>,
+        after: Awaited<ReturnType<typeof state>>,
+        eventType: string,
+      ) => {
+        const events = after.events.filter((e) => !before.events.some((old) => old.id === e.id));
+        const matching = events.filter((e) => e.eventType === eventType);
+        expect(matching).toHaveLength(1);
+        expect(matching[0]).toMatchObject({ projectId: f.projectId, status: 'PENDING' });
+        const key = (c: (typeof after.cards)[number]) =>
+          `${c.projectId}:${c.userId}:${c.perspective}`;
+        const signature = (c: (typeof after.cards)[number] | undefined) =>
+          c && JSON.stringify([c.branchNodeCode, c.sourceBizType, c.sourceBizId, c.sourceEventAt]);
+        const expected = new Set<string>();
+        for (const card of [...before.cards, ...after.cards]) {
+          if (
+            signature(before.cards.find((c) => key(c) === key(card))) ===
+            signature(after.cards.find((c) => key(c) === key(card)))
+          )
+            continue;
+          const role =
+            card.perspective === 'NAVIGATOR'
+              ? 'NAVIGATOR'
+              : card.perspective.startsWith('EXPERT_') &&
+                  card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+                ? 'EXPERT'
+                : 'PM';
+          expected.add(`${card.userId}:${role}`);
+        }
+        const payload = matching[0]!.payload as {
+          cardChangedRecipients: { userId: string; role: string }[];
+        };
+        const actual = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+        expect(actual.sort()).toEqual([...expected].sort());
+        expect(new Set(actual).size).toBe(actual.length);
+        return events;
+      };
+      const before = await state();
+      await wire(path, {}, callback, 401);
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      await wire(
+        path,
+        {
+          'x-agent-timestamp': timestamp,
+          'x-agent-signature': signAutoCallback(
+            autoTestSecret,
+            timestamp,
+            JSON.stringify({ ...callback, summary: '不同原文' }),
+          ),
+        },
+        callback,
+        401,
+      );
+      expect(await state()).toEqual(before);
+      const result = await send(callback);
+      expect(result).toMatchObject({
+        recordStatus: outcome === 'FAILED' ? 'FAILED' : 'COMPLETED',
+        finalResult: outcome === 'FAILED' ? 'PENDING' : 'ADMITTED',
+      });
+      const after = await state();
+      const events = assertAudience(
+        before,
+        after,
+        outcome === 'FAILED' ? 'EXAM_AUTO_FAILED' : 'EXAM_REVIEW_QUEUE_CHANGED',
+      );
+      expect(events.map((e) => e.eventType).sort()).toEqual(
+        outcome === 'FAILED'
+          ? ['EXAM_AUTO_FAILED']
+          : [
+              'EXAM_RESULT_DECIDED',
+              'EXAM_REVIEW_QUEUE_CHANGED',
+              'MEMBER_ENTRY_CONFIRMATION_REQUIRED',
+            ],
+      );
+      expect(after.members.filter((m) => m.admissionAttemptId === f.input.attemptId)).toHaveLength(
+        outcome === 'FAILED' ? 0 : 1,
+      );
+      expect(
+        after.rounds.filter(
+          (r) =>
+            r.projectId === f.projectId &&
+            r.userId === f.manager.user.id &&
+            r.taskType === 'ENTRANCE_EXAM' &&
+            r.status === 'OPEN',
+        ),
+      ).toHaveLength(1);
+      expect(
+        after.cards.find(
+          (c) =>
+            c.projectId === f.projectId &&
+            c.userId === f.manager.user.id &&
+            c.perspective === 'EXPERT_INDIVIDUAL',
+        ),
+      ).toMatchObject({
+        branchNodeCode: 'ENTRANCE_EXAM',
+        sourceBizType: 'ENTRANCE_EXAM',
+        sourceBizId: f.exam.id,
+      });
+      expect(after.rounds.find((r) => r.id === f.stale.id)).toMatchObject({
+        status: 'CANCELLED',
+        participated: false,
+      });
+      for (const old of [f.history, f.unrelated])
+        expect(after.rounds.find((r) => r.id === old.id)).toEqual(old);
+      expect(after.answers).toEqual(before.answers);
+      await send(callback);
+      await send({ ...callback, summary: '篡改回放' }, 409);
+      await wire(`/entrance-exams/current?projectId=${f.projectId}`, f.individual.headers);
+      await wire('/expert-assignments/my-tasks', f.individual.headers, {});
+      await wire('/projects/workbench/board/subtasks', f.manager.headers, {
+        projectId: f.projectId,
+      });
+      expect(await state()).toEqual(after);
+      if (outcome === 'FAILED') {
+        await db.verificationChallenge.updateMany({
+          where: { phoneE164: f.manager.user.phoneE164 },
+          data: { createdAt: new Date(Date.now() - 61_000) },
+        });
+        const phoneValue = f.manager.user.phoneE164.slice(3);
+        await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+        const reviewer = workbenchCookie(
+          await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+        );
+        await wire('/auth/switch-role', reviewer, { role: 'PM' });
+        const locator = { projectId: f.projectId, examId: f.exam.id, gradingRecordId: f.record.id };
+        await wire('/entrance-exams/grading/retry', f.individual.headers, locator, 403);
+        expect(await state()).toEqual(after);
+        expect(await wire('/entrance-exams/grading/retry', reviewer, locator)).toMatchObject({
+          recordStatus: 'PENDING',
+          score: null,
+        });
+        const retried = await state();
+        assertAudience(after, retried, 'EXAM_AUTO_DISPATCH_REQUESTED');
+        await send(callback, 409);
+        await wire('/entrance-exams/grading/retry', reviewer, locator, 400);
+        expect(await state()).toEqual(retried);
+        const next = await auto.claim(f.record.id);
+        expect(next).not.toBeNull();
+        expect(next!.toolTraceId).not.toBe(callback.toolTraceId);
+        const beforeSuccess = await state();
+        const success = { ...next!, status: 'SUCCEEDED', items: f.body.items } as AutoCallbackInput;
+        expect(await send(success)).toMatchObject({
+          recordStatus: 'COMPLETED',
+          finalResult: 'ADMITTED',
+          score: 20,
+        });
+        const final = await state();
+        assertAudience(beforeSuccess, final, 'EXAM_REVIEW_QUEUE_CHANGED');
+        expect(
+          final.members.filter((m) => m.admissionAttemptId === f.input.attemptId),
+        ).toHaveLength(1);
+        await send(success);
+        await send(callback, 409);
+        expect(await state()).toEqual(final);
+      }
+    });
+  });
+}
+
+// 13第四十二批：人工阅卷完成后的真实HTTP跨域来源及受众。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  test(`workbench grading lifecycle HTTP: ${transport} manual admission preserves exact audiences, independent history and read purity`, async () => {
+    const f = await gradingIndependentFixture();
+    const state = async () => ({
+      ...(await workbenchWireState()),
+      grading: await gradingIndependentState(f.projectId),
+      answers: await db.entranceExamAnswer.findMany({ orderBy: { id: 'asc' } }),
+    });
+    await withWorkbenchWire(async (wire, request) => {
+      let reviewer = f.manager.headers;
+      if (transport === 'Cookie') {
+        await db.verificationChallenge.updateMany({
+          where: { phoneE164: f.manager.user.phoneE164 },
+          data: { createdAt: new Date(Date.now() - 61_000) },
+        });
+        const phoneValue = f.manager.user.phoneE164.slice(3);
+        await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+        reviewer = workbenchCookie(
+          await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+        );
+        await wire('/auth/switch-role', reviewer, { role: 'PM' });
+      }
+      const path = '/entrance-exams/grading/manual';
+      const before = await state();
+      await wire(path, f.individual.headers, f.body, 403);
+      await wire(path, { ...reviewer, origin: 'https://untrusted.example' }, f.body, 403);
+      await wire(path, desktop, f.body, 401);
+      expect(await state()).toEqual(before);
+      const result = await wire(path, reviewer, f.body);
+      expect(result).toMatchObject({
+        attemptId: f.input.attemptId,
+        gradingStatus: 'COMPLETED',
+        finalResult: 'ADMITTED',
+        score: 20,
+      });
+      const after = await state();
+      const events = after.events.filter((e) => !before.events.some((old) => old.id === e.id));
+      expect(events.map((e) => e.eventType).sort()).toEqual([
+        'EXAM_RESULT_DECIDED',
+        'EXAM_REVIEW_QUEUE_CHANGED',
+        'MEMBER_ENTRY_CONFIRMATION_REQUIRED',
+      ]);
+      for (const event of events.filter(
+        (e) => e.eventType !== 'MEMBER_ENTRY_CONFIRMATION_REQUIRED',
+      ))
+        expect(event).toMatchObject({
+          projectId: f.projectId,
+          actorUserId: f.manager.user.id,
+          operation: 'entrance-exam.manual',
+          status: 'PENDING',
+        });
+      expect(events.find((e) => e.eventType === 'EXAM_RESULT_DECIDED')!.payload).toMatchObject({
+        attemptId: f.input.attemptId,
+        sourceBizType: before.grading.attempts.find((a) => a.id === f.input.attemptId)!
+          .sourceBizType,
+        sourceBizId: before.grading.attempts.find((a) => a.id === f.input.attemptId)!.sourceBizId,
+        finalResult: 'ADMITTED',
+      });
+      const queue = events.find((e) => e.eventType === 'EXAM_REVIEW_QUEUE_CHANGED')!;
+      const key = (c: (typeof after.cards)[number]) =>
+        `${c.projectId}:${c.userId}:${c.perspective}`;
+      const signature = (c: (typeof after.cards)[number] | undefined) =>
+        c && JSON.stringify([c.branchNodeCode, c.sourceBizType, c.sourceBizId, c.sourceEventAt]);
+      const expected = new Set<string>();
+      for (const card of [...before.cards, ...after.cards]) {
+        if (
+          signature(before.cards.find((c) => key(c) === key(card))) ===
+          signature(after.cards.find((c) => key(c) === key(card)))
+        )
+          continue;
+        const role =
+          card.perspective === 'NAVIGATOR'
+            ? 'NAVIGATOR'
+            : card.perspective.startsWith('EXPERT_') &&
+                card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+              ? 'EXPERT'
+              : 'PM';
+        expected.add(`${card.userId}:${role}`);
+      }
+      const payload = queue.payload as {
+        cardChangedRecipients: { userId: string; role: string }[];
+      };
+      const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+      expect(recipients.sort()).toEqual([...expected].sort());
+      expect(new Set(recipients).size).toBe(recipients.length);
+      expect(recipients).toContain(`${f.manager.user.id}:EXPERT`);
+      expect(queue.payload).toMatchObject({
+        attemptId: f.input.attemptId,
+        completedRoundId: f.record.gradingRoundId,
+        nextRoundId: null,
+        reviewerUserIds: [f.manager.user.id],
+        deliveryStatus: 'NOT_DELIVERED',
+      });
+      const admission = after.members.filter((m) => m.admissionAttemptId === f.input.attemptId);
+      expect(admission).toHaveLength(1);
+      expect(admission[0]).toMatchObject({
+        userId: f.individual.user.id,
+        status: 'PENDING_CONFIRM',
+      });
+      const independent = after.rounds.filter(
+        (r) =>
+          r.projectId === f.projectId &&
+          r.userId === f.manager.user.id &&
+          r.taskType === 'ENTRANCE_EXAM' &&
+          r.status === 'OPEN',
+      );
+      expect(independent).toHaveLength(1);
+      expect(independent[0]).toMatchObject({ participated: false, finishedAt: null });
+      expect(
+        after.cards.find(
+          (c) =>
+            c.projectId === f.projectId &&
+            c.userId === f.manager.user.id &&
+            c.perspective === 'EXPERT_INDIVIDUAL',
+        ),
+      ).toMatchObject({
+        branchNodeCode: 'ENTRANCE_EXAM',
+        sourceBizType: 'ENTRANCE_EXAM',
+        sourceBizId: f.exam.id,
+      });
+      expect(after.rounds.find((r) => r.id === f.stale.id)).toMatchObject({
+        status: 'CANCELLED',
+        participated: false,
+        finishedAt: expect.any(Date),
+      });
+      for (const historical of [f.history, f.unrelated])
+        expect(after.rounds.find((r) => r.id === historical.id)).toEqual(historical);
+      expect(after.answers).toEqual(before.answers);
+      expect(after.grading.records.find((r) => r.id === f.record.id)).toMatchObject({
+        status: 'COMPLETED',
+        reviewerUserId: f.manager.user.id,
+        roundResult: 'ADMITTED',
+      });
+      await wire(path, reviewer, f.body, 409);
+      await wire(`/entrance-exams/current?projectId=${f.projectId}`, f.individual.headers);
+      await wire('/expert-assignments/my-tasks', f.individual.headers, {});
+      await wire('/projects/workbench/board/subtasks', reviewer, { projectId: f.projectId });
+      await wire(
+        '/projects/workbench/board/subtasks',
+        f.individual.headers,
+        { projectId: f.projectId },
+        403,
+      );
+      expect(await state()).toEqual(after);
+    });
+  });
+}
+
+// 13第四十四批：招募下发与协作负责人交接的真实HTTP来源和受众。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  for (const operation of ['submit', 'handler'] as const) {
+    test(`workbench recruitment lifecycle HTTP: ${transport} ${operation} preserves exact audiences, independent sources and read purity`, async () => {
+      const f = await recruitmentIndependentFixture();
+      await withWorkbenchWire(async (wire, request) => {
+        let manager = f.manager.headers;
+        if (transport === 'Cookie') {
+          await db.verificationChallenge.updateMany({
+            where: { phoneE164: f.manager.user.phoneE164 },
+            data: { createdAt: new Date(Date.now() - 61_000) },
+          });
+          const phoneValue = f.manager.user.phoneE164.slice(3);
+          await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+          manager = workbenchCookie(
+            await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+          );
+          await wire('/auth/switch-role', manager, { role: 'PM' });
+        }
+        const path =
+          operation === 'submit'
+            ? '/projects/expert-recruitments/submit'
+            : '/projects/expert-recruitment-handler/change';
+        const body =
+          operation === 'submit'
+            ? { projectId: f.projectId, assignments: [f.item] }
+            : { projectId: f.projectId, handlerUserId: f.manager.user.id };
+        const before = await f.state();
+        await wire(path, f.individual.headers, body, 403);
+        await wire(path, { ...manager, origin: 'https://untrusted.example' }, body, 403);
+        await wire(path, desktop, body, 401);
+        expect(await f.state()).toEqual(before);
+        await wire(path, manager, body);
+        const after = await f.state();
+        const events = after.events.filter((e) => !before.events.some((old) => old.id === e.id));
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          projectId: f.projectId,
+          eventType:
+            operation === 'submit' ? 'EXPERT_ASSIGNMENTS_CREATED' : 'PROJECT_TASKS_RECONCILED',
+          operation:
+            operation === 'submit'
+              ? 'project.expert-recruitments.submit'
+              : 'project.expert-recruitment-handler.change',
+          actorUserId: f.manager.user.id,
+          status: 'PENDING',
+        });
+        const key = (c: (typeof after.cards)[number]) => `${c.userId}:${c.perspective}`;
+        const signature = (c: (typeof after.cards)[number] | undefined) =>
+          c && JSON.stringify([c.branchNodeCode, c.sourceBizType, c.sourceBizId, c.sourceEventAt]);
+        const expected = new Set<string>();
+        for (const card of [...before.cards, ...after.cards]) {
+          if (
+            signature(before.cards.find((c) => key(c) === key(card))) ===
+            signature(after.cards.find((c) => key(c) === key(card)))
+          )
+            continue;
+          const role =
+            card.perspective === 'NAVIGATOR'
+              ? 'NAVIGATOR'
+              : card.perspective.startsWith('EXPERT_') &&
+                  card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+                ? 'EXPERT'
+                : 'PM';
+          expected.add(`${card.userId}:${role}`);
+        }
+        const payload = events[0]!.payload as {
+          cardChangedRecipients: { userId: string; role: string }[];
+        };
+        const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+        expect(recipients.sort()).toEqual([...expected].sort());
+        expect(new Set(recipients).size).toBe(recipients.length);
+        expect(recipients).toContain(`${f.expert.user.id}:EXPERT`);
+        expect(after.cards).toContainEqual(
+          expect.objectContaining({
+            userId: f.expert.user.id,
+            perspective: 'EXPERT_INDIVIDUAL',
+            branchNodeCode: 'STANDARD_TRAINING',
+            sourceBizType: 'PROJECT_MEMBER',
+            sourceBizId: f.member.id,
+          }),
+        );
+        expect(
+          after.rounds.filter(
+            (r) =>
+              r.userId === f.expert.user.id &&
+              r.taskType === 'STANDARD_TRAINING' &&
+              r.status === 'OPEN',
+          ),
+        ).toHaveLength(1);
+        expect(after.rounds.find((r) => r.id === f.stale.id)).toMatchObject({
+          status: 'CANCELLED',
+          participated: false,
+          finishedAt: expect.any(Date),
+        });
+        for (const historical of [f.history, f.unrelated])
+          expect(after.rounds.find((r) => r.id === historical.id)).toEqual(historical);
+        if (operation === 'submit') {
+          const created = after.assignments.filter(
+            (a) => !before.assignments.some((old) => old.id === a.id),
+          );
+          expect(created).toHaveLength(1);
+          expect(created[0]).toMatchObject({
+            subjectType: 'INDIVIDUAL',
+            expertUserId: f.individual.user.id,
+            status: 'PENDING_ACCEPTANCE',
+          });
+          expect(events[0]!.payload).toMatchObject({ assignmentIds: [created[0]!.id] });
+          await wire(path, manager, body, 409);
+          expect(await f.state()).toEqual(after);
+        } else {
+          expect(after.recruitments.find((r) => r.status === 'ASSIGNED')).toMatchObject({
+            expertRecruitmentHandlerUserId: f.manager.user.id,
+          });
+          expect(after.assignments).toEqual(before.assignments);
+          // 主策略官接回后，旧协作负责人即时失去本域读权限。
+          await wire(
+            `/projects/expert-recruitments/detail?projectId=${f.projectId}`,
+            f.handler.headers,
+            undefined,
+            403,
+          );
+        }
+        const beforeRead = await f.state();
+        await wire(`/projects/expert-recruitments/detail?projectId=${f.projectId}`, manager);
+        await wire('/projects/workbench/board/subtasks', manager, { projectId: f.projectId });
+        await wire('/expert-assignments/my-tasks', f.expert.headers, {});
+        await wire(
+          '/projects/workbench/board/subtasks',
+          f.expert.headers,
+          { projectId: f.projectId },
+          403,
+        );
+        expect(await f.state()).toEqual(beforeRead);
+      });
+    });
+  }
+}
+
+// 13第四十六批：普通入项和当天汰换的真实HTTP来源与完整卡片变更受众。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  for (const operation of ['entry', 'removal'] as const) {
+    test(`workbench personnel lifecycle HTTP: ${transport} ${operation} preserves exact audiences, independent rounds and pure reads`, async () => {
+      const entry = operation === 'entry' ? await personnelEntryIndependentFixture('save') : null;
+      const removal =
+        operation === 'removal' ? await cancellationMovementIndependentFixture('removal') : null;
+      const f = entry ?? removal!;
+      const source = entry ?? removal!.movement!;
+      const state = async () => ({
+        ...(await workbenchWireState()),
+        ...(await candidateCardState(f.projectId)),
+        members: await db.projectMember.findMany({ orderBy: { id: 'asc' } }),
+        assignments: await db.projectExpertAssignment.findMany({ orderBy: { id: 'asc' } }),
+        movements: await db.projectMemberMovement.findMany({ orderBy: { id: 'asc' } }),
+        flows: await db.approvalFlow.findMany({ orderBy: { id: 'asc' } }),
+        nodes: await db.approvalNode.findMany({ orderBy: { id: 'asc' } }),
+        actions: await db.approvalActionLog.findMany({ orderBy: { id: 'asc' } }),
+      });
+      await withWorkbenchWire(async (wire, request) => {
+        let actor: Record<string, string> = source.manager.headers;
+        if (transport === 'Cookie') {
+          const user = source.manager.user;
+          await db.verificationChallenge.updateMany({
+            where: { phoneE164: user.phoneE164 },
+            data: { createdAt: new Date(Date.now() - 61_000) },
+          });
+          const phoneValue = user.phoneE164.slice(3);
+          await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+          actor = workbenchCookie(
+            await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+          );
+          await wire('/auth/switch-role', actor, { role: 'PM' });
+        }
+        const path = `/project-personnel/${
+          operation === 'entry' ? 'roster/entry/save' : 'movements/create'
+        }`;
+        const body = {
+          projectId: f.projectId,
+          memberIds: [source.orgMember.id],
+          ...(operation === 'entry'
+            ? { entryDecision: 'YES', plannedEntryDate: shanghaiDay(new Date()) }
+            : {
+                movementType: 'REMOVAL',
+                targetProjectId: null,
+                reason: 'HTTP当天汰换',
+                plannedEffectiveDate: shanghaiDay(new Date()),
+              }),
+        };
+        const before = await state();
+        await wire(path, f.expert.headers, body, 403);
+        await wire(path, { ...actor, origin: 'https://untrusted.example' }, body, 403);
+        await wire(path, desktop, body, 401);
+        expect(await state()).toEqual(before);
+        await wire(path, actor, body);
+        const after = await state();
+        expect(after.members.find((m) => m.id === source.orgMember.id)).toMatchObject({
+          status: operation === 'entry' ? 'ACTIVE' : 'REMOVED',
+          ...(operation === 'entry' ? { entryDecision: 'YES', joinedAt: expect.any(Date) } : {}),
+        });
+        const events = after.events.filter((e) => !before.events.some((old) => old.id === e.id));
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          projectId: f.projectId,
+          actorUserId: source.manager.user.id,
+          eventType:
+            operation === 'entry'
+              ? 'PROJECT_MEMBER_ENTRY_CHANGED'
+              : 'PROJECT_MEMBER_MOVEMENTS_INITIATED',
+          operation: operation === 'entry' ? 'SAVE_ENTRY' : 'CREATE_MOVEMENT',
+          status: 'PENDING',
+        });
+        const key = (c: (typeof after.cards)[number]) => `${c.userId}:${c.perspective}`;
+        const signature = (c: (typeof after.cards)[number] | undefined) =>
+          c && JSON.stringify([c.branchNodeCode, c.sourceBizType, c.sourceBizId, c.sourceEventAt]);
+        const expected = new Set<string>();
+        for (const card of [...before.cards, ...after.cards]) {
+          if (
+            signature(before.cards.find((c) => key(c) === key(card))) ===
+            signature(after.cards.find((c) => key(c) === key(card)))
+          )
+            continue;
+          const role =
+            card.perspective === 'NAVIGATOR'
+              ? 'NAVIGATOR'
+              : card.perspective.startsWith('EXPERT_') &&
+                  card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+                ? 'EXPERT'
+                : 'PM';
+          expected.add(`${card.userId}:${role}`);
+        }
+        const payload = events[0]!.payload as {
+          cardChangedRecipients: { userId: string; role: string }[];
+        };
+        const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+        expect(recipients.sort()).toEqual([...expected].sort());
+        expect(new Set(recipients).size).toBe(recipients.length);
+        expect(recipients).toContain(`${f.expert.user.id}:EXPERT`);
+        expect(after.cards).toContainEqual(
+          expect.objectContaining({
+            userId: f.expert.user.id,
+            perspective: 'EXPERT_INDIVIDUAL',
+            branchNodeCode: 'STANDARD_TRAINING',
+            sourceBizType: 'PROJECT_MEMBER',
+            sourceBizId: f.member.id,
+          }),
+        );
+        expect(
+          after.rounds.filter(
+            (r) =>
+              r.userId === f.expert.user.id &&
+              r.taskType === 'STANDARD_TRAINING' &&
+              r.status === 'OPEN',
+          ),
+        ).toHaveLength(1);
+        expect(after.rounds.find((r) => r.id === f.stale.id)).toMatchObject({
+          status: 'CANCELLED',
+          participated: false,
+          finishedAt: expect.any(Date),
+        });
+        for (const historical of [f.history, f.unrelated])
+          expect(after.rounds.find((r) => r.id === historical.id)).toEqual(historical);
+        expect(after.answers).toEqual(before.answers);
+        expect(after.assignments).toEqual(before.assignments);
+        if (operation === 'removal') {
+          expect(
+            after.rounds.filter(
+              (r) =>
+                r.userId === source.orgMember.userId &&
+                ['ENTRANCE_EXAM', 'STANDARD_TRAINING'].includes(r.taskType) &&
+                r.status === 'OPEN',
+            ),
+          ).toEqual([]);
+          const created = after.movements.filter(
+            (m) => !before.movements.some((old) => old.id === m.id),
+          );
+          expect(created).toHaveLength(1);
+          expect(created[0]).toMatchObject({
+            memberId: source.orgMember.id,
+            sourceProjectId: f.projectId,
+            targetProjectId: null,
+            movementType: 'REMOVAL',
+            status: 'EFFECTIVE',
+          });
+          expect(events[0]!.payload).toMatchObject({
+            movementIds: [created[0]!.id],
+            memberIds: [source.orgMember.id],
+          });
+        }
+        await wire(path, actor, body, 409);
+        expect(await state()).toEqual(after);
+        await wire('/project-personnel/roster/list', actor, { projectId: f.projectId });
+        await wire('/project-personnel/movements/list', actor, { projectId: f.projectId });
+        await wire('/projects/workbench/board/subtasks', actor, { projectId: f.projectId });
+        await wire('/expert-assignments/my-tasks', f.expert.headers, {});
+        await wire(
+          '/projects/workbench/board/subtasks',
+          f.expert.headers,
+          { projectId: f.projectId },
+          403,
+        );
+        expect(await state()).toEqual(after);
+      });
+    });
+  }
+}
+
+// 13第四十七批：人工审批各节点及后段撤回，仅运行新增专项。
+function expectWorkbenchMovementAudience(
+  before: Awaited<ReturnType<typeof workbenchWireState>>,
+  after: Awaited<ReturnType<typeof workbenchWireState>>,
+  event: (typeof after.events)[number],
+) {
+  const oldCards = before.cards.filter((c) => c.projectId === event.projectId);
+  const newCards = after.cards.filter((c) => c.projectId === event.projectId);
+  const key = (c: (typeof newCards)[number]) => `${c.userId}:${c.perspective}`;
+  const signature = (c: (typeof newCards)[number] | undefined) =>
+    c && JSON.stringify([c.branchNodeCode, c.sourceBizType, c.sourceBizId, c.sourceEventAt]);
+  const expected = new Set<string>();
+  for (const card of [...oldCards, ...newCards]) {
+    if (
+      signature(oldCards.find((c) => key(c) === key(card))) ===
+      signature(newCards.find((c) => key(c) === key(card)))
+    )
+      continue;
+    const role =
+      card.perspective === 'NAVIGATOR'
+        ? 'NAVIGATOR'
+        : card.perspective.startsWith('EXPERT_') &&
+            card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+          ? 'EXPERT'
+          : 'PM';
+    expected.add(`${card.userId}:${role}`);
+  }
+  const payload = event.payload as {
+    cardChangedRecipients: { userId: string; role: string }[];
+  };
+  const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+  expect(recipients.sort()).toEqual([...expected].sort());
+  expect(new Set(recipients).size).toBe(recipients.length);
+}
+
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  for (const stage of ['SOURCE_ORG_OWNER', 'TARGET_MANAGER', 'TARGET_ORG_OWNER'] as const) {
+    for (const action of ['APPROVE', 'REJECT', 'WITHDRAW'] as const) {
+      test(`workbench movement approval HTTP: ${transport} ${stage} ${action} preserves exact sources, audiences and audit history`, async () => {
+        const f =
+          stage === 'SOURCE_ORG_OWNER'
+            ? await movementCardLifecycleFixture()
+            : await movementLifecycleFixture();
+        if (stage === 'TARGET_ORG_OWNER') {
+          await withWorkbenchWire(async (wire) => {
+            const m = await f.load();
+            const flow = m.flow!;
+            const node = flow.nodes.find(
+              (n) => n.nodeSeq === flow.currentNode && n.nodeStatus === 'PENDING',
+            )!;
+            await wire('/project-personnel/movements/process', f.manager.headers, {
+              projectId: f.projectId,
+              movementId: m.id,
+              flowNo: flow.flowNo,
+              flowVersionNo: flow.versionNo,
+              nodeId: node.id,
+              nodeVersionNo: node.versionNo,
+              action: 'APPROVE',
+            });
+          });
+          // 最终合法审批触发当天生效，不能直接改写终态代替命令。
+          await db.projectMemberMovement.update({
+            where: { id: (await f.load()).id },
+            data: { plannedEffectiveDate: new Date(shanghaiDay(new Date())) },
+          });
+        }
+        const movement = await f.load();
+        expect(movement.flow!.currentNodeCode).toBe(stage);
+        const account = action === 'WITHDRAW' || stage === 'TARGET_MANAGER' ? f.manager : f.owner;
+        const role = action === 'WITHDRAW' || stage === 'TARGET_MANAGER' ? 'PM' : 'EXPERT';
+        const state = async () => ({
+          ...(await workbenchWireState()),
+          movements: await db.projectMemberMovement.findMany({ orderBy: { id: 'asc' } }),
+          flows: await db.approvalFlow.findMany({ orderBy: { id: 'asc' } }),
+          nodes: await db.approvalNode.findMany({ orderBy: { id: 'asc' } }),
+          actions: await db.approvalActionLog.findMany({ orderBy: { id: 'asc' } }),
+          attempts: await db.entranceExamAttempt.findMany({ orderBy: { id: 'asc' } }),
+          answers: await db.entranceExamAnswer.findMany({ orderBy: { id: 'asc' } }),
+          responses: await db.projectExpertAssignmentMember.findMany({ orderBy: { id: 'asc' } }),
+        });
+        await withWorkbenchWire(async (wire, request) => {
+          let actor: Record<string, string> = account.headers;
+          if (transport === 'Cookie') {
+            await db.verificationChallenge.updateMany({
+              where: { phoneE164: account.user.phoneE164 },
+              data: { createdAt: new Date(Date.now() - 61_000) },
+            });
+            const phoneValue = account.user.phoneE164.slice(3);
+            await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+            actor = workbenchCookie(
+              await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+            );
+            await wire('/auth/switch-role', actor, { role });
+          }
+          const flow = movement.flow!;
+          const node = flow.nodes.find(
+            (n) => n.nodeSeq === flow.currentNode && n.nodeStatus === 'PENDING',
+          )!;
+          const withdrawal = action === 'WITHDRAW';
+          const path = `/project-personnel/movements/${withdrawal ? 'withdraw' : 'process'}`;
+          const body = {
+            projectId: f.projectId,
+            movementId: movement.id,
+            ...(withdrawal
+              ? {}
+              : {
+                  flowNo: flow.flowNo,
+                  flowVersionNo: flow.versionNo,
+                  nodeId: node.id,
+                  nodeVersionNo: node.versionNo,
+                  action,
+                  ...(action === 'REJECT' ? { actionComment: 'HTTP审批驳回' } : {}),
+                }),
+          };
+          const before = await state();
+          await wire(path, f.individual.headers, body, 403);
+          await wire(path, { ...actor, origin: 'https://untrusted.example' }, body, 403);
+          await wire(path, desktop, body, 401);
+          if (!withdrawal) {
+            await wire(path, actor, { ...body, flowVersionNo: flow.versionNo + 1 }, 409);
+            await wire(path, actor, { ...body, nodeVersionNo: node.versionNo + 1 }, 409);
+          }
+          expect(await state()).toEqual(before);
+          await wire(path, actor, body);
+          const after = await state();
+          const events = after.events.filter((e) => !before.events.some((old) => old.id === e.id));
+          expect(events).toHaveLength(2);
+          expect(events.map((e) => e.projectId).sort((a, b) => a - b)).toEqual(
+            [f.projectId, f.targetProject.id].sort((a, b) => a - b),
+          );
+          for (const event of events) {
+            expect(event).toMatchObject({
+              eventType: 'PROJECT_MEMBER_MOVEMENTS_CHANGED',
+              operation: withdrawal ? 'WITHDRAW_MOVEMENT' : 'PROCESS_MOVEMENT',
+              actorUserId: account.user.id,
+              status: 'PENDING',
+            });
+            expect(event.payload).toMatchObject({
+              movementIds: [movement.id],
+              sourceProjectId: f.projectId,
+              targetProjectId: f.targetProject.id,
+              affectedUserIds: [f.individual.user.id],
+              deliveryStatus: 'NOT_DELIVERED',
+            });
+            expectWorkbenchMovementAudience(before, after, event);
+          }
+          const current = await f.load();
+          expect(current.status).toBe(
+            withdrawal
+              ? 'WITHDRAWN'
+              : action === 'REJECT'
+                ? 'REJECTED'
+                : stage === 'TARGET_ORG_OWNER'
+                  ? 'EFFECTIVE'
+                  : 'PROCESSING',
+          );
+          const logs = after.actions.filter((a) => !before.actions.some((old) => old.id === a.id));
+          expect(logs).toHaveLength(1);
+          expect(logs[0]).toMatchObject({
+            flowId: flow.id,
+            operatorId: account.user.id,
+            actionType: withdrawal ? 'WITHDRAW' : action,
+          });
+          for (const old of before.actions)
+            expect(after.actions.find((a) => a.id === old.id)).toEqual(old);
+          for (const old of before.nodes.filter(
+            (n) => n.flowId === flow.id && n.nodeSeq < node.nodeSeq,
+          ))
+            expect(after.nodes.find((n) => n.id === old.id)).toEqual(old);
+          for (const old of before.rounds.filter((r) => r.status !== 'OPEN'))
+            expect(after.rounds.find((r) => r.id === old.id)).toEqual(old);
+          expect(after.attempts).toEqual(before.attempts);
+          expect(after.answers).toEqual(before.answers);
+          expect(after.responses).toEqual(before.responses);
+          if (action === 'APPROVE' && stage === 'TARGET_ORG_OWNER') {
+            for (const project of before.projects) {
+              const updated = after.projects.find((p) => p.id === project.id)!;
+              if (project.id === f.targetProject.id)
+                expect(updated).toMatchObject({
+                  versionNo: project.versionNo,
+                  currentNodeCode: 'PRODUCTION_TASK',
+                });
+              else expect(updated).toEqual(project);
+            }
+            expect(
+              after.members.filter((m) => m.admissionAttemptId === movement.targetExamAttemptId),
+            ).toEqual([
+              expect.objectContaining({
+                projectId: f.targetProject.id,
+                userId: f.individual.user.id,
+                organizationId: f.organization.id,
+                userOrgRelId: f.orgMember.userOrgRelId,
+                status: 'ACTIVE',
+              }),
+            ]);
+            expect(after.members.find((m) => m.id === f.orgMember.id)).toMatchObject({
+              status: 'LEFT',
+            });
+          } else if (action !== 'APPROVE') {
+            expect(after.projects).toEqual(before.projects);
+            expect(after.members.find((m) => m.id === f.orgMember.id)).toMatchObject({
+              status: 'ACTIVE',
+            });
+            expect(
+              after.members.filter(
+                (m) => m.projectId === f.targetProject.id && m.userId === f.individual.user.id,
+              ),
+            ).toEqual([]);
+          } else {
+            expect(after.projects).toEqual(before.projects);
+            expect(current.flow!.currentNodeCode).toBe(
+              stage === 'SOURCE_ORG_OWNER' ? 'MEMBER_CONFIRM' : 'TARGET_ORG_OWNER',
+            );
+            const projectId = stage === 'SOURCE_ORG_OWNER' ? f.projectId : f.targetProject.id;
+            const ownerCard = after.cards.find(
+              (c) =>
+                c.projectId === projectId &&
+                c.userId === f.owner.user.id &&
+                c.perspective === 'EXPERT_PROJECT_OWNER',
+            );
+            expect(ownerCard).toMatchObject({
+              branchNodeCode:
+                stage === 'SOURCE_ORG_OWNER' ? 'MEMBER_ENTRY_CONFIRM' : 'MEMBER_MOVEMENT_APPROVAL',
+              sourceBizType:
+                stage === 'SOURCE_ORG_OWNER' ? 'PROJECT_MEMBER' : 'PROJECT_MEMBER_MOVEMENT',
+              sourceBizId:
+                stage === 'SOURCE_ORG_OWNER'
+                  ? f.members.find((m) => m.userId === f.owner.user.id)!.id
+                  : movement.id,
+            });
+          }
+          await wire(path, actor, body, 409);
+          for (const projectId of [f.projectId, f.targetProject.id]) {
+            await wire('/projects/workbench/board/subtasks', f.manager.headers, { projectId });
+            await wire('/project-personnel/movements/list', f.manager.headers, { projectId });
+          }
+          await wire('/expert-assignments/my-tasks', f.owner.headers, {});
+          expect(await state()).toEqual(after);
+        });
+      });
+    }
+  }
+}
+
+// 13第四十八批：生产计划补录的HTTP入口及静默语义。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  for (const needWrittenExam of [false, true]) {
+    test(`workbench plan lifecycle HTTP: ${transport} needWrittenExam=${needWrittenExam} reconciles independent rounds silently`, async () => {
+      const f = await productionPlanIndependentFixture(needWrittenExam);
+      await withWorkbenchWire(async (wire, request) => {
+        let actor: Record<string, string> = f.manager.headers;
+        if (transport === 'Cookie') {
+          await db.verificationChallenge.updateMany({
+            where: { phoneE164: f.manager.user.phoneE164 },
+            data: { createdAt: new Date(Date.now() - 61_000) },
+          });
+          const phoneValue = f.manager.user.phoneE164.slice(3);
+          await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+          actor = workbenchCookie(
+            await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+          );
+          await wire('/auth/switch-role', actor, { role: 'PM' });
+        }
+        const path = `/projects/production-plan/confirm?projectId=${f.projectId}`;
+        const body = { ...productionPlanExample, needWrittenExam };
+        const before = await f.state();
+        await wire(path, f.individual.headers, body, 403);
+        await wire(path, { ...actor, origin: 'https://untrusted.example' }, body, 403);
+        await wire(path, desktop, body, 401);
+        expect(await f.state()).toEqual(before);
+        await wire(path, actor, body);
+        const after = await f.state();
+        expect(after.events).toEqual(before.events);
+        expect(after.rounds.find((r) => r.id === f.history.id)).toEqual(f.history);
+        expect(after.rounds.find((r) => r.id === f.stale.id)).toMatchObject({
+          status: 'CANCELLED',
+          participated: false,
+        });
+        expect(
+          after.rounds.filter(
+            (r) =>
+              r.userId === f.individual.user.id &&
+              r.taskType === 'STANDARD_TRAINING' &&
+              r.status === 'OPEN',
+          ),
+        ).toHaveLength(needWrittenExam ? 0 : 1);
+        const trainingCards = after.cards.filter(
+          (c) =>
+            c.userId === f.individual.user.id &&
+            c.perspective === 'EXPERT_MEMBER' &&
+            c.branchNodeCode === 'STANDARD_TRAINING',
+        );
+        expect(trainingCards).toHaveLength(needWrittenExam ? 0 : 1);
+        if (!needWrittenExam)
+          expect(trainingCards[0]).toMatchObject({
+            sourceBizType: 'PROJECT_MEMBER',
+            sourceBizId: f.orgMember.id,
+          });
+        await wire(path, actor, body, 400);
+        await wire(`/projects/production-plan?projectId=${f.projectId}`, actor);
+        await wire('/projects/workbench/board/subtasks', actor, { projectId: f.projectId });
+        await wire('/expert-assignments/my-tasks', f.individual.headers, {});
+        expect(await f.state()).toEqual(after);
+      });
+    });
+  }
+}
+
+// 13第四十五批：生产写入口的真实HTTP来源、轮次与完整卡片变更受众。
+for (const transport of ['Bearer', 'Cookie'] as const) {
+  for (const operation of productionIndependentOperations) {
+    test(`workbench production lifecycle HTTP: ${transport} ${operation} preserves exact audiences, independent sources and read purity`, async () => {
+      const f = await productionIndependentFixture(operation);
+      await withWorkbenchWire(async (wire, request) => {
+        let actor =
+          operation === 'save' || operation === 'correct'
+            ? f.individual.headers
+            : operation === 'reject' || operation === 'accept'
+              ? f.headers
+              : f.manager.headers;
+        if (transport === 'Cookie') {
+          const user = await db.user.findUniqueOrThrow({ where: { id: f.principal.userId } });
+          await db.verificationChallenge.updateMany({
+            where: { phoneE164: user.phoneE164 },
+            data: { createdAt: new Date(Date.now() - 61_000) },
+          });
+          const phoneValue = user.phoneE164.slice(3);
+          await wire('/auth/sms/send', web, { phone: phoneValue, scene: 'login' });
+          actor = workbenchCookie(
+            await request('/auth/sms/login', web, { phone: phoneValue, code: '095270' }),
+          );
+          await wire('/auth/switch-role', actor, { role: f.principal.role });
+        }
+        const path = `/production-tasks/${
+          operation === 'create'
+            ? 'create'
+            : ['save', 'correct'].includes(operation)
+              ? `report/${operation}`
+              : ['verify', 'return'].includes(operation)
+                ? 'report/review'
+                : operation === 'submit'
+                  ? 'acceptance/submit'
+                  : 'acceptance/review'
+        }`;
+        const body = {
+          projectId: f.projectId,
+          ...(operation === 'create'
+            ? {
+                subtaskName: 'HTTP独立轮次子任务',
+                distributionMode: 'POOL',
+                expectedDeliveryDate: '2099-12-31',
+                expectedQuantity: 10,
+              }
+            : operation === 'save'
+              ? {
+                  reports: [
+                    {
+                      memberId: f.personalMember.id,
+                      subtaskId: f.pool.id,
+                      reportDate: f.day,
+                      quantity: 10,
+                    },
+                  ],
+                }
+              : operation === 'correct'
+                ? { reportId: f.report!.id, quantity: 10 }
+                : {
+                    subtaskId: f.pool.id,
+                    ...(['verify', 'return'].includes(operation)
+                      ? {
+                          action: operation === 'verify' ? 'VERIFY' : 'RETURN',
+                          reportIds: [f.report!.id],
+                          ...(operation === 'return' ? { reason: 'HTTP修正数据' } : {}),
+                        }
+                      : operation === 'submit'
+                        ? { actualQuantity: 10, actualDeliveryDate: '2099-12-31' }
+                        : {
+                            decision: operation === 'accept' ? 'ACCEPT' : 'REJECT',
+                            ...(operation === 'reject' ? { rejectReason: 'HTTP返工' } : {}),
+                          }),
+                  }),
+        };
+        const before = await f.state();
+        await wire(path, f.expert.headers, body, 403);
+        await wire(path, { ...actor, origin: 'https://untrusted.example' }, body, 403);
+        await wire(path, desktop, body, 401);
+        expect(await f.state()).toEqual(before);
+        await wire(path, actor, body);
+        const after = await f.state();
+        const events = after.events.filter((e) => !before.events.some((old) => old.id === e.id));
+        if (operation === 'verify') expect(events).toEqual([]);
+        else {
+          expect(events).toHaveLength(1);
+          expect(events[0]).toMatchObject({
+            projectId: f.projectId,
+            eventType: ['save', 'return', 'correct'].includes(operation)
+              ? 'OUTPUT_REPORT_STATE_CHANGED'
+              : 'PROJECT_SUBTASK_CHANGED',
+            actorUserId: f.principal.userId,
+            status: 'PENDING',
+          });
+          const key = (c: (typeof after.cards)[number]) => `${c.userId}:${c.perspective}`;
+          const signature = (c: (typeof after.cards)[number] | undefined) =>
+            c &&
+            JSON.stringify([c.branchNodeCode, c.sourceBizType, c.sourceBizId, c.sourceEventAt]);
+          const expected = new Set<string>();
+          for (const card of [...before.cards, ...after.cards]) {
+            if (
+              signature(before.cards.find((c) => key(c) === key(card))) ===
+              signature(after.cards.find((c) => key(c) === key(card)))
+            )
+              continue;
+            const role =
+              card.perspective === 'NAVIGATOR'
+                ? 'NAVIGATOR'
+                : card.perspective.startsWith('EXPERT_') &&
+                    card.perspective !== 'EXPERT_RECRUITMENT_HANDLER'
+                  ? 'EXPERT'
+                  : 'PM';
+            expected.add(`${card.userId}:${role}`);
+          }
+          const payload = events[0]!.payload as {
+            cardChangedRecipients: { userId: string; role: string }[];
+          };
+          const recipients = payload.cardChangedRecipients.map((r) => `${r.userId}:${r.role}`);
+          expect(recipients.sort()).toEqual([...expected].sort());
+          expect(new Set(recipients).size).toBe(recipients.length);
+          expect(recipients).toContain(`${f.expert.user.id}:EXPERT`);
+        }
+        expect(after.cards).toContainEqual(
+          expect.objectContaining({
+            userId: f.expert.user.id,
+            perspective: 'EXPERT_INDIVIDUAL',
+            branchNodeCode: 'STANDARD_TRAINING',
+            sourceBizType: 'PROJECT_MEMBER',
+            sourceBizId: f.member.id,
+          }),
+        );
+        expect(
+          after.rounds.filter(
+            (r) =>
+              r.userId === f.expert.user.id &&
+              r.taskType === 'STANDARD_TRAINING' &&
+              r.status === 'OPEN',
+          ),
+        ).toHaveLength(1);
+        expect(after.rounds.find((r) => r.id === f.stale.id)).toMatchObject({
+          status: 'CANCELLED',
+          participated: false,
+          finishedAt: expect.any(Date),
+        });
+        for (const historical of [f.history, f.unrelated])
+          expect(after.rounds.find((r) => r.id === historical.id)).toEqual(historical);
+        expect(after.answers).toEqual(before.answers);
+        await wire(path, actor, body, 409);
+        expect(await f.state()).toEqual(after);
+        await wire('/production-tasks/list', f.manager.headers, { projectId: f.projectId });
+        await wire('/production-tasks/reports', f.manager.headers, {
+          projectId: f.projectId,
+          subtaskId: f.pool.id,
+        });
+        await wire('/projects/workbench/board/subtasks', f.manager.headers, {
+          projectId: f.projectId,
+        });
+        await wire('/expert-assignments/my-tasks', f.expert.headers, {});
+        await wire(
+          '/projects/workbench/board/subtasks',
+          f.expert.headers,
+          { projectId: f.projectId },
+          403,
+        );
+        expect(await f.state()).toEqual(after);
+      });
+    });
+  }
+}

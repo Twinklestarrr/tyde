@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import {
@@ -317,3 +319,42 @@ test('manual HTTP contract validates nested examples, exposes Chinese field desc
     await app.close();
   }
 });
+
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(),
+}));
+
+test('manual completion preserves card changes for other-domain recipients in the queue event', async () => {
+  const { service, tx } = setup();
+  const cardChanges = { cardChangedRecipients: [{ userId: 'entry-manager', role: 'PM' as const }] };
+  vi.mocked(refreshManagementCardSnapshots).mockResolvedValueOnce(cardChanges);
+  await service.manual(manualGradingExample as never, principal);
+  expect(refreshOwnerProgress).toHaveBeenLastCalledWith(tx, 3001, null, expect.any(Date));
+  expect(vi.mocked(refreshOwnerProgress).mock.invocationCallOrder.at(-1)).toBeLessThan(
+    vi.mocked(refreshManagementCardSnapshots).mock.invocationCallOrder.at(-1)!,
+  );
+  expect(tx.projectEventOutbox.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      eventType: 'EXAM_REVIEW_QUEUE_CHANGED',
+      payload: expect.objectContaining(cardChanges),
+    }),
+  });
+});
+
+test('independent progress failure after grading prevents card arbitration and final queue event', async () => {
+  const { service, tx } = setup();
+  vi.mocked(refreshOwnerProgress).mockRejectedValueOnce(new Error('independent progress fault'));
+  vi.mocked(refreshManagementCardSnapshots).mockClear();
+  await expect(service.manual(manualGradingExample as never, principal)).rejects.toThrow(
+    'independent progress fault',
+  );
+  expect(tx.entranceExamGradingItem.update).toHaveBeenCalled();
+  expect(refreshManagementCardSnapshots).not.toHaveBeenCalled();
+  expect(tx.projectEventOutbox.create).not.toHaveBeenCalledWith({
+    data: expect.objectContaining({ eventType: 'EXAM_REVIEW_QUEUE_CHANGED' }),
+  });
+});
+
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(),
+}));

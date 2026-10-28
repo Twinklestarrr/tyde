@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
 import { refreshMovementApprovers } from '../personnel/personnel-movement-approvers.js';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
@@ -142,7 +144,7 @@ export class ProjectManagerService {
             throw new AuthError(409, 'DUPLICATE', '项目流程节点已发生变化，请刷新后重试');
           updatedProject = { ...project, currentNodeCode: 'PRODUCTION_PLAN' };
         }
-        await refreshMovementApprovers(tx, project.id, now);
+        await refreshMovementApprovers(tx, project.id, now, false);
         const after = await collectManagementTasks(tx, updatedProject);
         await reconcileTaskRounds(
           tx,
@@ -155,6 +157,8 @@ export class ProjectManagerService {
           managementTaskTypes,
           now,
         );
+        await refreshOwnerProgress(tx, project.id, null, now);
+        const cards = await refreshManagementCardSnapshots(tx, project.id, now);
         const facts = taskEventFacts(before, after);
         await tx.projectEventOutbox.create({
           data: {
@@ -168,6 +172,7 @@ export class ProjectManagerService {
               operation: 'project.manager.recruit',
               actorUserId: principal.userId,
               ...facts,
+              ...cards,
             },
           },
         });

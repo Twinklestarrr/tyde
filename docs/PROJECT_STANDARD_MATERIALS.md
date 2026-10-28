@@ -25,7 +25,7 @@
 
 `POST /projects/standard-materials/confirm-read?projectId=3001`：沿旧接口使用查询参数，不使用JSON body。仅当前EXPERT且具备上述材料读取资格、存在ACTIVE且joinedAt非空的普通成员可操作；未实际入项400，项目负责人403。项目负责人判断沿有效负责人关系，无任何新负责人历史时才回退旧字段。
 
-锁项目后锁本人最新ACTIVE已实际入项成员；首次记录确认时间、完成本人的STANDARD_TRAINING轮次、将相应EXPERT_INDIVIDUAL/EXPERT_MEMBER快照刷新到PRODUCTION_TASK，同事务失败全部回滚。其他账号和管理主线轮次不变，不为生产任务创建待办轮次。重复确认保留首次时间、不重复建轮次，但继续修复陈旧个人履约快照；高优先级其他领域支线保留，跨领域竞争重算归04。最新成员已变化时不为历史成员生成当前快照，已结项不新建个人轮次或快照。
+锁项目后锁本人最新ACTIVE已实际入项成员；首次记录确认时间、完成本人的STANDARD_TRAINING轮次，同事务完整重算七种项目卡片视角；来源采集、仲裁或写入失败全部回滚。其他账号和管理主线轮次不变，不为生产任务创建待办轮次。重复确认保留首次时间、不重复建轮次，并继续重算真实候选；有效高优先级支线继续竞争，失效旧支线清除后恢复实际培训/生产或其他来源。个人履约须满足统一仲裁的实时成员准入资格及最新成员事实；已结项清除旧快照，不新建个人轮次。材料更新也在附件/主线轮次更新后统一仲裁，沿原规则保持静默。
 
 首次响应readConfirmationTransitioned=true，重复为false；stateTransitioned恒false，canConfirmRead=false，confirmedReadAt返回首次上海时间。项目versionNo及共享currentNodeCode不变，不发布实时事件，不调用业务Agent。
 
@@ -54,3 +54,13 @@ pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^m
 ```
 
 本任务056/057已由第三批接入，见[招募负责人](PROJECT_RECRUITMENT.md)；下一批从API-058—060继续；按需核对对应旧Controller/DTO/Service/Mapper与真实接单来源，保持当前会话角色权限。详细唯一接口状态及交接见[06任务记录](../../backend-migration/06-training-recruitment/todoTask.md)。
+
+2026-10-27任务13第十三批回补：确认与材料更新已接统一仲裁；原HTTP、鉴权、确认时间和轮次幂等、静默约定保持。新增数据库验收尚未执行主体，仅本机专用_test库定向`candidate and training card writes`；不重复上述06已通过批次。详细验证见[任务13](../../backend-migration/13-workbench/todoTask.md)。
+
+2026-10-27第十三批复验更新：用户15:45:16培训一项停在旧卡片夹具create，遗漏必填calculatedAt；已补固定时间，业务代码/约束未改。仅本机定向`candidate and training card writes: confirmation repairs`，培训/静默/终态材料清理主体尚待验证；交卷/取消另三项已过，不重复。
+
+2026-10-27第十三批验收通过：用户15:47:36仅复验培训一项通过（310跳过，共311项，总7.23秒，测试2.37秒），培训确认陈旧来源清理、真实生产来源/时间、重复轮次幂等及静默、终态材料更新撤卡已验证。结合15:45:16三项，本批四项集成已分批全部通过，不再复验。终态夹具不代表真实终态命令/事件验收；650单测及类型/静态/build保留前批证据，本轮仅同步结果与文档，保持13。
+
+2026-10-28任务13第二十六批：材料更新在原事务中同步全项目独立考试/培训轮次后统一仲裁；本人确认先完成原培训轮次，再同步本人独立轮次。真实来源补开、无来源或终态取消，保留历史、其他用户范围及原静默语义。35定向单测、类型/静态/后端build通过；新增4项集成仅初始化数据库不可达，待本机仅定向 `materials independent progress`。不重迁移29，不重复前二十五批；详见[任务13](../../backend-migration/13-workbench/todoTask.md)。
+
+2026-10-28第二十六批验收通过：用户10:43:55仅定向 `materials independent progress` 四项全部通过（350跳过，共354项，总8.34秒，测试3.98秒），原初始化连接阻塞解除。材料更新/本人确认的独立轮次修复、取消范围、历史/静默/幂等/纯读取及实际轮次和卡片写入后故障回滚已验证；不是全354项复跑，不再复验本批或前二十五批、不重迁移29。本轮仅同步结果和文档，保持13，继续其余写入口和跨域来源/受众；业务Agent保持mock。

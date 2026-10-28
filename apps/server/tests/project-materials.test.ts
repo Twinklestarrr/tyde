@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
 import type { PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import { createApp } from '../src/application.js';
@@ -13,6 +15,12 @@ import {
   materialsResponse,
   materialsExample,
 } from '../src/modules/projects/project-materials.schema.js';
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(async () => ({ cardChangedRecipients: [] })),
+}));
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => {}),
+}));
 const principal: AuthPrincipal = {
   userId: '00000000-0000-4000-8000-000000000001',
   uid: 'creator',
@@ -400,16 +408,8 @@ test('first confirmation completes only own training task and refreshes source s
       taskType: 'STANDARD_TRAINING',
     }),
   });
-  expect(f.tx.projectRoleNodeSnapshot.upsert).toHaveBeenCalledWith(
-    expect.objectContaining({
-      create: expect.objectContaining({
-        perspective: 'EXPERT_INDIVIDUAL',
-        branchNodeCode: 'PRODUCTION_TASK',
-        sourceBizType: 'PROJECT_MEMBER',
-        sourceBizId: 10,
-      }),
-    }),
-  );
+  expect(refreshManagementCardSnapshots).toHaveBeenCalledWith(f.tx, 3001, expect.any(Date));
+  expect(f.tx.projectRoleNodeSnapshot.upsert).not.toHaveBeenCalled();
 });
 test('repeat confirmation preserves time, repairs snapshot and completes stale open round without creating another', async () => {
   const f = confirmationSetup(new Date('2026-10-22T08:00:00Z'));
@@ -424,13 +424,9 @@ test('repeat confirmation preserves time, repairs snapshot and completes stale o
     where: { id: 7 },
     data: expect.objectContaining({ status: 'COMPLETED', participated: true }),
   });
-  expect(f.tx.projectRoleNodeSnapshot.upsert).toHaveBeenCalledWith(
-    expect.objectContaining({
-      update: expect.objectContaining({ sourceEventAt: new Date('2026-10-22T08:00:00Z') }),
-    }),
-  );
+  expect(refreshManagementCardSnapshots).toHaveBeenCalledWith(f.tx, 3001, expect.any(Date));
 });
-test('confirmation protects higher-priority branch and propagates version conflicts or snapshot failure', async () => {
+test('confirmation delegates stale and higher-priority branches to arbitration and propagates conflicts or source failure', async () => {
   const f = confirmationSetup();
   f.tx.projectRoleNodeSnapshot.findUnique.mockResolvedValue({
     branchNodeCode: 'OUTPUT_DATA_REVIEW',
@@ -440,6 +436,46 @@ test('confirmation protects higher-priority branch and propagates version confli
   f.tx.projectMember.updateMany.mockResolvedValue({ count: 0 });
   await expect(f.service.confirmRead(3001, f.expert)).rejects.toMatchObject({ status: 409 });
   const g = confirmationSetup();
-  g.tx.projectRoleNodeSnapshot.upsert.mockRejectedValue(new Error('snapshot failed'));
+  vi.mocked(refreshManagementCardSnapshots).mockRejectedValueOnce(new Error('snapshot failed'));
   await expect(g.service.confirmRead(3001, g.expert)).rejects.toThrow('snapshot failed');
+});
+
+test('materials update refreshes complete cards after main task reconciliation and propagates arbitration failure', async () => {
+  const f = setup();
+  await f.service.update({ projectId: 3001, standardContent: '更新' }, principal);
+  expect(refreshManagementCardSnapshots).toHaveBeenCalledWith(f.tx, 3001, expect.any(Date));
+  vi.mocked(refreshManagementCardSnapshots).mockRejectedValueOnce(new Error('source failed'));
+  await expect(
+    f.service.update({ projectId: 3001, standardContent: '更新' }, principal),
+  ).rejects.toThrow('source failed');
+});
+
+test('materials writes reconcile independent sources before cards and propagate progress failure', async () => {
+  const f = setup();
+  await f.service.update({ projectId: 3001, standardContent: '更新' }, principal);
+  expect(refreshOwnerProgress).toHaveBeenLastCalledWith(f.tx, 3001, null, expect.any(Date));
+  const progressOrder = vi.mocked(refreshOwnerProgress).mock.invocationCallOrder.at(-1)!;
+  expect(progressOrder).toBeLessThan(
+    vi.mocked(refreshManagementCardSnapshots).mock.invocationCallOrder.at(-1)!,
+  );
+  const g = confirmationSetup();
+  await g.service.confirmRead(3001, g.expert);
+  expect(refreshOwnerProgress).toHaveBeenLastCalledWith(
+    g.tx,
+    3001,
+    [principal.userId],
+    expect.any(Date),
+  );
+  expect(vi.mocked(refreshOwnerProgress).mock.invocationCallOrder.at(-1)!).toBeGreaterThan(
+    g.tx.projectTaskRound.create.mock.invocationCallOrder.at(-1)!,
+  );
+  for (const operation of [
+    () => f.service.update({ projectId: 3001, standardContent: '更新' }, principal),
+    () => confirmationSetup().service.confirmRead(3001, g.expert),
+  ]) {
+    vi.mocked(refreshManagementCardSnapshots).mockClear();
+    vi.mocked(refreshOwnerProgress).mockRejectedValueOnce(new Error('independent progress failed'));
+    await expect(operation()).rejects.toThrow('independent progress failed');
+    expect(refreshManagementCardSnapshots).not.toHaveBeenCalled();
+  }
 });

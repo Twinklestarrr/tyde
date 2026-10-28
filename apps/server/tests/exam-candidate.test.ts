@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
 import { ExamCandidateCommandService } from '../src/modules/entrance-exams/exam-candidate-command.service.js';
 import {
   candidateSubmitExample,
@@ -14,6 +16,12 @@ import { canReadManagedExamFile } from '../src/modules/entrance-exams/exam-file-
 import { createApp } from '../src/application.js';
 import { readConfig } from '../src/config/index.js';
 import { AuthService, type AuthPrincipal } from '../src/modules/auth/auth.service.js';
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => {}),
+}));
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(async () => ({ cardChangedRecipients: [] })),
+}));
 const p = {
   userId: '00000000-0000-4000-8000-000000000001',
   uid: 'candidate',
@@ -435,4 +443,30 @@ test('candidate answer files stay inside owned attempt or effective organization
     .mockResolvedValueOnce([])
     .mockResolvedValueOnce([removed] as never);
   expect(await canReadManagedExamFile(f.db, 1, p, 'own-answer')).toBe(false);
+});
+
+test('entry refreshes cards after binding and propagates snapshot failure in the same transaction', async () => {
+  const f = fixture();
+  vi.mocked(refreshManagementCardSnapshots).mockImplementationOnce(async (tx, projectId) => {
+    expect(tx).toBe(f.tx);
+    expect(projectId).toBe(1);
+    expect(f.tx.entranceExamAttempt.create).toHaveBeenCalledTimes(1);
+    throw new Error('entry snapshot fault');
+  });
+  await expect(f.service.enter(1, p)).rejects.toThrow('entry snapshot fault');
+});
+
+test('entry syncs only own independent progress after binding and rejects atomically before card writes on progress failure', async () => {
+  const f = fixture();
+  const cards = vi.mocked(refreshManagementCardSnapshots);
+  cards.mockClear();
+  vi.mocked(refreshOwnerProgress).mockImplementationOnce(async (tx, projectId, ids) => {
+    expect(tx).toBe(f.tx);
+    expect(projectId).toBe(1);
+    expect(ids).toEqual([p.userId]);
+    expect(f.tx.entranceExamAttempt.create).toHaveBeenCalledTimes(1);
+    throw new Error('entry progress fault');
+  });
+  await expect(f.service.enter(1, p)).rejects.toThrow('entry progress fault');
+  expect(cards).not.toHaveBeenCalled();
 });

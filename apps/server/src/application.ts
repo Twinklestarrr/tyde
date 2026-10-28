@@ -1,3 +1,4 @@
+import { ProjectBoardService } from './modules/projects/project-board.service.js';
 import { productionRoutes } from './modules/production/production.routes.js';
 import { ProductionService } from './modules/production/production.service.js';
 import { PersonnelRecordsService } from './modules/personnel/personnel-records.service.js';
@@ -182,6 +183,7 @@ export async function createApp(
     new ProjectMaterialsService(db, files),
     new ProjectRecruitmentHandlerService(db),
     new ProjectRecruitmentService(db),
+    new ProjectBoardService(db),
   );
   app.get(
     `${API_PREFIX}/health/live`,

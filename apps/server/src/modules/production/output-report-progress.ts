@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import type { Prisma } from '@prisma/client';
 import { AuthError } from '../auth/auth.error.js';
 import type { AuthPrincipal } from '../auth/auth.service.js';
@@ -102,47 +104,9 @@ export async function syncOutputSnapshots(
   after: TaskSnapshot,
   now: Date,
 ) {
-  for (const scope of [...before.scopes, ...after.scopes]) {
-    const where = {
-      projectId_userId_perspective: {
-        projectId,
-        userId: scope.userId,
-        perspective: scope.perspective,
-      },
-    };
-    const old = await tx.projectRoleNodeSnapshot.findUnique({ where });
-    // 轮次类型与卡片节点是两套契约；修正报量属于个人生产履约节点。
-    const ownsSnapshot =
-      old?.sourceBizType === 'OUTPUT_REPORT' &&
-      ['OUTPUT_DATA_REVIEW', 'PRODUCTION_TASK'].includes(old.branchNodeCode);
-    const source = after.sources
-      .filter((s) => s.userId === scope.userId && s.role === scope.role)
-      .sort(
-        (a, b) =>
-          Number(b.taskType === 'OUTPUT_REPORT_CORRECTION') -
-          Number(a.taskType === 'OUTPUT_REPORT_CORRECTION'),
-      )[0];
-    if (!source) {
-      if (old && ownsSnapshot) await tx.projectRoleNodeSnapshot.delete({ where });
-      continue;
-    }
-    const correction = source.taskType === 'OUTPUT_REPORT_CORRECTION';
-    const priority = correction ? 10 : 70;
-    if (old && !ownsSnapshot && old.branchPriority >= priority) continue;
-    const reportId = Number(source.sources[0]!.split(':')[1]);
-    const report = await tx.projectOutputReport.findUniqueOrThrow({ where: { id: reportId } });
-    const data = {
-      branchNodeCode: correction ? 'PRODUCTION_TASK' : 'OUTPUT_DATA_REVIEW',
-      branchPriority: priority,
-      sourceBizType: 'OUTPUT_REPORT',
-      sourceBizId: reportId,
-      sourceEventAt: report.updatedAt,
-      calculatedAt: now,
-    };
-    await tx.projectRoleNodeSnapshot.upsert({
-      where,
-      create: { projectId, userId: scope.userId, perspective: scope.perspective, ...data },
-      update: data,
-    });
-  }
+  // 旧轮次参数保留调用契约；卡片在完整真实来源上统一仲裁。
+  void before;
+  void after;
+  await refreshOwnerProgress(tx, projectId, null, now);
+  return refreshManagementCardSnapshots(tx, projectId, now);
 }

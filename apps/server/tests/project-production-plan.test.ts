@@ -3,6 +3,12 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { createApp } from '../src/application.js';
 import { readConfig } from '../src/config/index.js';
 import { AuthService, type AuthPrincipal } from '../src/modules/auth/auth.service.js';
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => undefined),
+}));
+import * as taskRounds from '../src/modules/projects/project-task-rounds.js';
 import {
   ProjectProductionPlanService,
   buildProductionPlan,
@@ -16,6 +22,9 @@ import {
   productionPlanExample,
 } from '../src/modules/projects/project-production-plan.schema.js';
 const now = new Date('2099-01-01T16:00:00Z');
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(async () => ({ cardChangedRecipients: [] })),
+}));
 const input = (): ProductionPlanInput =>
   structuredClone(productionPlanExample) as ProductionPlanInput;
 afterEach(() => vi.restoreAllMocks());
@@ -230,3 +239,65 @@ test('large valid decimal products retain all database digits before JSON conver
     '15241578751714669134278.4000',
   );
 });
+
+// 验证服务事务内的写入顺序、静默约束与仲裁异常传播。
+test.each(['cards', 'rounds'])(
+  'plan confirmation propagates %s failure after persisted plan and main rounds',
+  async (failure) => {
+    const principal = { userId: 'manager', uid: '100001', role: 'PM' } as AuthPrincipal;
+    const tx = {
+      $queryRaw: vi.fn(async () => []),
+      project: {
+        findFirst: vi.fn(async () => ({
+          id: 3001,
+          status: 'PUBLISHED',
+          currentNodeCode: 'PRODUCTION_PLAN',
+        })),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      projectManagerRecruitment: { findFirst: vi.fn(async () => ({ candidateUserId: 'manager' })) },
+      projectProductionPlan: {
+        findUnique: vi.fn(async () => null),
+        create: vi.fn(async () => {
+          throw new Error('unexpected persistence');
+        }),
+      },
+      projectEventOutbox: { create: vi.fn() },
+    };
+    const db = {
+      $transaction: vi.fn(async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx)),
+    } as unknown as PrismaClient;
+    const service = new ProjectProductionPlanService(db);
+    vi.spyOn(service.management, 'requireRole').mockResolvedValue(undefined);
+    vi.spyOn(taskRounds, 'collectManagementTasks').mockResolvedValue({ scopes: [], sources: [] });
+    const reconcile = vi.spyOn(taskRounds, 'reconcileTaskRounds').mockResolvedValue(undefined);
+    tx.projectProductionPlan.create.mockImplementation(
+      async () =>
+        ({
+          ...buildProductionPlan(input()),
+          id: 1,
+          confirmedAt: new Date(),
+          projectId: 3001,
+          confirmedBy: principal.uid,
+        }) as never,
+    );
+    const fail = failure === 'cards' ? refreshManagementCardSnapshots : refreshOwnerProgress;
+    const cardCalls = vi.mocked(refreshManagementCardSnapshots).mock.calls.length;
+    vi.mocked(fail).mockRejectedValueOnce(new Error('plan card source failed'));
+    await expect(service.confirm(3001, input(), principal)).rejects.toThrow(
+      'plan card source failed',
+    );
+    expect(refreshOwnerProgress).toHaveBeenLastCalledWith(tx, 3001, null, expect.any(Date));
+    const refreshOrder = vi.mocked(refreshOwnerProgress).mock.invocationCallOrder.at(-1)!;
+    if (failure === 'cards') {
+      expect(refreshManagementCardSnapshots).toHaveBeenLastCalledWith(tx, 3001, expect.any(Date));
+      expect(refreshOrder).toBeLessThan(
+        vi.mocked(refreshManagementCardSnapshots).mock.invocationCallOrder.at(-1)!,
+      );
+    } else expect(vi.mocked(refreshManagementCardSnapshots).mock.calls).toHaveLength(cardCalls);
+    expect(tx.projectProductionPlan.create.mock.invocationCallOrder[0]).toBeLessThan(refreshOrder);
+    expect(tx.project.updateMany.mock.invocationCallOrder[0]).toBeLessThan(refreshOrder);
+    expect(reconcile.mock.invocationCallOrder[0]).toBeLessThan(refreshOrder);
+    expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
+  },
+);

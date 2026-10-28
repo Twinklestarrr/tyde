@@ -1,3 +1,13 @@
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => {}),
+}));
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(async () => ({
+    cardChangedRecipients: [{ userId: 'card-user', role: 'EXPERT' }],
+  })),
+}));
 import { PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import { PersonnelMovementService } from '../src/modules/personnel/personnel-movement.service.js';
@@ -354,27 +364,23 @@ function createFixture(organization = false) {
       findMany: vi.fn().mockResolvedValue([{ ...user, id: 'owner' }]),
     },
     project: {
-      findFirst: vi
-        .fn()
-        .mockImplementation(({ where }) =>
-          Promise.resolve({
-            id: where.id,
-            status: 'PUBLISHED',
-            projectNo: `PJ${where.id}`,
-            currentNodeCode: 'PRODUCTION_TASK',
-          }),
-        ),
+      findFirst: vi.fn().mockImplementation(({ where }) =>
+        Promise.resolve({
+          id: where.id,
+          status: 'PUBLISHED',
+          projectNo: `PJ${where.id}`,
+          currentNodeCode: 'PRODUCTION_TASK',
+        }),
+      ),
     },
     projectManagerRecruitment: {
-      findFirst: vi
-        .fn()
-        .mockImplementation(({ where }) =>
-          Promise.resolve({
-            candidateUserId: p.userId,
-            candidate: { ...user, id: p.userId },
-            projectId: where.projectId,
-          }),
-        ),
+      findFirst: vi.fn().mockImplementation(({ where }) =>
+        Promise.resolve({
+          candidateUserId: p.userId,
+          candidate: { ...user, id: p.userId },
+          projectId: where.projectId,
+        }),
+      ),
     },
     projectMember: {
       findMany: vi.fn().mockResolvedValue([member]),
@@ -483,4 +489,40 @@ test('removal has no transfer flow and registers a due date while invalid source
     await expect(f.service.create(f.input, p), kind).rejects.toBeInstanceOf(Error);
     expect(f.tx.projectMemberMovement.create, kind).not.toHaveBeenCalled();
   }
+});
+
+test('movement creation refreshes source and target cards and preserves each original event audience', async () => {
+  const f = createFixture();
+  const spy = vi.mocked(refreshManagementCardSnapshots);
+  spy.mockClear();
+  vi.mocked(refreshOwnerProgress).mockClear();
+  await f.service.create(f.input, p);
+  expect(spy.mock.calls.map((call) => call[1])).toEqual([1, 2]);
+  expect(vi.mocked(refreshOwnerProgress).mock.calls.map((call) => call.slice(1, 3))).toEqual([
+    [1, null],
+    [2, null],
+  ]);
+  for (const [i, order] of spy.mock.invocationCallOrder.entries())
+    expect(vi.mocked(refreshOwnerProgress).mock.invocationCallOrder[i]).toBeLessThan(order);
+  for (const [event] of f.tx.projectEventOutbox.create.mock.calls)
+    expect(event.data.payload).toMatchObject({
+      cardChangedRecipients: [{ userId: 'card-user', role: 'EXPERT' }],
+    });
+});
+
+test('movement creation aborts before cards and events when independent source synchronization fails', async () => {
+  const f = createFixture();
+  vi.mocked(refreshManagementCardSnapshots).mockClear();
+  vi.mocked(refreshOwnerProgress).mockRejectedValueOnce(new Error('independent failure'));
+  await expect(f.service.create(f.input, p)).rejects.toThrow('independent failure');
+  expect(refreshManagementCardSnapshots).not.toHaveBeenCalled();
+  expect(f.tx.projectEventOutbox.create).not.toHaveBeenCalled();
+});
+test('movement creation propagates card collection failure before either project event', async () => {
+  const f = createFixture();
+  vi.mocked(refreshManagementCardSnapshots).mockRejectedValueOnce(
+    new Error('movement cards unavailable'),
+  );
+  await expect(f.service.create(f.input, p)).rejects.toThrow('movement cards unavailable');
+  expect(f.tx.projectEventOutbox.create).not.toHaveBeenCalled();
 });

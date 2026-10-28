@@ -1,3 +1,4 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
 import {
   syncRecruitmentRetrySnapshot,
   collectRecruitmentTasks,
@@ -267,7 +268,8 @@ export class ProjectRecruitmentService {
         ['MAIN_RECRUIT_EXECUTION_EXPERT'],
         tracked,
       );
-      await syncRecruitmentRetrySnapshot(tx, input.projectId, after);
+      await refreshOwnerProgress(tx, input.projectId, null, new Date());
+      const cardChanges = await syncRecruitmentRetrySnapshot(tx, input.projectId, after);
       await tx.projectEventOutbox.create({
         data: {
           projectId: input.projectId,
@@ -279,6 +281,7 @@ export class ProjectRecruitmentService {
             projectId: input.projectId,
             assignmentIds: ids,
             ...taskEventFacts(before, after),
+            ...cardChanges,
           },
         },
       });

@@ -1,9 +1,10 @@
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { refreshMovementApprovers } from '../personnel/personnel-movement-approvers.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
 import { participatingStatuses } from '../organizations/organization.service.js';
-import { queryExpertTasks } from './expert-task-query.js';
+import { collectExpertCardCandidates } from '../projects/project-expert-card-candidates.js';
 
 export interface OwnerChangeInput {
   assignmentId: number;
@@ -37,21 +38,46 @@ export function ownerTargets(input: OwnerChangeInput) {
   return target;
 }
 
-// 负责人交接只同步本域考试/培训轮次，不把交接计为任务完成；10—12接入其他支线来源。
+// 只同步本域考试/培训轮次，不把交接计为完成；调用方在全部更新后统一仲裁卡片。
 export async function refreshOwnerProgress(
   tx: Prisma.TransactionClient,
   projectId: number,
-  ids: string[],
+  ids: string[] | null,
   now: Date,
 ) {
-  for (const userId of ids) {
-    const cards = (
-      await queryExpertTasks(tx, {}, { userId, role: 'EXPERT' } as AuthPrincipal, now, projectId)
-    ).filter((c) => c.basicInfo.projectId === projectId);
-    const types = ['ENTRANCE_EXAM', 'STANDARD_TRAINING'];
-    const sources = new Set(
-      cards.flatMap((c) =>
-        c.branchNodeCode && types.includes(c.branchNodeCode) ? [c.branchNodeCode] : [],
+  if (ids?.length === 0) return;
+  const project = await tx.project.findUniqueOrThrow({ where: { id: projectId } });
+  const types = ['ENTRANCE_EXAM', 'STANDARD_TRAINING'];
+  // 收集全部真实来源，不能因报量核查/入项等卡片胜者遮挡而取消独立轮次。
+  const candidates =
+    !project.deleted && project.status === 'PUBLISHED' && project.currentNodeCode !== 'COMPLETED'
+      ? await collectExpertCardCandidates(tx, projectId, now)
+      : [];
+  // 配置变更影响全项目：兼顾新增来源和仅剩旧 OPEN 轮次的失效用户。
+  if (ids === null) {
+    const open = await tx.projectTaskRound.findMany({
+      where: { projectId, role: 'EXPERT', status: 'OPEN', taskType: { in: types } },
+      select: { userId: true },
+    });
+    ids = [
+      ...new Set([
+        ...candidates.filter((c) => types.includes(c.branchNodeCode)).map((c) => c.userId),
+        ...open.map((r) => r.userId),
+      ]),
+    ];
+  }
+  if (!ids.length) return;
+  const active = new Set(
+    (
+      await tx.user.findMany({ where: { id: { in: ids }, status: 'ACTIVE' }, select: { id: true } })
+    ).map((u) => u.id),
+  );
+  for (const userId of new Set(ids)) {
+    const sources = new Set<string>(
+      candidates.flatMap((c) =>
+        active.has(userId) && c.userId === userId && types.includes(c.branchNodeCode)
+          ? [c.branchNodeCode]
+          : [],
       ),
     );
     const open = await tx.projectTaskRound.findMany({
@@ -68,16 +94,6 @@ export async function refreshOwnerProgress(
         await tx.projectTaskRound.create({
           data: { projectId, userId, role: 'EXPERT', taskType, openedAt: now },
         });
-    // 读取端依据实时关系和成员事实；撤掉交接双方旧的本域快照，其他来源不越权清除。
-    await tx.projectRoleNodeSnapshot.deleteMany({
-      where: {
-        projectId,
-        userId,
-        perspective: { in: ['EXPERT_PROJECT_OWNER', 'EXPERT_MEMBER', 'EXPERT_INDIVIDUAL'] },
-        branchNodeCode: { in: types },
-        sourceBizType: { in: ['EXPERT_ASSIGNMENT', 'PROJECT_MEMBER'] },
-      },
-    });
   }
 }
 
@@ -213,13 +229,14 @@ export async function replaceProjectOwners(
           updatedBy: principal.uid,
         },
       });
-      await refreshMovementApprovers(tx, assignment.projectId, now);
+      await refreshMovementApprovers(tx, assignment.projectId, now, false);
       await refreshOwnerProgress(
         tx,
         assignment.projectId,
         [...added, ...before.filter((id) => !target.includes(id))],
         now,
       );
+      const cards = await refreshManagementCardSnapshots(tx, assignment.projectId, now);
       await tx.projectEventOutbox.create({
         data: {
           projectId: assignment.projectId,
@@ -233,6 +250,7 @@ export async function replaceProjectOwners(
             organizationId: assignment.organizationId,
             ownerUserIds: target,
             previousOwnerUserIds: before,
+            ...cards,
             actorUserId: principal.userId,
           },
         },
