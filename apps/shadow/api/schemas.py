@@ -2,7 +2,26 @@
 
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+
+class LLMConfigRequest(BaseModel):
+    """仅接收模型密钥，不开放其他运行配置的修改。"""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    api_key: SecretStr = Field(repr=False)
+
+    @field_validator("api_key")
+    @classmethod
+    def require_api_key(cls, value):
+        key = value.get_secret_value().strip()
+        if not key:
+            raise ValueError("api_key 不能为空")
+        return SecretStr(key)
+
+
+class LLMConfigResponse(BaseModel):
+    configured: bool
 
 
 class TaskRequest(BaseModel):

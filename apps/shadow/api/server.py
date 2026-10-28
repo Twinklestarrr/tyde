@@ -10,10 +10,13 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 
 from api.lifecycle import Lifecycle
-from api.schemas import CancelResponse, ProgressResponse, ResumeResponse, TaskRequest, TaskResponse
+from api.schemas import (CancelResponse, LLMConfigRequest, LLMConfigResponse, ProgressResponse,
+                         ResumeResponse, TaskRequest, TaskResponse)
 from auth.audit import AuditError, AuditLog
 from auth.token import TokenAuth
 from browser.session import create_session
@@ -208,7 +211,8 @@ async def _execute_task(app, record, description, config):
 
 def create_app(config: Settings | None = None) -> FastAPI:
     """构造应用；生成凭据和加锁等副作用延迟到实际启动时执行。"""
-    config = config if config is not None else settings
+    # 前端凭据属于此应用实例，不能修改全局配置或调用方传入的对象。
+    config = (config if config is not None else settings).model_copy(deep=True)
     if Path(config.PID_FILE_PATH).resolve() == Path(config.TOKEN_FILE_PATH).resolve():
         raise ValueError("PID 与 token 必须使用不同文件")
     lifecycle = Lifecycle(config.PID_FILE_PATH)
@@ -238,6 +242,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
                             finally:
                                 _release_execution(app, record)
             finally:
+                config.LLM_API_KEY = ""
                 token_auth.token = ""
                 lifecycle.cleanup()
 
@@ -246,6 +251,25 @@ def create_app(config: Settings | None = None) -> FastAPI:
     app.state.accepting_tasks = False
     app.state.active_task = None
     app.state.task_results = {}
+
+    @app.exception_handler(RequestValidationError)
+    async def safe_config_validation(request: Request, error: RequestValidationError):
+        if request.url.path == "/config/llm":
+            # FastAPI 默认校验响应含 input，密钥接口必须使用固定提示。
+            return JSONResponse(status_code=422, headers={"Cache-Control": "no-store"},
+                content={"detail": "api_key 必须为非空字符串，且不能包含额外字段"})
+        return await request_validation_exception_handler(request, error)
+
+    @app.put("/config/llm", response_model=LLMConfigResponse,
+        dependencies=[Depends(token_auth.verify)], summary="配置当前服务内存中的模型密钥",
+        responses={409: {"description": "任务仍在运行或清理"}, 503: {"description": "服务未就绪"}})
+    async def configure_llm(request: LLMConfigRequest):
+        if not app.state.accepting_tasks:
+            raise HTTPException(status_code=503, detail="服务尚未启动或正在退出")
+        if app.state.active_task is not None:
+            raise HTTPException(status_code=409, detail="任务运行或清理期间不能更换模型密钥")
+        config.LLM_API_KEY = request.api_key.get_secret_value()
+        return JSONResponse(content={"configured": True}, headers={"Cache-Control": "no-store"})
 
     @app.get("/version", summary="查询 Agent 版本")
     async def get_version():
@@ -271,6 +295,8 @@ def create_app(config: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="服务尚未启动或正在退出")
         if app.state.active_task is not None:
             raise HTTPException(status_code=409, detail="已有桌面任务正在运行或清理")
+        if not config.LLM_API_KEY.strip():
+            raise HTTPException(status_code=503, detail="请先配置模型 API Key")
         description = request.params["task"].strip()
         supplement = {key: value for key, value in request.params.items() if key != "task"}
         if supplement:

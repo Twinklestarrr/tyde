@@ -130,6 +130,40 @@ async def submit(client, account_id="account_001", **params):
         "params": {"task": "  访问 https://example.com 并读取标题  ", **params}})
 
 
+@pytest.mark.asyncio
+async def test_frontend_key_is_used_by_next_task_without_mutating_caller_config(environment):
+    env = environment
+    async with client_for(env) as client:
+        response = await client.put("/config/llm", json={"api_key": " frontend-test-key "})
+        assert response.status_code == 200
+        assert (await submit(client)).status_code == 202
+        await asyncio.wait_for(env.started.wait(), 2)
+        assert env.agents[0].kwargs["config"].LLM_API_KEY == "frontend-test-key"
+        assert env.config.LLM_API_KEY == "test-private-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["running", "awaiting_user", "cancelling", "cleanup"])
+async def test_key_cannot_change_while_task_owns_desktop(environment, phase):
+    env = environment
+    async with client_for(env) as client:
+        assert (await submit(client)).status_code == 202
+        await asyncio.wait_for(env.started.wait(), 2)
+        if phase == "awaiting_user":
+            env.agents[0].takeover.snapshot.status = phase
+        elif phase == "cancelling":
+            env.block_cleanup = True
+            await client.post(f"/task/{env.app.state.active_task.task_id}/cancel")
+            await asyncio.wait_for(env.cleanup_started.wait(), 2)
+        elif phase == "cleanup":
+            env.block_kill = True
+            env.release.set()
+            await asyncio.wait_for(env.kill_started.wait(), 2)
+        response = await client.put("/config/llm", json={"api_key": "replacement-test-key"})
+        assert response.status_code == 409
+        assert env.agents[0].kwargs["config"].LLM_API_KEY == "test-private-key"
+
+
 async def result(env, task_id, *, timeout=3):
     record = env.app.state.task_results[task_id]
     if record.runner is not None:
@@ -237,6 +271,7 @@ def resume_environment(environment, tmp_path, monkeypatch):
     monkeypatch.setattr(ChatOpenAI, "ainvoke", invoke)
     monkeypatch.setattr(Agent, "run", native_run)
     env.session = native_session
+    env.app = server.create_app(env.config)
     return env
 
 
@@ -283,7 +318,8 @@ async def test_submission_returns_before_execution_and_passes_identity_and_task(
         kwargs = env.agents[0].kwargs
         assert kwargs["task_id"] == body["task_id"]
         assert kwargs["account_id"] == env.sessions[0].account_id == "account_001"
-        assert kwargs["config"] is env.config
+        assert kwargs["config"] is not env.config
+        assert kwargs["config"].model_dump() == env.config.model_dump()
         assert kwargs["browser_session"] is env.sessions[0]
         assert kwargs["enable_signal_handler"] is False
         assert kwargs["task"].startswith("访问 https://example.com 并读取标题")
@@ -1123,6 +1159,7 @@ async def test_resume_check_errors_are_not_reported_as_login_failure(resume_envi
 async def test_resume_model_timeout_leaves_original_run_waiting(resume_environment):
     env = resume_environment
     env.config.LLM_TIMEOUT, env.block_model = 1, True
+    env.app = server.create_app(env.config)
     async with client_for(env) as client:
         task_id = (await submit(client)).json()["task_id"]
         await asyncio.wait_for(env.started.wait(), timeout=10)

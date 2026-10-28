@@ -10,7 +10,13 @@ cp .env.example .env
 uv run python main.py
 ```
 
-在 `.env` 中配置 `LLM_API_KEY`。API 默认地址为 `http://127.0.0.1:29321`。
+API 默认地址为 `http://127.0.0.1:29321`。模型密钥可填写 `.env` 的 `LLM_API_KEY`，或由宿主携带 Bearer token 调用 `PUT /config/llm`：
+
+```json
+{ "api_key": "你的模型密钥" }
+```
+
+成功返回 `{"configured":true}`；接口提交的密钥仅保存在内存，重启后需重传。任务运行或清理期间修改返回 409，未配置密钥提交任务返回 503。
 
 系统键鼠操作默认超时 10 秒（`OS_CHANNEL_TIMEOUT`）；导航后的页面加载独立等待最多 30 秒（`PAGE_LOAD_TIMEOUT`），可在 `.env` 中调整。
 
@@ -33,3 +39,5 @@ uv run python main.py
 取消调用 `POST /task/<task_id>/cancel`，返回 202 与 `status: cancelling`；通过状态接口确认最终清理结果。已结束任务返回 409。
 
 运行测试：`uv run pytest -q`。
+
+macOS M 系列交付包：`uv run python deploy/build_macos.py`，输出到 `dist/`；使用方式见 [部署说明](deploy/部署说明.md)。

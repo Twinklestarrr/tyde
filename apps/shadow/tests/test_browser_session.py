@@ -101,6 +101,28 @@ def test_missing_account_configuration_is_not_created_implicitly(project):
     assert not (project / "config/profiles/account_001").exists()
 
 
+def test_packaged_session_uses_installed_chrome_without_download(project, monkeypatch):
+    write_profile(project)
+    executable = project / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("模拟 Chrome 可执行文件", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(session_module, "PACKAGED", True, raising=False)
+    monkeypatch.setattr(Path, "home", lambda: project)
+
+    profile = session_module.create_session().browser_profile
+
+    assert Path(profile.executable_path) == executable
+
+
+def test_packaged_session_rejects_missing_explicit_browser_before_launch(project, monkeypatch):
+    write_profile(project, executable_path=str(project / "missing-chrome"))
+    monkeypatch.setattr(session_module, "PACKAGED", True, raising=False)
+
+    with pytest.raises(ValueError, match="Chrome"):
+        session_module.create_session()
+
+
 @pytest.mark.asyncio
 async def test_session_factory_mounts_browser_events(project):
     write_profile(project)

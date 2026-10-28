@@ -32,7 +32,7 @@ def config(tmp_path, monkeypatch):
     monkeypatch.setattr(server_module, "AuditLog", lambda *args: AuditLog(*args, path=tmp_path / "audit.log"), raising=False)
     return Settings(
         _env_file=None,
-        LLM_API_KEY="",
+        LLM_API_KEY="test-model-key",
         TOKEN_FILE_PATH=str(tmp_path / "data" / "token"),
         PID_FILE_PATH=str(tmp_path / "data" / "agent.pid"),
     )

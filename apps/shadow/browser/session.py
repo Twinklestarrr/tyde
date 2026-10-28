@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from config.runtime import PACKAGED
 from config.settings import PROJECT_ROOT
 
 if TYPE_CHECKING:
@@ -43,6 +45,21 @@ def create_session(
         highlight_elements=False,
         dom_highlight_elements=False,
     )
+
+    if PACKAGED:
+        configured = profile_data.get("executable_path")
+        if configured:
+            executable = Path(configured).expanduser()
+            if not executable.is_absolute():
+                executable = PROJECT_ROOT / executable
+        else:
+            chrome = Path("Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+            executable = next((path for path in (Path.home() / chrome, Path("/") / chrome)
+                               if path.is_file() and os.access(path, os.X_OK)), None)
+        if executable is None or not executable.is_file() or not os.access(executable, os.X_OK):
+            raise ValueError("请安装 Google Chrome，或在账号配置中设置有效的 executable_path")
+        # 发布包不依赖 uvx，也不进入原库的临时浏览器下载分支。
+        profile_data["executable_path"] = str(executable.resolve())
 
     # 延迟导入，避免仅导入本模块就触发第三方的配置目录初始化。
     from browser_use.browser.profile import BrowserProfile

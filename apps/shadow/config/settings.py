@@ -1,12 +1,9 @@
-"""从环境变量和项目根目录的 .env 文件读取应用配置。"""
-
-from pathlib import Path
+"""从环境变量和运行目录的 .env 文件读取应用配置。"""
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+from config.runtime import PROJECT_ROOT
 
 
 class Settings(BaseSettings):
