@@ -1,3 +1,4 @@
+import type * as Exam from '@tyde/shared';
 import {
   API_PREFIX,
   ApiError,
@@ -1024,6 +1025,7 @@ export function createHttpAuth(
     value: unknown,
     file: File,
     extension: string,
+    directory: 'project-attachment' | 'entrance-exam-attachment' = 'project-attachment',
   ): ProjectAttachmentUploadResult {
     if (
       !record(value) ||
@@ -1040,7 +1042,7 @@ export function createHttpAuth(
       value.sensitive !== true ||
       value.size !== file.size ||
       value.extension !== extension ||
-      !/^project-attachment\/\d{4}\/\d{2}\/\d{2}\/[a-f0-9]{32}\.[a-z0-9]+$/.test(
+      !new RegExp(`^${directory}/\\d{4}/\\d{2}/\\d{2}/[a-f0-9]{32}\\.[a-z0-9]+$`).test(
         String(value.objectKey),
       ) ||
       !String(value.objectKey).endsWith(`.${extension}`) ||
@@ -1691,7 +1693,755 @@ export function createHttpAuth(
     });
   }
 
+  const examModes = ['AUTO', 'MANUAL'];
+  const examResults = ['PENDING', 'ADMITTED', 'ELIMINATED'];
+  const examAdmissionStatuses = [
+    'PENDING',
+    'PENDING_ENTRY',
+    'ADMITTED',
+    'ENTRY_DECLINED',
+    'ELIMINATED',
+  ];
+  const examRoundStatuses = ['WAITING', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'];
+  const examScore = (value: unknown, zero = false) =>
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    (zero ? value >= 0 : value > 0) &&
+    value <= 99999999.99;
+  const examText = (value: unknown, max: number, nullable = true) =>
+    (nullable && value == null) || (typeof value === 'string' && value.length <= max);
+  function examInputError(): never {
+    throw new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: '准入考试参数不合法，请核对项目、考试、配置与判卷信息',
+    });
+  }
+  function examLocator(value: unknown): asserts value is Exam.EntranceExamLocator {
+    if (!record(value) || !projectPlanId(value.projectId) || !projectPlanId(value.examId))
+      examInputError();
+  }
+  function examManagement(value: unknown, projectId: number): Exam.EntranceExamManagement {
+    if (
+      !record(value) ||
+      value.projectId !== projectId ||
+      !booleans(value, ['needWrittenExam', 'canCreateExam']) ||
+      !integer(value.activeExamCount) ||
+      !projectPlanId(value.maxActiveExamCount) ||
+      !strings(value, ['createDisabledReason'], true) ||
+      !Array.isArray(value.exams) ||
+      !value.exams.every(
+        (row) =>
+          record(row) &&
+          projectPlanId(row.examId) &&
+          strings(row, ['examNo', 'examName']) &&
+          inEnum(row.status, ['ACTIVE', 'CLOSED']) &&
+          integer(row.examineeCount) &&
+          integer(row.admittedCount) &&
+          Number(row.admittedCount) <= Number(row.examineeCount) &&
+          typeof row.admissionRate === 'number' &&
+          row.admissionRate >= 0 &&
+          row.admissionRate <= 100 &&
+          (row.currentVersionId === null || projectPlanId(row.currentVersionId)) &&
+          attendanceTime(row.createdAt) &&
+          (row.closedAt === null || attendanceTime(row.closedAt)),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamManagement;
+  }
+  function examConfiguration(
+    value: unknown,
+    locator: Exam.EntranceExamLocator,
+  ): Exam.EntranceExamConfiguration {
+    if (
+      !record(value) ||
+      value.projectId !== locator.projectId ||
+      value.examId !== locator.examId ||
+      value.status !== 'ACTIVE' ||
+      !strings(value, ['examNo', 'examName']) ||
+      !projectPlanId(value.currentVersionId) ||
+      !projectPlanId(value.versionNo) ||
+      !(value.durationMinutes === null || projectPlanId(value.durationMinutes)) ||
+      !attendanceTime(value.registrationDeadline) ||
+      !examScore(value.fullScore) ||
+      !examScore(value.passScore) ||
+      Number(value.passScore) > Number(value.fullScore) ||
+      !inEnum(value.decisionRule, ['MAJORITY', 'MANUAL_PRIORITY']) ||
+      !inEnum(value.tieBreakRule, ['STRICT', 'LENIENT'], true) ||
+      !Array.isArray(value.papers) ||
+      !value.papers.every(
+        (paper) =>
+          record(paper) &&
+          projectPlanId(paper.paperId) &&
+          projectPlanId(paper.sequenceNo) &&
+          strings(paper, ['paperName'], true) &&
+          examScore(paper.totalScore) &&
+          Array.isArray(paper.questions) &&
+          paper.questions.every(
+            (q) =>
+              record(q) &&
+              projectPlanId(q.questionId) &&
+              projectPlanId(q.sequenceNo) &&
+              strings(q, ['questionContent', 'referenceAnswer'], true) &&
+              projectJson(q.questionFiles) &&
+              projectJson(q.referenceFiles) &&
+              typeof q.requiredFlag === 'boolean' &&
+              examScore(q.score) &&
+              inEnum(q.scoreSource, examModes),
+          ),
+      ) ||
+      !Array.isArray(value.gradingRounds) ||
+      !value.gradingRounds.every(
+        (round) =>
+          record(round) &&
+          projectPlanId(round.gradingRoundId) &&
+          projectPlanId(round.roundNo) &&
+          inEnum(round.gradingMode, examModes) &&
+          strings(round, ['toolCode', 'toolName'], true) &&
+          ['toolConfig', 'toolFiles', 'reviewers'].every((key) => projectJson(round[key])),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamConfiguration;
+  }
+  function examMutation(
+    value: unknown,
+    input: Exam.EntranceExamConfigInput,
+  ): Exam.EntranceExamMutation {
+    if (
+      !record(value) ||
+      !projectPlanId(value.examId) ||
+      value.projectId !== input.projectId ||
+      ('examId' in input && value.examId !== input.examId) ||
+      value.status !== 'ACTIVE' ||
+      !strings(value, ['examNo', 'examName']) ||
+      !projectPlanId(value.currentVersionId) ||
+      !projectPlanId(value.versionNo) ||
+      !attendanceTime(value.publishedAt)
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamMutation;
+  }
+  function examRoundSummary(value: unknown): value is Exam.EntranceExamRoundSummary {
+    return (
+      record(value) &&
+      projectPlanId(value.gradingRoundId) &&
+      (value.gradingRecordId === null || projectPlanId(value.gradingRecordId)) &&
+      projectPlanId(value.roundNo) &&
+      inEnum(value.gradingMode, examModes) &&
+      inEnum(value.status, examRoundStatuses, true) &&
+      (value.score === null || examScore(value.score, true)) &&
+      inEnum(value.roundResult, ['ADMITTED', 'ELIMINATED'], true) &&
+      strings(value, ['conclusionSummary', 'errorMessage'], true)
+    );
+  }
+  function examGradingDetail(
+    value: unknown,
+    input: Exam.EntranceExamLocator & { attemptId: number; roundNo?: number | null },
+  ): Exam.EntranceExamGradingDetail {
+    if (
+      !record(value) ||
+      value.examId !== input.examId ||
+      value.attemptId !== input.attemptId ||
+      !strings(value, ['candidateUid', 'candidateName']) ||
+      !examScore(value.passScore) ||
+      !inEnum(value.gradingStatus, ['NOT_STARTED', 'PENDING', 'IN_PROGRESS', 'COMPLETED']) ||
+      !inEnum(value.finalResult, examResults) ||
+      !Array.isArray(value.rounds) ||
+      !value.rounds.every(examRoundSummary) ||
+      !examRoundSummary(value.selectedRound) ||
+      value.selectedRound.roundNo !== (input.roundNo ?? 1) ||
+      !value.rounds.some(
+        (round) =>
+          record(round) &&
+          round.gradingRoundId ===
+            (value.selectedRound as Exam.EntranceExamRoundSummary).gradingRoundId,
+      ) ||
+      !Array.isArray(value.questions) ||
+      !value.questions.every(
+        (q) =>
+          record(q) &&
+          projectPlanId(q.questionId) &&
+          projectPlanId(q.sequenceNo) &&
+          examScore(q.score) &&
+          strings(
+            q,
+            ['questionContent', 'referenceAnswer', 'answerContent', 'gradingOpinion'],
+            true,
+          ) &&
+          ['questionFiles', 'referenceFiles', 'answerFiles'].every((key) => projectJson(q[key])) &&
+          (q.answerId === null || projectPlanId(q.answerId)) &&
+          typeof q.answeredFlag === 'boolean' &&
+          inEnum(q.correctness, ['PENDING', 'CORRECT', 'INCORRECT'], true),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamGradingDetail;
+  }
+  function examRosterRow(value: unknown): Exam.EntranceExamRosterItem {
+    if (
+      !record(value) ||
+      !projectPlanId(value.attemptId) ||
+      !uuid(value.candidateUserId) ||
+      !strings(value, ['attemptNo', 'candidateUid', 'candidateName']) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !strings(value, ['organizationName'], true) ||
+      !inEnum(value.finalResult, examResults, true) ||
+      !(value.enteredAt === null || attendanceTime(value.enteredAt)) ||
+      !(value.submittedAt === null || attendanceTime(value.submittedAt)) ||
+      !Array.isArray(value.roundScores) ||
+      !value.roundScores.every(
+        (round) =>
+          record(round) &&
+          projectPlanId(round.roundNo) &&
+          inEnum(round.gradingMode, examModes) &&
+          (round.score === null || examScore(round.score, true)) &&
+          inEnum(round.roundResult, ['ADMITTED', 'ELIMINATED'], true),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamRosterItem;
+  }
+  function examAdmissionRow(value: unknown): Exam.EntranceExamAdmissionItem {
+    if (
+      !record(value) ||
+      !projectPlanId(value.attemptId) ||
+      !projectPlanId(value.examId) ||
+      !uuid(value.candidateUserId) ||
+      !strings(value, ['examName', 'candidateUid', 'candidateName']) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !strings(value, ['organizationName'], true) ||
+      !inEnum(value.employmentType, employments, true) ||
+      !attendanceTime(value.examDate) ||
+      !inEnum(value.admissionStatus, examAdmissionStatuses)
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamAdmissionItem;
+  }
+  function examPage<T>(value: unknown, parser: (row: unknown) => T): Exam.EntranceExamPage<T> {
+    const result = page(value, parser);
+    if (
+      result.size > 100 ||
+      result.pages !== Math.ceil(result.total / result.size) ||
+      result.records.length > result.size
+    )
+      invalidResponse();
+    return result;
+  }
+  function examSubmitResult(
+    value: unknown,
+    input: { gradingRecordId: number; attemptId?: number },
+    manual = false,
+  ): Exam.EntranceExamGradingSubmitResult {
+    if (
+      !record(value) ||
+      !projectPlanId(value.attemptId) ||
+      (input.attemptId !== undefined && input.attemptId !== value.attemptId) ||
+      value.gradingRecordId !== input.gradingRecordId ||
+      !inEnum(
+        value.recordStatus,
+        manual ? ['COMPLETED'] : ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'],
+      ) ||
+      !(value.score === null || examScore(value.score, true)) ||
+      !inEnum(value.roundResult, ['ADMITTED', 'ELIMINATED'], true) ||
+      !inEnum(value.gradingStatus, ['PENDING', 'IN_PROGRESS', 'COMPLETED']) ||
+      !inEnum(value.finalResult, examResults) ||
+      (manual && (value.score === null || value.roundResult === null))
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamGradingSubmitResult;
+  }
+  function examFileKey(value: unknown): value is string {
+    return (
+      typeof value === 'string' &&
+      value.length <= 500 &&
+      value.startsWith('entrance-exam-attachment/') &&
+      !/[\\\p{Cc}]/u.test(value) &&
+      !value.split('/').some((part) => !part || part === '.' || part === '..')
+    );
+  }
+  function examFileInput(value: unknown, preview = false) {
+    return (
+      record(value) &&
+      onlyKeys(value, [
+        'objectKey',
+        'uploadedFileId',
+        'uploadToken',
+        'fileName',
+        'extension',
+        'contentType',
+        'size',
+        'fileHash',
+        'url',
+        'sensitive',
+        ...(preview ? ['fileId'] : []),
+      ]) &&
+      examFileKey(value.objectKey) &&
+      (value.uploadedFileId == null || uuid(value.uploadedFileId)) &&
+      examText(value.uploadToken, 128) &&
+      !(value.uploadedFileId && value.uploadToken) &&
+      ['fileName', 'extension', 'contentType', 'fileHash', 'url'].every(
+        (key) => value[key] === undefined || value[key] === null || typeof value[key] === 'string',
+      ) &&
+      (value.size === undefined || integer(value.size)) &&
+      (value.sensitive === undefined || typeof value.sensitive === 'boolean')
+    );
+  }
+  function examFileList(value: unknown, max: number, preview = false) {
+    return (
+      value == null ||
+      (Array.isArray(value) &&
+        value.length <= max &&
+        value.every((file) => examFileInput(file, preview)))
+    );
+  }
+  function examPublicJson(value: unknown): boolean {
+    if (!projectJson(value)) return false;
+    if (Array.isArray(value)) return value.every(examPublicJson);
+    if (!record(value)) return true;
+    return Object.entries(value).every(
+      ([key, nested]) =>
+        !['secret', 'password', 'apikey', 'accesstoken', 'token'].includes(
+          key.toLowerCase().replace(/[_-]/g, ''),
+        ) && examPublicJson(nested),
+    );
+  }
+  function examConfigInput(value: Exam.EntranceExamConfigInput, preview = false) {
+    if (
+      !record(value) ||
+      !onlyKeys(value, [
+        'projectId',
+        'examId',
+        'expectedCurrentVersionId',
+        'examName',
+        'durationMinutes',
+        'registrationDeadline',
+        'fullScore',
+        'passScore',
+        'decisionRule',
+        'tieBreakRule',
+        'papers',
+        'gradingRounds',
+      ]) ||
+      !projectPlanId(value.projectId) ||
+      !examText(value.examName, 128) ||
+      (!preview && !value.examName?.trim()) ||
+      !(value.durationMinutes == null || projectPlanId(value.durationMinutes)) ||
+      !(value.registrationDeadline == null
+        ? preview
+        : attendanceTime(value.registrationDeadline)) ||
+      !(value.fullScore == null ? preview : examScore(value.fullScore)) ||
+      !(value.passScore == null ? preview : examScore(value.passScore)) ||
+      (value.fullScore != null && value.passScore != null && value.passScore > value.fullScore) ||
+      !(
+        value.decisionRule == null || inEnum(value.decisionRule, ['MAJORITY', 'MANUAL_PRIORITY'])
+      ) ||
+      !(value.tieBreakRule == null || inEnum(value.tieBreakRule, ['STRICT', 'LENIENT'])) ||
+      !Array.isArray(value.papers) ||
+      value.papers.length < 1 ||
+      value.papers.length > 20 ||
+      !value.papers.every(
+        (paper) =>
+          record(paper) &&
+          onlyKeys(paper, ['paperName', 'questions']) &&
+          examText(paper.paperName, 100) &&
+          Array.isArray(paper.questions) &&
+          paper.questions.length >= 1 &&
+          paper.questions.length <= 200 &&
+          paper.questions.every(
+            (q) =>
+              record(q) &&
+              onlyKeys(q, [
+                'questionContent',
+                'questionFiles',
+                'requiredFlag',
+                'score',
+                'scoreSource',
+                'referenceAnswer',
+                'referenceFiles',
+              ]) &&
+              examText(q.questionContent, Number.MAX_SAFE_INTEGER) &&
+              examText(q.referenceAnswer, Number.MAX_SAFE_INTEGER) &&
+              examFileList(q.questionFiles, 20, preview) &&
+              examFileList(q.referenceFiles, 20, preview) &&
+              (q.requiredFlag == null || typeof q.requiredFlag === 'boolean') &&
+              (q.score == null || (typeof q.score === 'number' && Number.isFinite(q.score))) &&
+              (q.scoreSource == null || inEnum(q.scoreSource, examModes)),
+          ),
+      ) ||
+      !Array.isArray(value.gradingRounds) ||
+      value.gradingRounds.length > 20 ||
+      (!preview && !value.gradingRounds.length) ||
+      !value.gradingRounds.every(
+        (round) =>
+          record(round) &&
+          onlyKeys(round, [
+            'gradingMode',
+            'toolCode',
+            'toolName',
+            'toolConfig',
+            'toolFiles',
+            'reviewerUserIds',
+          ]) &&
+          inEnum(round.gradingMode, examModes) &&
+          examText(round.toolCode, 64) &&
+          examText(round.toolName, 128) &&
+          (round.toolConfig === undefined || examPublicJson(round.toolConfig)) &&
+          examFileList(round.toolFiles, 10, preview) &&
+          (round.reviewerUserIds == null ||
+            (Array.isArray(round.reviewerUserIds) &&
+              round.reviewerUserIds.length <= 100 &&
+              round.reviewerUserIds.every(uuid))),
+      )
+    )
+      examInputError();
+  }
+  function examGradingInput(
+    value: Exam.EntranceExamManualGradingInput | Exam.EntranceExamAutoCompensateInput,
+    manual: boolean,
+  ) {
+    examLocator(value);
+    if (
+      !projectPlanId(value.gradingRecordId) ||
+      (manual && (!('attemptId' in value) || !projectPlanId(value.attemptId))) ||
+      !onlyKeys(
+        value as unknown as Record<string, unknown>,
+        manual
+          ? ['projectId', 'examId', 'attemptId', 'gradingRecordId', 'conclusionSummary', 'items']
+          : ['projectId', 'examId', 'gradingRecordId', 'summary', 'compensationReason', 'items'],
+      ) ||
+      !['summary', 'conclusionSummary'].every((key) =>
+        examText((value as unknown as Record<string, unknown>)[key], 5000),
+      ) ||
+      !examText((value as unknown as Record<string, unknown>).compensationReason, 1000) ||
+      !Array.isArray(value.items) ||
+      !value.items.length ||
+      value.items.length > 500 ||
+      new Set(value.items.map((item) => (record(item) ? item.questionId : undefined))).size !==
+        value.items.length ||
+      !value.items.every(
+        (item) =>
+          record(item) &&
+          onlyKeys(item, ['questionId', 'correctness', 'gradingOpinion']) &&
+          projectPlanId(item.questionId) &&
+          inEnum(item.correctness, ['CORRECT', 'INCORRECT']) &&
+          examText(item.gradingOpinion, 5000),
+      )
+    )
+      examInputError();
+  }
+
   return {
+    getEntranceExamManagement: async (projectId) => {
+      if (!projectPlanId(projectId)) examInputError();
+      return examManagement(
+        await request(`/entrance-exams/management?projectId=${projectId}`, undefined, 'GET', true),
+        projectId,
+      );
+    },
+    listEntranceExamReviewers: async (projectId, keyword) => {
+      if (!projectPlanId(projectId) || (keyword !== undefined && typeof keyword !== 'string'))
+        examInputError();
+      const query = new URLSearchParams({
+        projectId: String(projectId),
+        ...(keyword === undefined ? {} : { keyword }),
+      });
+      const data = await request(`/entrance-exams/reviewers?${query}`, undefined, 'GET', true);
+      if (
+        !Array.isArray(data) ||
+        !data.every(
+          (row) =>
+            record(row) &&
+            uuid(row.userId) &&
+            strings(row, ['uid', 'name']) &&
+            strings(row, ['avatarUrl'], true),
+        )
+      )
+        invalidResponse();
+      return data as Exam.EntranceExamReviewer[];
+    },
+    getEntranceExamConfiguration: async (input) => {
+      examLocator(input);
+      if (!onlyKeys(input as unknown as Record<string, unknown>, ['projectId', 'examId']))
+        examInputError();
+      return examConfiguration(await request('/entrance-exams/detail', input, 'POST', true), input);
+    },
+    publishEntranceExam: async (input) => {
+      examConfigInput(input);
+      if ('examId' in input || 'expectedCurrentVersionId' in input) examInputError();
+      return examMutation(await request('/entrance-exams/publish', input, 'POST', true), input);
+    },
+    editEntranceExam: async (input) => {
+      examLocator(input);
+      examConfigInput(input);
+      if (!projectPlanId(input.expectedCurrentVersionId)) examInputError();
+      return examMutation(await request('/entrance-exams/edit', input, 'PUT', true), input);
+    },
+    closeEntranceExam: async (input) => {
+      examLocator(input);
+      if (
+        !onlyKeys(input as unknown as Record<string, unknown>, [
+          'projectId',
+          'examId',
+          'closeReason',
+        ]) ||
+        !examText(input.closeReason, 500)
+      )
+        examInputError();
+      const data = await request('/entrance-exams/close', input, 'POST', true);
+      if (
+        !record(data) ||
+        data.examId !== input.examId ||
+        data.status !== 'CLOSED' ||
+        !strings(data, ['closedBy']) ||
+        !attendanceTime(data.closedAt)
+      )
+        invalidResponse();
+      return data as unknown as Exam.EntranceExamCloseResult;
+    },
+    getEntranceExamRoster: async (input) => {
+      examLocator(input);
+      if (
+        !onlyKeys(input as unknown as Record<string, unknown>, [
+          'projectId',
+          'examId',
+          'keyword',
+          'finalResult',
+          'current',
+          'size',
+        ]) ||
+        !examText(input.keyword, Number.MAX_SAFE_INTEGER) ||
+        !(input.finalResult == null || inEnum(input.finalResult, examResults)) ||
+        [input.current, input.size].some((value) => value != null && !Number.isSafeInteger(value))
+      )
+        examInputError();
+      const current = Math.max(1, input.current ?? 1);
+      const size = Math.min(100, Math.max(1, input.size ?? 20));
+      if (!Number.isSafeInteger((current - 1) * size)) examInputError();
+      const result = examPage(
+        await request('/entrance-exams/roster', input, 'POST', true),
+        examRosterRow,
+      );
+      if (result.current !== current || result.size !== size) invalidResponse();
+      return result;
+    },
+    getEntranceExamAdmissions: async (input) => {
+      if (
+        !record(input) ||
+        !projectPlanId(input.projectId) ||
+        !onlyKeys(input, ['projectId', 'keyword', 'admissionStatus', 'current', 'size']) ||
+        (input.keyword !== undefined && typeof input.keyword !== 'string') ||
+        (input.admissionStatus !== undefined &&
+          !inEnum(input.admissionStatus, examAdmissionStatuses)) ||
+        (input.current !== undefined && !integer(input.current, 1)) ||
+        (input.size !== undefined && (!integer(input.size, 1) || input.size > 100)) ||
+        !Number.isSafeInteger(((input.current ?? 1) - 1) * (input.size ?? 20))
+      )
+        examInputError();
+      const query = new URLSearchParams({
+        projectId: String(input.projectId),
+        ...(input.keyword === undefined ? {} : { keyword: input.keyword }),
+        ...(input.admissionStatus === undefined ? {} : { admissionStatus: input.admissionStatus }),
+        ...(input.current === undefined ? {} : { current: String(input.current) }),
+        ...(input.size === undefined ? {} : { size: String(input.size) }),
+      });
+      const result = examPage(
+        await request(`/entrance-exams/admissions?${query}`, undefined, 'GET', true),
+        examAdmissionRow,
+      );
+      if (result.current !== (input.current ?? 1) || result.size !== (input.size ?? 20))
+        invalidResponse();
+      return result;
+    },
+    getEntranceExamGradingDetail: async (input) => {
+      examLocator(input);
+      if (
+        !onlyKeys(input as unknown as Record<string, unknown>, [
+          'projectId',
+          'examId',
+          'attemptId',
+          'roundNo',
+        ]) ||
+        !projectPlanId(input.attemptId) ||
+        !(input.roundNo == null || projectPlanId(input.roundNo))
+      )
+        examInputError();
+      return examGradingDetail(
+        await request('/entrance-exams/grading/detail', input, 'POST', true),
+        input,
+      );
+    },
+    submitEntranceExamManualGrading: async (input) => {
+      examGradingInput(input, true);
+      if (new TextEncoder().encode(JSON.stringify(input)).byteLength > 16 * 1024)
+        throw new ApiError(413, {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: '阅卷内容超过当前可提交大小，请缩短阅卷意见或本轮总结后重试。',
+        });
+      return examSubmitResult(
+        await request('/entrance-exams/grading/manual', input, 'POST', true),
+        input,
+        true,
+      );
+    },
+    retryEntranceExamAutoGrading: async (input) => {
+      examLocator(input);
+      if (
+        !projectPlanId(input.gradingRecordId) ||
+        !onlyKeys(input as unknown as Record<string, unknown>, [
+          'projectId',
+          'examId',
+          'gradingRecordId',
+        ])
+      )
+        examInputError();
+      return examSubmitResult(
+        await request('/entrance-exams/grading/retry', input, 'POST', true),
+        input,
+      );
+    },
+    compensateEntranceExamAutoGrading: async (input) => {
+      examGradingInput(input, false);
+      return examSubmitResult(
+        await request('/entrance-exams/grading/auto/compensate', input, 'POST', true),
+        input,
+      );
+    },
+    downloadEntranceExamTemplate: async (type) => {
+      const templates = {
+        EXCEL: ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+        TXT: ['txt', 'text/plain'],
+        REDOC: ['xml', 'application/xml'],
+      };
+      if (!Object.hasOwn(templates, type)) examInputError();
+      const [extension, mime] = templates[type];
+      return (await request(
+        `/entrance-exams/import/template?type=${type}`,
+        undefined,
+        'GET',
+        true,
+        {
+          decode: async (response) => {
+            if (!response.ok) await read(response);
+            if (response.headers.get('Content-Type')?.split(';')[0]?.trim() !== mime)
+              invalidResponse();
+            const blob = await response.blob();
+            if (!blob.size) invalidResponse();
+            return { blob, fileName: `entrance-exam-import-v1.${extension}` };
+          },
+        },
+      )) as { fileName: string; blob: Blob };
+    },
+    parseEntranceExamImport: async (input) => {
+      if (
+        !record(input) ||
+        !projectPlanId(input.projectId) ||
+        !onlyKeys(input, ['projectId', 'file', 'redocUrl', 'attachmentRefs']) ||
+        (input.file !== undefined && !(input.file instanceof File)) ||
+        (input.redocUrl !== undefined && typeof input.redocUrl !== 'string') ||
+        Boolean(input.file) === Boolean(input.redocUrl?.trim()) ||
+        (input.redocUrl !== undefined && input.redocUrl.length > 500) ||
+        (input.attachmentRefs !== undefined &&
+          (!Array.isArray(input.attachmentRefs) ||
+            input.attachmentRefs.length > 100 ||
+            !input.attachmentRefs.every(
+              (ref) =>
+                record(ref) &&
+                onlyKeys(ref, ['name', 'objectKey', 'uploadToken']) &&
+                typeof ref.name === 'string' &&
+                !!ref.name.trim() &&
+                ref.name.trim().length <= 200 &&
+                examFileKey(ref.objectKey) &&
+                typeof ref.uploadToken === 'string' &&
+                !!ref.uploadToken.trim() &&
+                ref.uploadToken.length <= 128,
+            )))
+      )
+        examInputError();
+      if (input.file && (!/\.(xls|xlsx|txt)$/i.test(input.file.name) || !input.file.size))
+        examInputError();
+      if (input.file && input.file.size > 10 * 1024 * 1024)
+        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '题目文件最大 10 MiB' });
+      if (
+        input.attachmentRefs &&
+        new Set(input.attachmentRefs.map((ref) => ref.name.trim())).size !==
+          input.attachmentRefs.length
+      )
+        examInputError();
+      const body = new FormData();
+      body.append('projectId', String(input.projectId));
+      if (input.file) body.append('file', input.file);
+      else body.append('redocUrl', input.redocUrl!.trim());
+      if (input.attachmentRefs !== undefined)
+        body.append('attachmentRefs', JSON.stringify(input.attachmentRefs));
+      const data = await request('/entrance-exams/import/parse', body, 'POST', true, {
+        timeoutMs: 120_000,
+      });
+      if (
+        !record(data) ||
+        data.formatVersion !== '1' ||
+        !inEnum(data.sourceType, ['EXCEL', 'TXT']) ||
+        !record(data.config) ||
+        data.config.projectId !== input.projectId
+      )
+        invalidResponse();
+      try {
+        examConfigInput(data.config as unknown as Exam.EntranceExamConfigInput, true);
+      } catch {
+        invalidResponse();
+      }
+      return data as unknown as Exam.EntranceExamImportResult;
+    },
+    uploadEntranceExamAttachment: async (file) => {
+      if (!(file instanceof File)) examInputError();
+      const name = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
+      const extension = name.includes('.') ? name.split('.').at(-1)!.toLowerCase() : '';
+      if (!(PROJECT_ATTACHMENT_EXTENSIONS as readonly string[]).includes(extension) || !file.size)
+        examInputError();
+      if (file.size > PROJECT_ATTACHMENT_MAX_BYTES)
+        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '考试附件最大 50 MiB' });
+      const body = new FormData();
+      body.append('bizType', 'ENTRANCE_EXAM_ATTACHMENT');
+      body.append('category', 'PROJECT_ATTACHMENT');
+      body.append('file', file);
+      return projectUploaded(
+        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+        file,
+        extension,
+        'entrance-exam-attachment',
+      );
+    },
+    readEntranceExamAttachment: async (objectKey) => {
+      if (!examFileKey(objectKey)) examInputError();
+      return (await request(
+        `/files/view?${new URLSearchParams({ objectKey })}`,
+        undefined,
+        'GET',
+        true,
+        {
+          decode: async (response) => {
+            if (!response.ok) await read(response);
+            const type = response.headers.get('Content-Type')?.split(';')[0]?.trim();
+            if (
+              !inEnum(type, [
+                'application/octet-stream',
+                'application/pdf',
+                'image/jpeg',
+                'image/png',
+                'image/gif',
+                'image/bmp',
+                'image/webp',
+              ])
+            )
+              invalidResponse();
+            const blob = await response.blob();
+            if (!blob.size) invalidResponse();
+            return blob;
+          },
+          timeoutMs: 60_000,
+        },
+      )) as Blob;
+    },
     health: async () => {
       const data = await read(await send('/health/ready', undefined, 'GET'), false);
       if (!record(data) || typeof data.status !== 'string') invalidResponse();
