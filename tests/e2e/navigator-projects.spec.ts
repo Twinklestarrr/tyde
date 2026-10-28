@@ -551,13 +551,7 @@ for (const [mode, desktop] of [
     await expect(page.getByText(/项目类型暂无可选项/)).toHaveCount(0);
     await expect(page.getByRole('combobox', { name: /^一级项目类型/ })).toContainText('数据处理');
     await select(page, '二级项目类型', '文本标注');
-    for (const name of ['内容分类', '内容核对']) {
-      await page
-        .getByRole('group', { name: '三级项目类型', exact: true })
-        .getByText(name, { exact: true })
-        .click();
-      await expect(page.getByRole('checkbox', { name, exact: true })).toBeChecked();
-    }
+    await selectThirdCategories(page, ['内容分类', '内容核对']);
     expect(requests.slice(beforeRefresh).map(({ path, method }) => `${method} ${path}`)).toEqual(
       Array(6).fill('GET /api/v1/project-categories'),
     );
@@ -610,7 +604,9 @@ for (const [mode, desktop] of [
     await expect(page.getByLabel(/^项目名称/)).toHaveValue('分类重读期间未保存的草稿');
     await expect(page.getByRole('combobox', { name: /^一级项目类型/ })).toContainText('数据处理');
     await expect(page.getByRole('combobox', { name: /^二级项目类型/ })).toContainText('文本标注');
+    await page.getByRole('combobox', { name: /^三级项目类型/ }).click();
     await expect(page.getByRole('checkbox', { name: '内容分类', exact: true })).toBeChecked();
+    await page.keyboard.press('Escape');
 
     state.categoriesStatus = 200;
     state.categories = categoryFixtures.map((category) => ({
@@ -631,7 +627,9 @@ for (const [mode, desktop] of [
     await expect(page.getByRole('combobox', { name: /^一级项目类型/ })).toContainText(
       '更新后的数据处理',
     );
+    await page.getByRole('combobox', { name: /^三级项目类型/ }).click();
     await expect(page.getByRole('checkbox', { name: '内容分类', exact: true })).toBeChecked();
+    await page.keyboard.press('Escape');
     expect(requests.slice(beforeRefresh).map(({ path, method }) => `${method} ${path}`)).toEqual(
       Array(6).fill('GET /api/v1/project-categories'),
     );
@@ -663,6 +661,104 @@ for (const [mode, desktop] of [
   });
 }
 
+test('三级项目类型下拉支持搜索连续多选、移除清空、20项上限及手机草稿恢复', async ({ page }) => {
+  const { state, calls } = await backend(page);
+  const extraCategories: ProjectCategory[] = Array.from({ length: 20 }, (_, index) => ({
+    id: index + 10,
+    categoryCode: `EXTRA-${index + 1}`,
+    categoryName: `独立标签 ${String(index + 1).padStart(2, '0')}`,
+    categoryLevel: 3,
+    sortNo: index + 2,
+  }));
+  state.categories = [
+    ...structuredClone(categoryFixtures),
+    { id: 4, categoryCode: 'REVIEW', categoryName: '内容核对', categoryLevel: 3, sortNo: 1 },
+    { id: 6, categoryCode: 'OTHER', categoryName: '其他一级类型', categoryLevel: 1, sortNo: 1 },
+    {
+      id: 7,
+      categoryCode: 'OTHER-TEXT',
+      categoryName: '其他二级类型',
+      categoryLevel: 2,
+      sortNo: 1,
+    },
+    ...extraCategories,
+  ];
+  state.draft = draftFixture();
+  await page.goto(`${origin}/#/projects/create`);
+  const trigger = page.getByRole('combobox', { name: /^三级项目类型/ });
+  const search = page.getByRole('textbox', { name: '搜索三级项目类型', exact: true });
+  await expect(page.getByRole('button', { name: '移除 内容分类', exact: true })).toBeVisible();
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await trigger.click();
+  await expect(search).toBeFocused();
+  await search.fill('核对');
+  await expect(page.getByRole('checkbox', { name: '内容分类', exact: true })).toHaveCount(0);
+  await page.getByRole('checkbox', { name: '内容核对', exact: true }).check();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await search.fill('内容');
+  await expect(page.getByRole('checkbox', { name: '内容分类', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '内容核对', exact: true })).toBeChecked();
+  await search.fill('不存在的类型');
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await expect(page.getByText('没有匹配的项目类型', { exact: true })).toBeVisible();
+  await search.press('Escape');
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await page.getByRole('button', { name: '移除 内容核对', exact: true }).click();
+  await expect(page.getByRole('button', { name: '移除 内容核对', exact: true })).toHaveCount(0);
+
+  await trigger.click();
+  await expect(search).toHaveValue('');
+  await expect(page.getByRole('checkbox', { name: '内容核对', exact: true })).not.toBeChecked();
+  await page.getByRole('checkbox', { name: '内容核对', exact: true }).check();
+  await page.getByRole('checkbox', { name: '独立标签 01', exact: true }).check();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await page.getByRole('heading', { name: '创建项目', exact: true }).click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await select(page, '一级项目类型', '其他一级类型');
+  await select(page, '二级项目类型', '其他二级类型');
+  for (const label of ['内容分类', '内容核对', '独立标签 01'])
+    await expect(page.getByRole('button', { name: `移除 ${label}`, exact: true })).toBeVisible();
+  expect(calls('project-categories')).toHaveLength(3);
+  expect(calls('projects/create')).toHaveLength(0);
+
+  await page.getByRole('button', { name: '清空', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^移除 / })).toHaveCount(0);
+  await trigger.click();
+  for (const category of extraCategories)
+    await page.getByRole('checkbox', { name: category.categoryName, exact: true }).check();
+  await expect(page.getByRole('checkbox', { name: '内容分类', exact: true })).toBeDisabled();
+  await expect(page.getByRole('checkbox', { name: '独立标签 01', exact: true })).toBeEnabled();
+  await expect(page.getByRole('checkbox', { name: '独立标签 20', exact: true })).toBeChecked();
+  await page.keyboard.press('Escape');
+  await page.getByLabel(/^项目名称/).fill('下拉多选草稿');
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+  await expect(page.getByText('草稿已保存。', { exact: true })).toBeVisible();
+  expect(calls('projects/create')).toHaveLength(1);
+  expect(calls('projects/create')[0]?.body).toMatchObject({
+    operation: 'SAVE_DRAFT',
+    projectName: '下拉多选草稿',
+    categoryLevel1Id: 6,
+    categoryLevel2Id: 7,
+    categoryLevel3Ids: extraCategories.map((category) => category.id),
+  });
+
+  await page.reload();
+  await expect(page.getByLabel(/^项目名称/)).toHaveValue('下拉多选草稿');
+  await expect(page.getByRole('button', { name: /^移除 / })).toHaveCount(20);
+  await expect(page.getByRole('button', { name: '移除 独立标签 20', exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await trigger.click();
+  await expect(page.getByRole('checkbox', { name: '独立标签 20', exact: true })).toBeChecked();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await screenshot(page, 'project-categories-multiselect-mobile');
+  await page.keyboard.press('Escape');
+  expect(calls('projects/create')).toHaveLength(1);
+});
+
 test('项目列表与草稿独立失败、显式重读和空态，失效会话不读取项目', async ({ page }) => {
   const { state, calls } = await backend(page);
   state.listStatus = 503;
@@ -693,16 +789,25 @@ async function select(page: Page, label: string, option: string) {
   await page.getByRole('option', { name: option, exact: true }).click();
 }
 
+/** 在三级类型浮层中连续选择，关闭后不让浮层遮挡下一字段。 */
+async function selectThirdCategories(page: Page, names: string[]) {
+  const trigger = page.getByRole('combobox', { name: /^三级项目类型/ });
+  await trigger.click();
+  for (const name of names) {
+    await page.getByRole('checkbox', { name, exact: true }).check();
+    await expect(page.getByRole('checkbox', { name, exact: true })).toBeChecked();
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  }
+  await page.keyboard.press('Escape');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+}
+
 async function fillBasic(page: Page) {
   await page.getByLabel(/^项目名称/).fill('完整发布项目');
   await page.getByLabel(/^项目描述/).fill('跨角色协作的项目描述');
   await select(page, '一级项目类型', '数据处理');
   await select(page, '二级项目类型', '文本标注');
-  await page
-    .getByRole('group', { name: '三级项目类型', exact: true })
-    .getByText('内容分类', { exact: true })
-    .click();
-  await expect(page.getByRole('checkbox', { name: '内容分类', exact: true })).toBeChecked();
+  await selectThirdCategories(page, ['内容分类']);
   await select(page, '难度等级', '中等');
   await page.getByLabel(/^截止时间（上海时间）/).fill('2099-12-31T18:20:30');
   await page.getByLabel(/^项目量级/).fill('120.5');

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
-import { ToggleCheckboxGroup } from '@/components/ui/shared/ToggleCheckboxGroup';
+import { ProjectCategoryMultiSelect } from './ProjectCategoryMultiSelect';
 import {
   Select,
   SelectContent,
@@ -198,20 +198,18 @@ export function ProjectCreateFields({
                 control={form.control}
                 name="categoryLevel3Ids"
                 render={({ field }) => (
-                  <ToggleCheckboxGroup
+                  <ProjectCategoryMultiSelect
                     id="project-create-categoryLevel3Ids"
-                    ariaLabel="三级项目类型"
-                    value={field.value.map(String)}
-                    options={categories
-                      .filter((item) => item.categoryLevel === 3)
-                      .map((item) => ({ value: String(item.id), label: item.categoryName }))}
+                    value={field.value}
+                    options={categories}
                     onChange={(values) => {
-                      field.onChange(values.map(Number));
+                      field.onChange(values);
                       form.clearErrors('categoryLevel3Ids');
                     }}
-                    variant="pill"
+                    onBlur={field.onBlur}
+                    controlRef={field.ref}
                     invalid={invalid}
-                    ariaDescribedBy={describedBy}
+                    describedBy={describedBy}
                   />
                 )}
               />
