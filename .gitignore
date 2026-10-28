@@ -20,3 +20,75 @@ apps/server/public/
 apps/electron/resources/runtime.json
 .DS_Store
 *.log
+
+# BEGIN Shadow standalone project ignores
+# Rules below apply only to /apps/shadow/.
+# ========== 运行数据（全部不入库） ==========
+# 审计日志、会话存档、截图、pidfile —— 运行时自动生成
+/apps/shadow/data/
+
+# ========== 账号指纹（一账号一目录，含机器相关配置） ==========
+# 仅保留配置示例
+/apps/shadow/config/profiles/*
+!/apps/shadow/config/profiles/browser_profile.example.json
+
+# ========== Skill 上传区（运行时热加载，用户上传内容不入库） ==========
+/apps/shadow/skills/external/*
+!/apps/shadow/skills/external/.gitkeep
+
+# ========== 密钥与本地配置（绝不入库） ==========
+/apps/shadow/**/.env
+/apps/shadow/**/.env.*
+!/apps/shadow/**/.env.example
+/apps/shadow/**/*.key
+/apps/shadow/**/*.pem
+/apps/shadow/**/*.p12
+/apps/shadow/**/*.pfx
+# 预留扩展：加密密钥文件
+/apps/shadow/**/secrets.enc
+
+# ========== 浏览器用户数据（Chrome profile 运行产物） ==========
+/apps/shadow/**/*.user_data/
+/apps/shadow/**/user_data/
+/apps/shadow/**/chrome_data/
+
+# ========== Python 缓存与构建文件 ==========
+/apps/shadow/**/__pycache__/
+/apps/shadow/**/*.py[cod]
+/apps/shadow/**/*.egg-info/
+/apps/shadow/**/.eggs/
+/apps/shadow/**/build/
+# PyInstaller 输出
+/apps/shadow/**/dist/
+/apps/shadow/**/*.spec.local
+
+# ========== 虚拟环境 ==========
+/apps/shadow/**/.venv/
+/apps/shadow/**/venv/
+/apps/shadow/**/env/
+
+# ========== IDE / 系统 ==========
+/apps/shadow/**/.idea/
+/apps/shadow/**/.vscode/
+/apps/shadow/**/*.swp
+/apps/shadow/**/.DS_Store
+/apps/shadow/**/Thumbs.db
+
+# ========== 测试与覆盖率（tests/ 目录保留，产物忽略） ==========
+/apps/shadow/**/.pytest_cache/
+/apps/shadow/**/.mypy_cache/
+/apps/shadow/**/.ruff_cache/
+/apps/shadow/**/.coverage
+/apps/shadow/**/.coverage.*
+/apps/shadow/**/coverage.xml
+/apps/shadow/**/htmlcov/
+# 本地单文件调试窗口，不随项目发布
+/apps/shadow/tests/web_debug/
+
+# ========== 打包产物（deploy/ 只放配置，不放输出） ==========
+/apps/shadow/deploy/output/
+/apps/shadow/**/*.log
+
+# 本地技术文档与开发记录
+/apps/shadow/docs/
+# END Shadow standalone project ignores
