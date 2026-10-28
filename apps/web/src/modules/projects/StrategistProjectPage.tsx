@@ -10,6 +10,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { projectNodeLabel } from './ProjectWorkflow';
 import { ProjectDetailsDialog } from './ProjectDetailsDialog';
 import { ProductionPlanPanel, PRODUCTION_PLAN_LEAVE_REQUEST } from './ProductionPlanPanel';
+import { StrategistExamPanel } from './StrategistExamPanel';
+import { ENTRANCE_EXAM_LEAVE_REQUEST } from './EntranceExamDialog';
 
 const tabs = [
   'PRODUCTION_PLAN',
@@ -20,10 +22,18 @@ const tabs = [
   'PRODUCTION_TASK',
 ] as const;
 
-export function StrategistProjectPage({ user, projectId }: { user: AuthUser; projectId: number }) {
+export function StrategistProjectPage({
+  user,
+  projectId,
+  initialTab = 'PRODUCTION_PLAN',
+}: {
+  user: AuthUser;
+  projectId: number;
+  initialTab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM';
+}) {
   const client = useQueryClient();
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [tab, setTab] = useState('PRODUCTION_PLAN');
+  const [tab, setTab] = useState<string>(initialTab);
   const detail = useQuery({
     queryKey: ['project-detail', user.id, 'PM', projectId],
     queryFn: () => api.getProjectDetail(projectId),
@@ -84,6 +94,14 @@ export function StrategistProjectPage({ user, projectId }: { user: AuthUser; pro
                   )
                 )
                   return;
+                if (
+                  tab === 'ENTRANCE_EXAM' &&
+                  next !== tab &&
+                  !window.dispatchEvent(
+                    new Event(ENTRANCE_EXAM_LEAVE_REQUEST, { cancelable: true }),
+                  )
+                )
+                  return;
                 setTab(next);
               }}
             >
@@ -126,7 +144,20 @@ export function StrategistProjectPage({ user, projectId }: { user: AuthUser; pro
                   }}
                 />
               </TabsContent>
-              {tabs.slice(1).map((code) => (
+              <TabsContent value="ENTRANCE_EXAM">
+                <StrategistExamPanel
+                  user={user}
+                  projectId={projectId}
+                  projectName={project.projectName || '未命名项目'}
+                  onChanged={async () => {
+                    void client.invalidateQueries({
+                      queryKey: ['strategist-projects', user.id, 'PM'],
+                    });
+                    await detail.refetch({ throwOnError: true });
+                  }}
+                />
+              </TabsContent>
+              {tabs.slice(2).map((code) => (
                 <TabsContent
                   key={code}
                   value={code}

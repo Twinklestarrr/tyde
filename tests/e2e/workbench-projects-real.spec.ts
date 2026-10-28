@@ -270,7 +270,11 @@ async function strategistFlow(page: Page, origin: string, f: RealWorkbenchFixtur
   );
   await expect(panel.getByRole('spinbutton', { name: '作业 CPD', exact: true })).toBeDisabled();
   const tabs = page.getByRole('tablist', { name: '策略官项目模块', exact: true });
-  for (const name of ['准入考试', '标准与培训', '招募执行专家', '人员管理', '生产任务']) {
+  await tabs.getByRole('tab', { name: '准入考试', exact: true }).click();
+  await expect(page.getByRole('region', { name: '准入考试', exact: true })).toContainText(
+    '生产计划未配置准入考试',
+  );
+  for (const name of ['标准与培训', '招募执行专家', '人员管理', '生产任务']) {
     await tabs.getByRole('tab', { name, exact: true }).click();
     await expect(page.getByRole('tabpanel', { name, exact: true })).toContainText('入口暂未开放');
   }

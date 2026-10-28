@@ -159,6 +159,7 @@ function StrategistProjectsRoute() {
 function StrategistProjectRoute() {
   const session = useSession();
   const { projectId } = strategistProjectRoute.useParams();
+  const { tab } = strategistProjectRoute.useSearch();
   if (session.data && (session.data.selectedRole ?? session.data.role) !== 'PM')
     return <Navigate to="/" replace />;
   if (!/^[1-9]\d*$/.test(projectId) || Number(projectId) > 2_147_483_647)
@@ -169,6 +170,7 @@ function StrategistProjectRoute() {
         key={`${session.data.id}:${projectId}`}
         user={session.data}
         projectId={Number(projectId)}
+        initialTab={tab}
       />
     )
   );
@@ -272,6 +274,10 @@ const strategistProjectsRoute = createRoute({
 const strategistProjectRoute = createRoute({
   getParentRoute: () => workspaceRoute,
   path: '/strategist/projects/$projectId',
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM' } =>
+    search.tab === 'ENTRANCE_EXAM' || search.tab === 'PRODUCTION_PLAN' ? { tab: search.tab } : {},
   component: StrategistProjectRoute,
   errorComponent: () => <PageRecovery />,
 });

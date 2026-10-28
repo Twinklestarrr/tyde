@@ -16,6 +16,7 @@ export default defineConfig({
     'project-manager.spec.ts',
     'production-plan.spec.ts',
     'expert-actions.spec.ts',
+    'entrance-exams.spec.ts',
   ],
   workers: 1,
   timeout: 30_000,

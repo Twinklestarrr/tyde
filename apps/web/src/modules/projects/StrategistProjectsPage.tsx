@@ -107,8 +107,11 @@ export function StrategistProjectsPage({ user }: { user: AuthUser }) {
                   <Link
                     to="/strategist/projects/$projectId"
                     params={{ projectId: String(project.id) }}
+                    search={
+                      project.currentNodeCode === 'ENTRANCE_EXAM' ? { tab: 'ENTRANCE_EXAM' } : {}
+                    }
                   >
-                    生产计划
+                    {project.currentNodeCode === 'ENTRANCE_EXAM' ? '准入考试' : '生产计划'}
                     <ArrowRight className="size-4" aria-hidden />
                   </Link>
                 </Button>
