@@ -1,4 +1,4 @@
-import { useEffect, type PropsWithChildren } from 'react';
+import { useEffect, useRef, type PropsWithChildren } from 'react';
 import {
   createHashHistory,
   createRootRoute,
@@ -8,6 +8,7 @@ import {
   Navigate,
   Outlet,
   RouterProvider,
+  useNavigate,
   useRouterState,
 } from '@tanstack/react-router';
 import { AuthLayout } from '../layouts/AuthLayout';
@@ -103,26 +104,26 @@ function Workspace() {
   ) : null;
 }
 
-/** 会话请求失败时保留错误和重试入口，仅 401 视为未登录。 */
+/** 首次读取失败自动回首页恢复，仅 401 视为未登录。 */
 function SessionBoundary({ children }: PropsWithChildren) {
   const session = useSession();
-  if (session.isPending)
+  const navigate = useNavigate();
+  const recoveryStarted = useRef(false);
+  const unavailable = session.isError && !session.data;
+  const { refetch } = session;
+  useEffect(() => {
+    if (!unavailable || recoveryStarted.current) return;
+    recoveryStarted.current = true;
+    void navigate({ to: '/', replace: true });
+    void refetch();
+  }, [unavailable, navigate, refetch]);
+  if (session.isPending || unavailable)
     return (
       <div className="grid min-h-svh place-items-center bg-muted p-[24px]">
         <p role="status" className="text-[14px] text-[var(--color-neutral-strong)]">
           正在恢复登录状态...
         </p>
       </div>
-    );
-  if (session.isError && !session.data)
-    return (
-      <PageRecovery
-        fullPage
-        title="暂时无法加载账户资料"
-        description="请稍后重试，或返回首页重新加载。"
-        onRetry={() => void session.refetch()}
-        loading={session.isFetching}
-      />
     );
   if (!session.data) return <Navigate to="/auth" replace />;
   return children;

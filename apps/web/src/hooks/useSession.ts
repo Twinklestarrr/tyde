@@ -19,6 +19,7 @@ export function useSession() {
     ...sessionQuery,
     refetchInterval: ({ state }) => {
       const error = state.error;
+      if (error && !state.data) return 3000;
       return error instanceof ApiError &&
         error.code !== 'INVALID_RESPONSE' &&
         (error.status === 0 || (error.status >= 500 && error.status < 600))
