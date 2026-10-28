@@ -71,6 +71,7 @@ async function webBackend(page: Page) {
     currentFailureOnce: false,
     currentNetworkFailure: false,
     currentInvalidResponse: false,
+    currentHold: undefined as Promise<void> | undefined,
     smsStatus: 200,
   };
   const requests: RequestRecord[] = [];
@@ -89,6 +90,7 @@ async function webBackend(page: Page) {
       route.fulfill({ status, json: failure(status, message), headers });
     switch (path) {
       case '/api/v1/users/me':
+        if (state.currentHold) await state.currentHold;
         if (state.currentNetworkFailure) return route.abort('failed');
         if (state.currentStatus !== 200) {
           const status = state.currentStatus;
@@ -188,7 +190,7 @@ async function sessionRead(page: Page, action: () => Promise<unknown>, failed = 
     await action();
     await expect
       .poll(async () => {
-        // React Query 的通知和首次失败后的立即重读均需推进零延时定时器。
+        // 网络 Promise 完成后，React Query 的通知仍需推进零延时定时器。
         await page.clock.runFor(50);
         return completed;
       })
@@ -417,7 +419,7 @@ for (const [mode, origin] of [
     expect(storage).not.toContain(registrationToken);
   });
 
-  test(`Web ${mode} 会话首次503自动返回首页并立即恢复，无需点击`, async ({ page }) => {
+  test(`Web ${mode} 会话首次503自动返回首页，三秒后仅重试一次恢复`, async ({ page }) => {
     const { state, requests } = await webBackend(page);
     await pauseClock(page);
     state.signedIn = true;
@@ -428,7 +430,11 @@ for (const [mode, origin] of [
       .addCookies([
         { name: 'fixture_session', value: 'active', url: origin, httpOnly: true, sameSite: 'Lax' },
       ]);
-    await sessionRead(page, () => page.goto(origin + '/#/profile'), false, 2);
+    await sessionRead(page, () => page.goto(origin + '/#/profile'));
+    await expectSessionRecovery(page);
+    await expect(page).toHaveURL(/#\/$/);
+    expect(sessionReads(requests)).toHaveLength(1);
+    await sessionRead(page, () => page.clock.runFor(3_000));
     await expectWorkspace(page);
     await expect(page).toHaveURL(/#\/$/);
     await expect(
@@ -441,7 +447,7 @@ for (const [mode, origin] of [
     expectSessionReads(requests);
   });
 
-  test(`Web ${mode} 会话网络失败和503无需点击自动恢复，成功后停止轮询`, async ({ page }) => {
+  test(`Web ${mode} 会话网络失败自动回首页重试一次，成功后停止读取`, async ({ page }) => {
     const { state, requests } = await webBackend(page);
     await pauseClock(page);
     state.signedIn = true;
@@ -455,55 +461,43 @@ for (const [mode, origin] of [
       .addCookies([
         { name: 'fixture_session', value: 'active', url: origin, httpOnly: true, sameSite: 'Lax' },
       ]);
-    await sessionRead(page, () => page.goto(origin + '/#/profile'), true, 2);
+    await sessionRead(page, () => page.goto(origin + '/#/profile'), true);
     await expectSessionRecovery(page);
     await expect(page).toHaveURL(/#\/$/);
-    expect(sessionReads(requests)).toHaveLength(2);
-    expect(documents).toBe(1);
-
-    await sessionRead(page, () => page.clock.runFor(3_000), true);
-    await expectSessionRecovery(page);
-    expect(sessionReads(requests)).toHaveLength(3);
+    expect(sessionReads(requests)).toHaveLength(1);
     expect(documents).toBe(1);
 
     state.currentNetworkFailure = false;
-    state.currentStatus = 503;
-    await sessionRead(page, () => page.clock.runFor(3_000));
-    await expectSessionRecovery(page);
-    await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toHaveCount(0);
-    expect(sessionReads(requests)).toHaveLength(4);
-    expect(documents).toBe(1);
-
     state.currentStatus = 200;
     await sessionRead(page, () => page.clock.runFor(3_000));
     await expectWorkspace(page);
-    expect(sessionReads(requests)).toHaveLength(5);
+    expect(sessionReads(requests)).toHaveLength(2);
     await page.clock.runFor(9_000);
-    expect(sessionReads(requests)).toHaveLength(5);
+    expect(sessionReads(requests)).toHaveLength(2);
     expect(documents).toBe(1);
     expectSessionReads(requests);
   });
 
-  test(`Web ${mode} 会话503恢复为401自动进入登录页并停止轮询`, async ({ page }) => {
+  test(`Web ${mode} 会话503重试为401自动进入登录页并停止读取`, async ({ page }) => {
     const { state, requests } = await webBackend(page);
     await pauseClock(page);
     state.currentStatus = 503;
-    await sessionRead(page, () => page.goto(origin + '/#/profile'), false, 2);
+    await sessionRead(page, () => page.goto(origin + '/#/profile'));
     await expectSessionRecovery(page);
     await expect(page).toHaveURL(/#\/$/);
-    expect(sessionReads(requests)).toHaveLength(2);
+    expect(sessionReads(requests)).toHaveLength(1);
     state.currentStatus = 401;
     await sessionRead(page, () => page.clock.runFor(3_000));
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
     await expect(page).toHaveURL(/#\/auth$/);
-    expect(sessionReads(requests)).toHaveLength(3);
+    expect(sessionReads(requests)).toHaveLength(2);
     await page.clock.runFor(9_000);
-    expect(sessionReads(requests)).toHaveLength(3);
+    expect(sessionReads(requests)).toHaveLength(2);
     expectSessionReads(requests);
   });
 
   for (const invalidResponse of [false, true]) {
-    test(`Web ${mode} 会话${invalidResponse ? '响应格式异常' : '403'}自动回首页重读且不误判未登录`, async ({
+    test(`Web ${mode} 会话${invalidResponse ? '响应格式异常' : '403'}直接返回登录入口，不重试或清除Cookie`, async ({
       page,
     }) => {
       const { state, requests } = await webBackend(page);
@@ -520,24 +514,109 @@ for (const [mode, origin] of [
           sameSite: 'Lax',
         },
       ]);
-      await sessionRead(page, () => page.goto(origin + '/#/profile'), false, 2);
-      await expectSessionRecovery(page);
-      await expect(page).toHaveURL(/#\/$/);
-      await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toHaveCount(0);
-      expect(sessionReads(requests)).toHaveLength(2);
-      await sessionRead(page, () => page.clock.runFor(3_000));
-      await expectSessionRecovery(page);
-      expect(sessionReads(requests)).toHaveLength(3);
+      await sessionRead(page, () => page.goto(origin + '/#/profile'));
+      await expect(page).toHaveURL(/#\/auth$/);
+      await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
+      await expect(page.getByText('正在恢复登录状态...', { exact: true })).toHaveCount(0);
+      expect(sessionReads(requests)).toHaveLength(1);
+      await page.clock.runFor(30_000);
+      expect(sessionReads(requests)).toHaveLength(1);
+      expect(
+        (await page.context().cookies(origin)).find(({ name }) => name === 'fixture_session'),
+      ).toMatchObject({ value: 'active', httpOnly: true });
+      expectSessionReads(requests);
+
+      // 恢复入口没有退出会话；服务恢复后主动打开首页仍可使用原 Cookie。
       state.currentStatus = 200;
       state.currentInvalidResponse = false;
-      await sessionRead(page, () => page.clock.runFor(3_000));
+      await sessionRead(page, () => page.goto(origin + '/#/'));
       await expectWorkspace(page);
-      expect(sessionReads(requests)).toHaveLength(4);
+      expect(sessionReads(requests)).toHaveLength(2);
       await page.clock.runFor(9_000);
-      expect(sessionReads(requests)).toHaveLength(4);
+      expect(sessionReads(requests)).toHaveLength(2);
       expectSessionReads(requests);
     });
   }
+
+  for (const networkFailure of [false, true]) {
+    test(`Web ${mode} 会话持续${networkFailure ? '网络失败' : '503'}重试耗尽后返回登录入口并停止请求`, async ({
+      page,
+    }) => {
+      const { state, requests } = await webBackend(page);
+      await pauseClock(page);
+      state.signedIn = true;
+      state.currentStatus = 503;
+      state.currentNetworkFailure = networkFailure;
+      let documents = 0;
+      page.on('request', (request) => {
+        if (request.isNavigationRequest() && request.frame() === page.mainFrame()) documents += 1;
+      });
+      await page.context().addCookies([
+        {
+          name: 'fixture_session',
+          value: 'active',
+          url: origin,
+          httpOnly: true,
+          sameSite: 'Lax',
+        },
+      ]);
+      await sessionRead(page, () => page.goto(origin + '/#/profile'), networkFailure);
+      await expectSessionRecovery(page);
+      await expect(page).toHaveURL(/#\/$/);
+      expect(sessionReads(requests)).toHaveLength(1);
+      await sessionRead(page, () => page.clock.runFor(3_000), networkFailure);
+      await expect(page).toHaveURL(/#\/auth$/);
+      await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
+      await expect(page.getByText('正在恢复登录状态...', { exact: true })).toHaveCount(0);
+      expect(sessionReads(requests)).toHaveLength(2);
+      await page.clock.runFor(30_000);
+      expect(sessionReads(requests)).toHaveLength(2);
+      expect(documents).toBe(1);
+      expect(
+        (await page.context().cookies(origin)).find(({ name }) => name === 'fixture_session'),
+      ).toMatchObject({ value: 'active', httpOnly: true });
+      expectSessionReads(requests);
+    });
+  }
+
+  test(`Web ${mode} 会话请求一直未返回时十五秒自动进入登录入口`, async ({ page }) => {
+    const { state, requests } = await webBackend(page);
+    await pauseClock(page);
+    state.signedIn = true;
+    state.currentStatus = 503;
+    let release!: () => void;
+    state.currentHold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page
+      .context()
+      .addCookies([
+        { name: 'fixture_session', value: 'active', url: origin, httpOnly: true, sameSite: 'Lax' },
+      ]);
+    try {
+      await page.goto(origin + '/#/profile');
+      await expectSessionRecovery(page);
+      await expect.poll(() => sessionReads(requests).length).toBe(1);
+      await page.clock.runFor(14_000);
+      await expectSessionRecovery(page);
+      await page.clock.runFor(1_000);
+      // 超时状态更新后，继续推进路由通知的零延时任务。
+      await page.clock.runFor(50);
+      await expect(page).toHaveURL(/#\/auth$/);
+      await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
+      await expect(page.getByText('正在恢复登录状态...', { exact: true })).toHaveCount(0);
+      await page.clock.runFor(30_000);
+      expect(sessionReads(requests)).toHaveLength(1);
+      expect(
+        (await page.context().cookies(origin)).find(({ name }) => name === 'fixture_session'),
+      ).toMatchObject({ value: 'active', httpOnly: true });
+      expectSessionReads(requests);
+    } finally {
+      state.currentHold = undefined;
+      release();
+      await page.unrouteAll({ behavior: 'wait' });
+    }
+  });
 }
 
 test('个人资料在1280与375视口保留字段、键盘操作和完整单页布局', async ({ page }) => {
@@ -880,11 +959,11 @@ test('Electron DEV 会话503自动恢复为401，进入登录页后停止轮询'
     const page = await app.firstWindow();
     await expectSessionRecovery(page);
     await expect(page).toHaveURL(/:5177\/(?:#\/)?$/);
-    await expect.poll(() => sessionReads(backend.requests).length).toBe(2);
+    await expect.poll(() => sessionReads(backend.requests).length).toBe(1);
     backend.state.currentStatus = 200;
     await expect(page.getByRole('heading', { name: '登录 / 注册', exact: true })).toBeVisible();
     await page.waitForTimeout(3500);
-    expect(sessionReads(backend.requests)).toHaveLength(3);
+    expect(sessionReads(backend.requests)).toHaveLength(2);
     expectSessionReads(backend.requests);
     expect(backend.preflights).toEqual([]);
   } finally {
@@ -931,15 +1010,15 @@ test('Electron DEV 已登录会话503自动恢复为200，成功后停止轮询�
     await page.reload();
     await expectSessionRecovery(page);
     await expect(page).toHaveURL(/#\/$/);
-    await expect.poll(() => sessionReads(backend.requests.slice(beforeRecovery)).length).toBe(2);
+    await expect.poll(() => sessionReads(backend.requests.slice(beforeRecovery)).length).toBe(1);
     backend.state.currentStatus = 200;
     await expectWorkspace(page);
     await expect(page).toHaveURL(/#\/$/);
-    expect(sessionReads(backend.requests.slice(beforeRecovery))).toHaveLength(3);
+    expect(sessionReads(backend.requests.slice(beforeRecovery))).toHaveLength(2);
     await page.waitForTimeout(3500);
     await expect(page).toHaveURL(/#\/$/);
     const recoveryRequests = backend.requests.slice(beforeRecovery);
-    expect(sessionReads(recoveryRequests)).toHaveLength(3);
+    expect(sessionReads(recoveryRequests)).toHaveLength(2);
     expect(documents).toBe(1);
     expectSessionReads(recoveryRequests);
     expect(sessionReads(recoveryRequests).every(({ client }) => client === undefined)).toBe(true);

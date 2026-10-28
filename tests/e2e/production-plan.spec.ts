@@ -384,6 +384,8 @@ for (const [mode, desktop] of [
   ['Electron 运行配置', true],
 ] as const) {
   test(`${mode} 策略官入口、完整计划与明细增删、确认单写后只读`, async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
     const { state, calls, releaseConfirm } = await backend(page, desktop);
     await page.goto(`${origin}/#/`);
     await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
@@ -405,6 +407,41 @@ for (const [mode, desktop] of [
       await expect(tabs.getByRole('tab', { name, exact: true })).toBeVisible();
     await expect(tabs.getByRole('tab', { name: /^(招募策略官|结项)$/ })).toHaveCount(0);
     const panel = await fillPlan(page);
+    await page.evaluate(() => {
+      const calls: string[] = [];
+      Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
+        configurable: true,
+        value(this: HTMLInputElement) {
+          calls.push(this.id);
+        },
+      });
+      Reflect.set(window, 'productionDatePickerCalls', calls);
+    });
+    const pickerCalls: string[] = [];
+    for (let stage = 1; stage <= 2; stage++) {
+      for (const [label, field, value] of [
+        ['开始日期', 'startDate', '2099-01-05'],
+        ['结束日期', 'endDate', '2099-01-09'],
+      ] as const) {
+        const date = panel.getByLabel(new RegExp(`^阶段${stage}${label}\\s*\\*$`));
+        await date.click({ position: { x: 12, y: 12 } });
+        pickerCalls.push(`production-plan-stages-${stage - 1}-${field}`);
+        expect(await page.evaluate(() => Reflect.get(window, 'productionDatePickerCalls'))).toEqual(
+          pickerCalls,
+        );
+        await expect(date).toHaveValue(value);
+      }
+    }
+    await page.evaluate(() => {
+      Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
+        configurable: true,
+        value: undefined,
+      });
+    });
+    const firstStartDate = panel.getByLabel(/^阶段1开始日期\s*\*$/);
+    await firstStartDate.click({ position: { x: 12, y: 12 } });
+    await firstStartDate.fill('2099-01-05');
+    await expect(firstStartDate).toHaveValue('2099-01-05');
     await panel.getByRole('button', { name: '添加人群', exact: true }).click();
     await expect(panel.getByRole('textbox', { name: '人群2名称', exact: true })).toBeVisible();
     await panel.getByRole('button', { name: '删除人群2', exact: true }).click();
@@ -441,6 +478,7 @@ for (const [mode, desktop] of [
     await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
     await expect(panel).toContainText('533');
     expect(calls('production-plan/confirm')).toHaveLength(1);
+    expect(pageErrors).toEqual([]);
   });
 }
 

@@ -50,7 +50,7 @@ export function ProjectCreateFields({
     options: {
       required?: boolean;
       multiline?: boolean;
-      type?: 'number' | 'datetime-local';
+      type?: 'number' | 'date';
       maxLength?: number;
       description?: string;
     } = {},
@@ -80,13 +80,7 @@ export function ProjectCreateFields({
               id={id}
               size="profile"
               type={options.type ?? 'text'}
-              step={
-                options.type === 'datetime-local'
-                  ? 1
-                  : options.type === 'number'
-                    ? 'any'
-                    : undefined
-              }
+              step={options.type === 'number' ? 'any' : undefined}
               min={options.type === 'number' ? 0 : undefined}
               maxLength={options.maxLength}
               aria-invalid={invalid || undefined}
@@ -228,10 +222,10 @@ export function ProjectCreateFields({
               <Input id="project-create-creator" size="profile" value={creatorName} readOnly />
             </FormField>
           </div>
-          {text('deadline', '截止时间（上海时间）', {
+          {text('deadline', '截止日期（上海时间）', {
             required: true,
-            type: 'datetime-local',
-            description: '按上海时间填写，包含时、分、秒。',
+            type: 'date',
+            description: '所选日期当天结束时截止。',
           })}
           <div className="grid gap-[20px] sm:grid-cols-2">
             {text('projectQuantity', '项目量级', { required: true, type: 'number' })}

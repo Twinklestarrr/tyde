@@ -809,7 +809,7 @@ async function fillBasic(page: Page) {
   await select(page, '二级项目类型', '文本标注');
   await selectThirdCategories(page, ['内容分类']);
   await select(page, '难度等级', '中等');
-  await page.getByLabel(/^截止时间（上海时间）/).fill('2099-12-31T18:20:30');
+  await page.getByLabel(/^截止日期（上海时间）/).fill('2099-12-31');
   await page.getByLabel(/^项目量级/).fill('120.5');
   await page.getByLabel(/^量级单位/).fill('条');
 }
@@ -837,6 +837,23 @@ for (const [mode, desktop] of [
     await expect(page.getByText('请填写此项', { exact: true }).first()).toBeVisible();
     expect(calls('projects/create')).toHaveLength(0);
     await fillBasic(page);
+    const deadline = page.getByLabel(/^截止日期（上海时间）/);
+    await expect(deadline).toHaveAttribute('type', 'date');
+    await expect(deadline).toHaveValue('2099-12-31');
+    await deadline.evaluate(() => {
+      const calls: string[] = [];
+      Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
+        configurable: true,
+        value(this: HTMLInputElement) {
+          calls.push(this.id);
+        },
+      });
+      Reflect.set(window, 'projectDatePickerCalls', calls);
+    });
+    await deadline.click({ position: { x: 12, y: 12 } });
+    expect(await page.evaluate(() => Reflect.get(window, 'projectDatePickerCalls'))).toEqual([
+      'project-create-deadline',
+    ]);
     if (!desktop) await screenshot(page, 'create-basic');
     await expect(page.getByLabel('需求方', { exact: true })).toHaveValue('测试创建人');
     await expect(page.getByLabel('创建者', { exact: true })).toBeEditable({ editable: false });
@@ -873,7 +890,7 @@ for (const [mode, desktop] of [
       difficultyLevel: 'MEDIUM',
       projectQuantity: 120.5,
       quantityUnit: '条',
-      deadline: '2099-12-31 18:20:30',
+      deadline: '2099-12-31 23:59:59',
       requiredHeadcount: 3,
       educationRequirement: 'BACHELOR',
       employmentType: 'PART_TIME',
@@ -906,7 +923,7 @@ test('草稿恢复完整快照和版本，冲突保留输入并要求显式重�
   state.saveStatus = 409;
   await page.goto(`${origin}/#/projects/create`);
   await expect(page.getByLabel(/^项目名称/)).toHaveValue('待完善草稿');
-  await expect(page.getByLabel(/^截止时间（上海时间）/)).toHaveValue('2099-12-31T18:20:30');
+  await expect(page.getByLabel(/^截止日期（上海时间）/)).toHaveValue('2099-12-31');
   await page.getByLabel(/^项目名称/).fill('本地尚未保存的改动');
   await page.getByRole('button', { name: '保存草稿', exact: true }).click();
   await expect(
@@ -918,7 +935,7 @@ test('草稿恢复完整快照和版本，冲突保留输入并要求显式重�
   expect(calls('projects/create')[0]?.body).toMatchObject({
     operation: 'SAVE_DRAFT',
     versionNo: 7,
-    deadline: '2099-12-31 18:20:30',
+    deadline: '2099-12-31 23:59:59',
     attachments: [{ id: 81, sortNo: 0 }],
   });
   state.draft = { ...draftFixture(), projectName: '远端更新的草稿', versionNo: 8 };

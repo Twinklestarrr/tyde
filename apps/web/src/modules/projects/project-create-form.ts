@@ -38,7 +38,7 @@ export const projectStepFields: (keyof ProjectCreateValues)[][] = [
   ['standardContent', 'standardLink'],
 ];
 
-/** 草稿是唯一持久化来源，保留上海日期与时间，不进行浏览器时区转换。 */
+/** 草稿是唯一持久化来源，回显上海日期，不进行浏览器时区转换。 */
 export function projectCreateValues(draft: ProjectDraft | null): ProjectCreateValues {
   return {
     projectName: draft?.projectName ?? '',
@@ -49,7 +49,7 @@ export function projectCreateValues(draft: ProjectDraft | null): ProjectCreateVa
     difficultyLevel: draft?.difficultyLevel ?? (draft ? '' : 'MEDIUM'),
     projectQuantity: draft?.projectQuantity?.toString() ?? '',
     quantityUnit: draft?.quantityUnit ?? '',
-    deadline: draft?.deadline?.replace(' ', 'T') ?? '',
+    deadline: draft?.deadline?.slice(0, 10) ?? '',
     requiredHeadcount: draft?.requiredHeadcount?.toString() ?? '',
     educationRequirement: draft?.educationRequirement ?? 'BACHELOR',
     employmentType: draft?.employmentType ?? (draft ? '' : 'UNLIMITED'),
@@ -100,7 +100,7 @@ export function validateProjectCreate(
       /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(deadline) &&
       Number.isFinite(parsed.getTime()) &&
       parsed.toISOString().slice(0, 19).replace('T', ' ') === deadline;
-    if (!valid) errors.deadline = '请填写有效的截止日期与时间';
+    if (!valid) errors.deadline = '请填写有效的截止日期';
     else {
       const initialTime =
         createdAt ??
@@ -114,16 +114,15 @@ export function validateProjectCreate(
           second: '2-digit',
           hourCycle: 'h23',
         }).format(new Date());
-      if (deadline <= initialTime) errors.deadline = '截止时间须晚于草稿创建时间';
+      if (deadline <= initialTime) errors.deadline = '截止日期须晚于草稿创建时间';
     }
   }
   return errors;
 }
 
-/** 将原生日期时间输入转换为后端要求的上海墙钟格式并保留秒。 */
+/** 所选日期在上海当天结束时截止，保留后端要求的墙钟时间格式。 */
 function projectDeadline(value: string) {
-  const result = value.replace('T', ' ');
-  return result.length === 16 ? `${result}:00` : result;
+  return `${value} 23:59:59`;
 }
 
 /** 提交完整快照，空文本显式清空，不误保留上次草稿内容。 */

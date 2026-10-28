@@ -1,4 +1,4 @@
-import { useEffect, useRef, type PropsWithChildren } from 'react';
+import { useEffect, useState, type PropsWithChildren } from 'react';
 import {
   createHashHistory,
   createRootRoute,
@@ -104,20 +104,22 @@ function Workspace() {
   ) : null;
 }
 
-/** 首次读取失败自动回首页恢复，仅 401 视为未登录。 */
+/** 首次恢复有界重试；失败回登录入口，但不清除仍可能有效的会话。 */
 function SessionBoundary({ children }: PropsWithChildren) {
   const session = useSession();
   const navigate = useNavigate();
-  const recoveryStarted = useRef(false);
-  const unavailable = session.isError && !session.data;
-  const { refetch } = session;
+  const [expired, setExpired] = useState(false);
+  const recovering = session.isPending && session.failureCount > 0;
   useEffect(() => {
-    if (!unavailable || recoveryStarted.current) return;
-    recoveryStarted.current = true;
-    void navigate({ to: '/', replace: true });
-    void refetch();
-  }, [unavailable, navigate, refetch]);
-  if (session.isPending || unavailable)
+    if (recovering && !expired) void navigate({ to: '/', replace: true });
+  }, [recovering, expired, navigate]);
+  useEffect(() => {
+    if (!session.isPending) return;
+    const timer = window.setTimeout(() => setExpired(true), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [session.isPending]);
+  if (!session.data && (expired || session.isError)) return <Navigate to="/auth" replace />;
+  if (session.isPending)
     return (
       <div className="grid min-h-svh place-items-center bg-muted p-[24px]">
         <p role="status" className="text-[14px] text-[var(--color-neutral-strong)]">
