@@ -1,5 +1,6 @@
 import type { OrganizationCreateInput } from './auth.js';
 import type { OrganizationDetail } from './index.js';
+import type { WorkbenchAttendanceDay, WorkbenchAttendanceMonth } from './workbench.js';
 
 /** 组织客户端契约，逐项对应现有 HTTP 接口；不定义服务端 schema。 */
 export type OrganizationPosition = 'OWNER' | 'ADMIN' | 'MEMBER';
@@ -232,12 +233,81 @@ export interface OrganizationImportResult {
   members: OrganizationImportedMember[];
   createdAt: string | null;
 }
+export interface OrganizationSchedulesInput {
+  orgId: string;
+  month: string;
+  keyword?: string | null;
+  employmentType?: OrganizationEmploymentType | null;
+  joinStatus?: OrganizationJoinStatus | null;
+  position?: OrganizationPosition | null;
+  projectId?: number | null;
+  current?: number;
+  size?: number;
+}
+export type OrganizationScheduleDay = Omit<WorkbenchAttendanceDay, 'application' | 'permissions'>;
+export interface OrganizationScheduleMember {
+  memberId: string;
+  userId: string;
+  realName: string | null;
+  nickname: string | null;
+  joinStatus: OrganizationJoinStatus;
+  canSchedule: boolean;
+  summary: WorkbenchAttendanceMonth['summary'];
+  days: OrganizationScheduleDay[];
+}
+export interface OrganizationSchedulesResult {
+  month: string;
+  total: number;
+  pages: number;
+  current: number;
+  size: number;
+  members: OrganizationScheduleMember[];
+}
+interface OrganizationScheduleShift {
+  dayType: 'WORK' | 'REST';
+  startTime?: string | null;
+  endTime?: string | null;
+  timezone?: string | null;
+}
+export interface OrganizationScheduleBatchInput extends OrganizationScheduleShift {
+  orgId: string;
+  memberIds: string[];
+  startDate: string;
+  endDate: string;
+  /** 1=周一，7=周日；省略/null/空数组使用周一至周五。 */
+  weekdays?: number[] | null;
+  overwrite: boolean;
+}
+export interface OrganizationScheduleDetailsInput {
+  orgId: string;
+  schedules: (OrganizationScheduleShift & { memberId: string; scheduleDate: string })[];
+  timezone?: string | null;
+  overwrite: boolean;
+}
+export interface OrganizationScheduleResult {
+  batchNo: string;
+  createdCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  conflicts: { memberId: string; scheduleDate: string; scheduleId: number; versionNo: number }[];
+}
 export interface OrganizationApi {
   createOrganization(input: OrganizationCreateInput): Promise<OrganizationDetail>;
   updateOrganization(input: OrganizationUpdateInput): Promise<OrganizationUpdateResult>;
   listOrganizationMembers(
     input: OrganizationMemberQuery,
   ): Promise<OrganizationPage<OrganizationMember>>;
+  listOrganizationSchedules(
+    input: OrganizationSchedulesInput,
+  ): Promise<OrganizationSchedulesResult>;
+  batchOrganizationSchedules(
+    input: OrganizationScheduleBatchInput,
+    idempotencyKey: string,
+  ): Promise<OrganizationScheduleResult>;
+  batchOrganizationScheduleDetails(
+    input: OrganizationScheduleDetailsInput,
+    idempotencyKey: string,
+  ): Promise<OrganizationScheduleResult>;
   updateOrganizationMember(
     input: OrganizationMemberUpdateInput,
   ): Promise<OrganizationMemberUpdateResult>;

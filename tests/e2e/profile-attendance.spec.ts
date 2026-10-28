@@ -158,6 +158,8 @@ async function backend(page: Page, position: 'MEMBER' | 'ADMIN' | 'OWNER' | null
       return reply(calendar(url.searchParams.get('month')!));
     if (path === '/api/v1/organizations/calendar/holidays')
       return reply({ month: url.searchParams.get('month'), days: [] });
+    if (path === '/api/v1/organizations/schedules')
+      return reply({ month: body.month, total: 0, pages: 0, current: 1, size: 20, members: [] });
     if (path === '/api/v1/organizations')
       return reply({
         id: orgId,
@@ -301,9 +303,12 @@ test('组织成员按日权限请假，使用null日版本并按真实流程版�
   const attendance = page.getByRole('region', { name: '我的排班考勤', exact: true });
   await expect(attendance.getByText('组织排班', { exact: true })).toBeVisible();
   await expect(
-    attendance.getByText('当前组织排班仅支持查看，暂不支持新增或修改班次。', { exact: true }),
+    attendance.getByText('组织班次由主管或管理员统一安排；你可以在这里查看本人排班与考勤。', {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(attendance.getByRole('button', { name: '为自己排班', exact: true })).toHaveCount(0);
+  await expect(attendance.getByRole('link', { name: '管理组织排班', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '2026-10-01 待出勤', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '排班考勤详情', exact: true });
   await expect(dialog.getByRole('button', { name: '直接修正考勤', exact: true })).toHaveCount(0);
@@ -336,6 +341,29 @@ test('组织成员按日权限请假，使用null日版本并按真实流程版�
     true,
   );
 });
+
+for (const position of ['OWNER', 'ADMIN'] as const)
+  test(`${position}从个人考勤直达组织排班管理，普通人员列表不预加载`, async ({ page }) => {
+    const { requests } = await backend(page, position);
+    await openAttendance(page);
+    await page.getByRole('link', { name: '管理组织排班', exact: true }).click();
+    await expect(page).toHaveURL(/#\/organization\?tab=schedules$/);
+    await expect(page.getByRole('tab', { name: '排班管理', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect
+      .poll(() => requests.filter(({ path }) => path === '/api/v1/organizations/schedules').length)
+      .toBe(1);
+    expect(
+      requests.find(({ path }) => path === '/api/v1/organizations/schedules')?.body,
+    ).toMatchObject({
+      orgId,
+      current: 1,
+      size: 20,
+    });
+    expect(requests.filter(({ path }) => path === '/api/v1/organizations/members')).toHaveLength(0);
+  });
 
 test('考勤修正冲突保留事由，显式重读后使用新日版本，不使用排班版本', async ({ page }) => {
   const { state, requests } = await backend(page, 'MEMBER');
@@ -411,8 +439,11 @@ test('主管概览与顶层入口保留考勤和申请，隐藏项目且不请�
   const attendance = page.getByRole('region', { name: '我的排班考勤', exact: true });
   await expect(attendance.getByText('组织排班', { exact: true })).toBeVisible();
   await expect(
-    attendance.getByText('当前组织排班仅支持查看，暂不支持新增或修改班次。', { exact: true }),
+    attendance.getByText('可前往组织管理的排班管理，为自己和组织成员安排班次。', {
+      exact: true,
+    }),
   ).toBeVisible();
+  await expect(attendance.getByRole('link', { name: '管理组织排班', exact: true })).toBeVisible();
   await expect(attendance.getByRole('button', { name: '为自己排班', exact: true })).toHaveCount(0);
   await page.getByRole('tab', { name: '概览', exact: true }).click();
   await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveAttribute(

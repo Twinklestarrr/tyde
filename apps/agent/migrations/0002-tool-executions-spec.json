@@ -1,0 +1,49 @@
+{
+  "version": "0002_tool_executions",
+  "classification": "W4/W5 integration design added in this change; not part of the historical 0001 baseline",
+  "sources": [
+    "packages/shared/src/agent/contracts/sources/22-reads-events.openapi.json#/components/schemas/ToolExecutionSummary",
+    "apps/agent/src/pi/session.ts#PiToolLifecycle",
+    "apps/agent/src/storage/native-store.ts#ExecutionAuthority"
+  ],
+  "migrationFiles": ["sql/0002/01_tool_executions.sql", "sql/0002/02_privileges.sql"],
+  "table": "agent_tool_executions",
+  "columns": [
+    "id",
+    "conversation_id",
+    "task_id",
+    "attempt_id",
+    "pi_session_id",
+    "model_request_id",
+    "tool_call_id",
+    "tool_name",
+    "source_native_entry_id",
+    "source_revision_id",
+    "result_native_entry_id",
+    "result_revision_id",
+    "status",
+    "row_version",
+    "started_at",
+    "ended_at",
+    "is_demo",
+    "display_label",
+    "input_summary",
+    "result_summary",
+    "result_ref",
+    "error"
+  ],
+  "addedCounts": { "tables": 1, "columns": 22, "foreignKeys": 7, "indexes": 4 },
+  "finalCounts": { "tables": 19, "columns": 291, "foreignKeys": 74, "indexes": 97 },
+  "event": "tool.updated",
+  "invariants": [
+    "No business Operation, receipt or result is created for an ordinary read-only tool.",
+    "One tool_call_id per attempt; identity and terminal projection are immutable.",
+    "Source assistant toolCall, model request observation and result native entry are explicitly linked.",
+    "Only the closed public projection enters the frozen product event; native links and raw payloads stay private.",
+    "Projection row/version and its reliable outbox event are committed in the same transaction.",
+    "An ended attempt cannot retain a running tool projection; stop, budget and isolated recovery settle it.",
+    "A failed/cancelled first projection can describe a native call that was not dispatched; it does not add authorization counters.",
+    "0001 remains byte-for-byte unchanged; upgrading requires the explicit dedicated Agent migration command."
+  ],
+  "validation": "Not executed in this change. Await user confirmation before checks, migration, services or tests."
+}

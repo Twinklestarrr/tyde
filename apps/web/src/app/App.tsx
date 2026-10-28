@@ -135,9 +135,10 @@ function CurrentProfilePage() {
 
 function CurrentOrganizationPage() {
   const session = useSession();
+  const { tab } = organizationRoute.useSearch();
   if (session.data && (session.data.selectedRole ?? session.data.role) !== 'EXPERT')
     return <Navigate to="/" replace />;
-  return session.data && <OrganizationPage user={session.data} />;
+  return session.data && <OrganizationPage user={session.data} initialTab={tab} />;
 }
 
 function CurrentOrganizationCreatePage() {
@@ -173,6 +174,14 @@ const profileRoute = createRoute({
 const organizationRoute = createRoute({
   getParentRoute: () => workspaceRoute,
   path: '/organization',
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: 'members' | 'approvals' | 'schedules' } => ({
+    tab:
+      search.tab === 'members' || search.tab === 'approvals' || search.tab === 'schedules'
+        ? search.tab
+        : undefined,
+  }),
   component: CurrentOrganizationPage,
   errorComponent: () => <PageRecovery />,
 });

@@ -9,3 +9,5 @@ pnpm-lock.yaml
 PROJECT_DESIGN.md
 apps/server/src/generated
 apps/server/public
+# Byte-for-byte contract source snapshots; their SHA-256 is part of provenance.
+packages/shared/src/agent/contracts/sources

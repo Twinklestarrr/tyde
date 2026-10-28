@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { ApiError, type AuthUser, type WorkbenchAttendanceCalendarStatus } from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
@@ -96,6 +97,10 @@ export function ProfileAttendance({
   const [notice, setNotice] = useState('');
   const organization = user.organization;
   const orgId = typeof organization?.id === 'string' ? organization.id : undefined;
+  const canManageOrganization =
+    !!orgId &&
+    ['OWNER', 'ADMIN'].includes(String(organization?.position)) &&
+    ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE'].includes(String(organization?.joinStatus));
   const canRead =
     !organization ||
     (!!orgId &&
@@ -172,12 +177,21 @@ export function ProfileAttendance({
                 ? '可为自己设置工作日、休息日和班次。'
                 : attendance.data.independentSchedule
                   ? '当前账号暂不可编辑排班。'
-                  : '当前组织排班仅支持查看，暂不支持新增或修改班次。'}
+                  : canManageOrganization
+                    ? '可前往组织管理的排班管理，为自己和组织成员安排班次。'
+                    : '组织班次由主管或管理员统一安排；你可以在这里查看本人排班与考勤。'}
             </p>
           </div>
           {attendance.data.permissions.canBatchSchedule && (
             <Button variant="outline" size="settings" onClick={() => setScheduleOpen(true)}>
               为自己排班
+            </Button>
+          )}
+          {!attendance.data.independentSchedule && canManageOrganization && (
+            <Button asChild variant="outline" size="settings">
+              <Link to="/organization" search={{ tab: 'schedules' }}>
+                管理组织排班
+              </Link>
             </Button>
           )}
         </div>

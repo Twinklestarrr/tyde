@@ -1,0 +1,46 @@
+{
+  "name": "@tyde/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist",
+    "migrations",
+    "runtime"
+  ],
+  "scripts": {
+    "predev": "pnpm --filter @tyde/shared build && node ../../scripts/build-agent-runtime-manifest.mjs",
+    "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
+    "build": "pnpm --filter @tyde/shared build && tsc -p tsconfig.json && node ../../scripts/build-agent-runtime-manifest.mjs --compiled",
+    "start": "node --env-file-if-exists=.env dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke:maas": "node --env-file-if-exists=.env --import tsx src/cli/smoke.ts",
+    "smoke:model": "node --env-file-if-exists=.env --import tsx src/cli/model-smoke.ts",
+    "test": "pnpm --filter @tyde/shared build && node --import tsx --test tests/*.test.ts",
+    "migrate": "node --env-file-if-exists=.env --import tsx src/storage/migrations.ts",
+    "db:check": "node --env-file-if-exists=.env --import tsx src/storage/migrations.ts check",
+    "test:db": "node --import tsx --test --test-concurrency=1 tests/*.integration.ts tests/*.integration.test.ts",
+    "test:budget:realtime": "node --import tsx tests/persistent-budget-real-time.ts",
+    "publish:config": "node --env-file-if-exists=.env --import tsx src/storage/execution-config.ts",
+    "pretest": "node ../../scripts/build-agent-runtime-manifest.mjs",
+    "pretest:db": "node ../../scripts/build-agent-runtime-manifest.mjs",
+    "prepublish:config": "node ../../scripts/build-agent-runtime-manifest.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "1.3.0",
+    "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "@fastify/swagger": "9.9.2",
+    "@fastify/swagger-ui": "5.2.6",
+    "@tyde/shared": "workspace:*",
+    "canonicalize": "5.1.0",
+    "fastify": "5.6.2",
+    "kysely": "0.29.7",
+    "pg": "8.23.1",
+    "undici": "8.10.2"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.15"
+  }
+}

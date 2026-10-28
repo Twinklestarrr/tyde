@@ -19,6 +19,10 @@ import {
   type OrganizationApprovalRecord,
   type OrganizationApprovalProcessResult,
   type OrganizationImportResult,
+  type OrganizationScheduleDay,
+  type OrganizationSchedulesInput,
+  type OrganizationSchedulesResult,
+  type OrganizationScheduleResult,
   type WorkbenchProject,
   type WorkbenchProjectDetail,
   type WorkbenchAssignmentDetail,
@@ -634,7 +638,7 @@ export function createHttpAuth(
       invalidResponse();
     return value as unknown as WorkbenchApplication;
   }
-  function workbenchAttendanceDay(value: unknown): WorkbenchAttendanceDay {
+  function attendanceCalendarDay(value: unknown): OrganizationScheduleDay {
     if (
       !record(value) ||
       !strings(value, ['scheduleDate']) ||
@@ -658,7 +662,15 @@ export function createHttpAuth(
       !inEnum(value.sourceType, ['MANUAL', 'AI_ASSISTANT'], true) ||
       !inEnum(value.status, ['ACTIVE', 'CANCELED'], true) ||
       !inEnum(value.autoStatus, attendanceStatuses, true) ||
-      !inEnum(value.finalStatus, attendanceStatuses, true) ||
+      !inEnum(value.finalStatus, attendanceStatuses, true)
+    )
+      invalidResponse();
+    return value as unknown as OrganizationScheduleDay;
+  }
+  function workbenchAttendanceDay(value: unknown): WorkbenchAttendanceDay {
+    attendanceCalendarDay(value);
+    if (
+      !record(value) ||
       !record(value.permissions) ||
       !booleans(value.permissions, [
         'canApplyLeave',
@@ -784,6 +796,166 @@ export function createHttpAuth(
       code: 'VALIDATION_ERROR',
       message: '排班或考勤参数不完整，请检查日期、时段和版本后重试',
     });
+  }
+  function organizationSchedulesInput(input: OrganizationSchedulesInput) {
+    if (
+      !record(input) ||
+      !onlyKeys(input, [
+        'orgId',
+        'month',
+        'keyword',
+        'employmentType',
+        'joinStatus',
+        'position',
+        'projectId',
+        'current',
+        'size',
+      ]) ||
+      !uuid(input.orgId) ||
+      typeof input.month !== 'string' ||
+      !(
+        input.keyword == null ||
+        (typeof input.keyword === 'string' && input.keyword.length <= 100)
+      ) ||
+      !(input.employmentType == null || inEnum(input.employmentType, employments)) ||
+      !(input.joinStatus == null || inEnum(input.joinStatus, joins)) ||
+      !(input.position == null || inEnum(input.position, positions)) ||
+      !(
+        input.projectId == null ||
+        (integer(input.projectId, 1) && input.projectId <= 2147483647)
+      ) ||
+      !(
+        input.current === undefined ||
+        (integer(input.current, 1) && input.current <= 2147483647)
+      ) ||
+      !(input.size === undefined || (integer(input.size, 1) && input.size <= 100))
+    )
+      invalidAttendanceInput();
+    monthQuery(input);
+  }
+  function organizationSchedules(
+    value: unknown,
+    input: OrganizationSchedulesInput,
+  ): OrganizationSchedulesResult {
+    if (
+      !record(value) ||
+      value.month !== input.month ||
+      !integers(value, ['total', 'pages']) ||
+      value.current !== (input.current ?? 1) ||
+      value.size !== (input.size ?? 20) ||
+      value.pages !== Math.ceil(Number(value.total) / Number(value.size)) ||
+      !Array.isArray(value.members) ||
+      value.members.length !==
+        Math.min(
+          Number(value.size),
+          Math.max(0, Number(value.total) - (Number(value.current) - 1) * Number(value.size)),
+        )
+    )
+      invalidResponse();
+    const members = new Set<string>();
+    for (const member of value.members) {
+      if (
+        !record(member) ||
+        !uuid(member.memberId) ||
+        !uuid(member.userId) ||
+        members.has(String(member.memberId).toLowerCase()) ||
+        !strings(member, ['realName', 'nickname'], true) ||
+        !inEnum(member.joinStatus, joins) ||
+        typeof member.canSchedule !== 'boolean' ||
+        member.canSchedule !==
+          ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE'].includes(String(member.joinStatus)) ||
+        !record(member.summary) ||
+        !integers(member.summary, [
+          'presentCount',
+          'lateCount',
+          'earlyLeaveCount',
+          'leaveCount',
+          'absentCount',
+        ]) ||
+        !Array.isArray(member.days) ||
+        member.days.length !== monthDayCount(input.month)
+      )
+        invalidResponse();
+      members.add(String(member.memberId).toLowerCase());
+      member.days.forEach((day, index) => {
+        const parsed = attendanceCalendarDay(day);
+        if (
+          parsed.scheduleDate !== `${input.month}-${String(index + 1).padStart(2, '0')}` ||
+          ![parsed.versionNo, parsed.dailyVersionNo].every(
+            (version) => version === null || attendanceVersion(version),
+          )
+        )
+          invalidResponse();
+      });
+    }
+    return value as unknown as OrganizationSchedulesResult;
+  }
+  function scheduleTimezone(value: unknown) {
+    if (!(value == null || (typeof value === 'string' && value.length <= 64)))
+      invalidAttendanceInput();
+    try {
+      new Intl.DateTimeFormat('en', {
+        timeZone: (value as string | null | undefined)?.trim() || 'Asia/Shanghai',
+      });
+    } catch {
+      invalidAttendanceInput();
+    }
+  }
+  function organizationShift(value: Record<string, unknown>) {
+    const time = (item: unknown): item is string =>
+      typeof item === 'string' && /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(item);
+    if (
+      !inEnum(value.dayType, ['WORK', 'REST']) ||
+      (value.dayType === 'REST'
+        ? value.startTime != null || value.endTime != null
+        : !time(value.startTime) ||
+          !time(value.endTime) ||
+          `${value.startTime}:00`.slice(0, 8) >= `${value.endTime}:00`.slice(0, 8))
+    )
+      invalidAttendanceInput();
+    scheduleTimezone(value.timezone);
+  }
+  function organizationScheduleResult(
+    value: unknown,
+    allowed: Set<string>,
+    overwrite: boolean,
+    exact = true,
+    memberCount = 1,
+  ): OrganizationScheduleResult {
+    if (
+      !record(value) ||
+      !strings(value, ['batchNo']) ||
+      !String(value.batchNo).trim() ||
+      !integers(value, ['createdCount', 'updatedCount', 'skippedCount']) ||
+      !Array.isArray(value.conflicts) ||
+      value.conflicts.length !== value.skippedCount ||
+      (overwrite && value.skippedCount !== 0)
+    )
+      invalidResponse();
+    const count =
+      Number(value.createdCount) + Number(value.updatedCount) + Number(value.skippedCount);
+    if (
+      count > 5000 ||
+      (exact
+        ? count !== allowed.size
+        : count < memberCount || count > allowed.size || count % memberCount !== 0)
+    )
+      invalidResponse();
+    const conflicts = new Set<string>();
+    for (const row of value.conflicts) {
+      if (
+        !record(row) ||
+        !uuid(row.memberId) ||
+        !attendanceDate(row.scheduleDate) ||
+        !integer(row.scheduleId, 1) ||
+        !attendanceVersion(row.versionNo)
+      )
+        invalidResponse();
+      const key = `${String(row.memberId).toLowerCase()}/${row.scheduleDate}`;
+      if (!allowed.has(key) || conflicts.has(key)) invalidResponse();
+      conflicts.add(key);
+    }
+    return value as unknown as OrganizationScheduleResult;
   }
   function workbenchAttendanceApplication(value: unknown): WorkbenchAttendanceApplicationResult {
     if (
@@ -916,7 +1088,7 @@ export function createHttpAuth(
     return value as unknown as BusinessLicenseUploadResult;
   }
   function idempotencyHeaders(key: string): Record<string, string> {
-    if (!key.trim() || key.length > 128 || /[\r\n]/.test(key))
+    if (typeof key !== 'string' || !key.trim() || key.length > 128 || /[\r\n]/.test(key))
       throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的操作幂等键' });
     return { 'Idempotency-Key': key };
   }
@@ -1060,6 +1232,116 @@ export function createHttpAuth(
       organizationUpdated(await request('/organizations/update', input, 'POST', true)),
     listOrganizationMembers: async (input) =>
       page(await request('/organizations/members', input, 'POST', true), member),
+    listOrganizationSchedules: async (input) => {
+      organizationSchedulesInput(input);
+      return organizationSchedules(
+        await request('/organizations/schedules', input, 'POST', true),
+        input,
+      );
+    },
+    batchOrganizationSchedules: async (input, key) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, [
+          'orgId',
+          'memberIds',
+          'startDate',
+          'endDate',
+          'weekdays',
+          'dayType',
+          'startTime',
+          'endTime',
+          'timezone',
+          'overwrite',
+        ]) ||
+        !uuid(input.orgId) ||
+        typeof input.overwrite !== 'boolean' ||
+        !Array.isArray(input.memberIds) ||
+        input.memberIds.length < 1 ||
+        input.memberIds.length > 500 ||
+        !input.memberIds.every(uuid) ||
+        !attendanceDate(input.startDate) ||
+        !attendanceDate(input.endDate) ||
+        input.startDate > input.endDate ||
+        Date.parse(input.endDate) - Date.parse(input.startDate) > 365 * 86400000 ||
+        !(
+          input.weekdays == null ||
+          (Array.isArray(input.weekdays) &&
+            input.weekdays.length <= 7 &&
+            input.weekdays.every((day) => integer(day, 1) && day <= 7))
+        )
+      )
+        invalidAttendanceInput();
+      organizationShift(input);
+      const members = new Set(input.memberIds.map((memberId) => memberId.toLowerCase()));
+      const weekdays = input.weekdays?.length ? input.weekdays : [1, 2, 3, 4, 5];
+      const allowed = new Set<string>();
+      for (
+        let time = Date.parse(input.startDate);
+        time <= Date.parse(input.endDate);
+        time += 86400000
+      ) {
+        const date = new Date(time);
+        if (weekdays.includes(date.getUTCDay() || 7))
+          for (const memberId of members)
+            allowed.add(`${memberId}/${date.toISOString().slice(0, 10)}`);
+      }
+      if (!allowed.size) invalidAttendanceInput();
+      return organizationScheduleResult(
+        await request('/organizations/schedules/batch', input, 'PUT', true, {
+          headers: idempotencyHeaders(key),
+        }),
+        allowed,
+        input.overwrite,
+        false,
+        members.size,
+      );
+    },
+    batchOrganizationScheduleDetails: async (input, key) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['orgId', 'schedules', 'timezone', 'overwrite']) ||
+        !uuid(input.orgId) ||
+        typeof input.overwrite !== 'boolean' ||
+        !Array.isArray(input.schedules) ||
+        input.schedules.length < 1 ||
+        input.schedules.length > 5000
+      )
+        invalidAttendanceInput();
+      scheduleTimezone(input.timezone);
+      const members = new Set<string>(),
+        allowed = new Set<string>();
+      for (const day of input.schedules) {
+        if (
+          !record(day) ||
+          !onlyKeys(day, [
+            'memberId',
+            'scheduleDate',
+            'dayType',
+            'startTime',
+            'endTime',
+            'timezone',
+          ]) ||
+          !uuid(day.memberId) ||
+          !attendanceDate(day.scheduleDate)
+        )
+          invalidAttendanceInput();
+        organizationShift(day);
+        const memberId = day.memberId.toLowerCase(),
+          target = `${memberId}/${day.scheduleDate}`;
+        if (allowed.has(target)) invalidAttendanceInput();
+        members.add(memberId);
+        allowed.add(target);
+      }
+      if (members.size > 500) invalidAttendanceInput();
+      return organizationScheduleResult(
+        await request('/organizations/schedules/details/batch', input, 'PUT', true, {
+          headers: idempotencyHeaders(key),
+        }),
+        allowed,
+        input.overwrite,
+      );
+    },
     updateOrganizationMember: async (input) =>
       memberUpdated(await request('/organizations/members/update', input, 'POST', true)),
     changeOrganizationMemberRole: async (input) =>

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { ClipboardList, LogOut, Pencil, Plus, RefreshCw, Users } from 'lucide-react';
+import { CalendarDays, ClipboardList, LogOut, Pencil, Plus, RefreshCw, Users } from 'lucide-react';
 import type {
   AuthUser,
   OrganizationDetail,
@@ -21,6 +21,7 @@ import { FormField } from '@/components/ui/shared/FormField';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { OrganizationMembers } from './OrganizationMembers';
 import { OrganizationApprovals } from './OrganizationApprovals';
+import { OrganizationSchedules } from './OrganizationSchedules';
 import { OrganizationImport } from './OrganizationImport';
 import { OrganizationPageHeader } from './OrganizationPageHeader';
 import { OrganizationLogoField, useOrganizationLogo } from './OrganizationLogoField';
@@ -29,7 +30,13 @@ import { OrganizationDialog, joinStatusLabels, positionLabels, shanghaiToday } f
 const participating = ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE'];
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function OrganizationPage({ user }: { user: AuthUser }) {
+export function OrganizationPage({
+  user,
+  initialTab,
+}: {
+  user: AuthUser;
+  initialTab?: 'members' | 'approvals' | 'schedules';
+}) {
   const org = user.organization;
   const orgId = typeof org?.id === 'string' ? org.id : '';
   if (!uuid.test(orgId))
@@ -59,14 +66,23 @@ export function OrganizationPage({ user }: { user: AuthUser }) {
     );
   return (
     <CurrentOrganization
-      key={[user.id, orgId, org?.position, org?.joinStatus].join(':')}
+      key={[user.id, orgId, org?.position, org?.joinStatus, initialTab].join(':')}
       user={user}
       orgId={orgId}
+      initialTab={initialTab}
     />
   );
 }
 
-function CurrentOrganization({ user, orgId }: { user: AuthUser; orgId: string }) {
+function CurrentOrganization({
+  user,
+  orgId,
+  initialTab,
+}: {
+  user: AuthUser;
+  orgId: string;
+  initialTab?: 'members' | 'approvals' | 'schedules';
+}) {
   const cache = useQueryClient();
   const summary = user.organization!;
   const position =
@@ -169,7 +185,7 @@ function CurrentOrganization({ user, orgId }: { user: AuthUser; orgId: string })
             </div>
           )}
           {manager ? (
-            <Tabs defaultValue="members" className="min-w-0">
+            <Tabs defaultValue={initialTab ?? 'members'} className="min-w-0">
               <TabsList
                 aria-label="组织管理内容"
                 className="mb-[16px] h-[48px] w-full justify-start gap-[24px] rounded-none border-b bg-transparent p-0"
@@ -180,6 +196,13 @@ function CurrentOrganization({ user, orgId }: { user: AuthUser; orgId: string })
                 >
                   <Users className="size-[16px]" aria-hidden />
                   人员管理
+                </TabsTrigger>
+                <TabsTrigger
+                  value="schedules"
+                  className="h-full gap-[7px] rounded-none border-b-2 border-transparent px-[2px] text-[13px] text-[var(--color-neutral-strong)] data-[state=active]:border-[var(--color-primary-strong)] data-[state=active]:bg-transparent data-[state=active]:text-[var(--color-primary-strong)] data-[state=active]:shadow-none"
+                >
+                  <CalendarDays className="size-[16px]" aria-hidden />
+                  排班管理
                 </TabsTrigger>
                 <TabsTrigger
                   value="approvals"
@@ -197,6 +220,9 @@ function CurrentOrganization({ user, orgId }: { user: AuthUser; orgId: string })
                   canWrite={manager}
                   onSessionChanged={refresh}
                 />
+              </TabsContent>
+              <TabsContent value="schedules" className="m-0 min-w-0">
+                <OrganizationSchedules user={user} orgId={orgId} />
               </TabsContent>
               <TabsContent value="approvals" className="m-0 min-w-0">
                 <OrganizationApprovals

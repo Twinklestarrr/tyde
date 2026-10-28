@@ -8,6 +8,7 @@ export default defineConfig({
     'profile.spec.ts',
     'profile-attendance.spec.ts',
     'organizations.spec.ts',
+    'organization-schedules.spec.ts',
     'organization-create.spec.ts',
     'organization-electron.spec.ts',
     'workspace-views.spec.ts',

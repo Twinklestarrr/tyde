@@ -1,0 +1,30 @@
+{
+  "name": "@tyde/agent-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "pnpm --filter @tyde/shared build",
+    "dev": "vite",
+    "build": "pnpm --filter @tyde/shared build && tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4003 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm --filter @tyde/shared build && node --import tsx --test tests/*.test.ts tests/*.test.tsx"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.52",
+    "@tyde/shared": "workspace:*",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.2.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.0.4",
+    "tailwindcss": "4.2.2",
+    "vite": "7.3.6"
+  }
+}

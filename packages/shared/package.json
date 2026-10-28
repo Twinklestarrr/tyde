@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js"
+    },
     "./ipc": {
       "types": "./dist/ipc.d.ts",
       "import": "./dist/ipc.js"
