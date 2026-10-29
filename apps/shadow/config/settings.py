@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     MIN_ACTION_DELAY_MS: int = Field(default=500, ge=0)
 
     # 执行控制
-    OS_CHANNEL_TIMEOUT: int = Field(default=10, gt=0)
+    OS_CHANNEL_TIMEOUT: int = Field(default=30, gt=0)
     PAGE_LOAD_TIMEOUT: int = Field(default=30, gt=0)
     VERIFY_SCREENSHOT: bool = True
 
