@@ -20,3 +20,68 @@ apps/server/public/
 apps/electron/resources/runtime.json
 .DS_Store
 *.log
+
+# Shadow 运行数据
+/apps/shadow/data/
+
+# 账号配置
+/apps/shadow/config/profiles/*
+!/apps/shadow/config/profiles/browser_profile.example.json
+
+# 外部 Skill
+/apps/shadow/skills/external/*
+!/apps/shadow/skills/external/.gitkeep
+
+# 密钥与本地配置
+/apps/shadow/**/.env
+/apps/shadow/**/.env.*
+!/apps/shadow/**/.env.example
+/apps/shadow/**/*.key
+/apps/shadow/**/*.pem
+/apps/shadow/**/*.p12
+/apps/shadow/**/*.pfx
+/apps/shadow/**/secrets.enc
+
+# 浏览器数据
+/apps/shadow/**/*.user_data/
+/apps/shadow/**/user_data/
+/apps/shadow/**/chrome_data/
+
+# Python 缓存与构建产物
+/apps/shadow/**/__pycache__/
+/apps/shadow/**/*.py[cod]
+/apps/shadow/**/*.egg-info/
+/apps/shadow/**/.eggs/
+/apps/shadow/**/build/
+/apps/shadow/**/dist/
+/apps/shadow/**/*.spec.local
+
+# 虚拟环境
+/apps/shadow/**/.venv/
+/apps/shadow/**/venv/
+/apps/shadow/**/env/
+
+# 编辑器与系统文件
+/apps/shadow/.agents/
+/apps/shadow/**/.idea/
+/apps/shadow/**/.vscode/
+/apps/shadow/**/*.swp
+/apps/shadow/**/.DS_Store
+/apps/shadow/**/Thumbs.db
+
+# 测试与调试产物
+/apps/shadow/**/.pytest_cache/
+/apps/shadow/**/.mypy_cache/
+/apps/shadow/**/.ruff_cache/
+/apps/shadow/**/.coverage
+/apps/shadow/**/.coverage.*
+/apps/shadow/**/coverage.xml
+/apps/shadow/**/htmlcov/
+/apps/shadow/tests/web_debug/
+
+# 打包产物与日志
+/apps/shadow/deploy/output/
+/apps/shadow/**/*.log
+
+# 本地文档
+/apps/shadow/docs/
