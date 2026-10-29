@@ -7,10 +7,17 @@ import {
   consumeTransferExam,
 } from '../src/modules/personnel/personnel-transfer.js';
 import { transferCandidate } from '../src/modules/personnel/personnel-transfer-exam.js';
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+import { syncSnapshots } from '../src/modules/personnel/personnel-movement-create.js';
 import type { AuthPrincipal } from '../src/modules/auth/auth.service.js';
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => undefined),
+}));
 vi.mock('../src/modules/personnel/personnel-movement-create.js', () => ({
   movementTasks: vi.fn(async () => ({ scopes: [], sources: [] })),
-  syncSnapshots: vi.fn(async () => {}),
+  syncSnapshots: vi.fn(async () => ({
+    cardChangedRecipients: [{ userId: 'restored', role: 'EXPERT' }],
+  })),
   projectOwners: vi.fn(async () => [{ id: 'owner', uid: 'owner', status: 'ACTIVE' }]),
 }));
 const principal = (userId = 'member', role = 'EXPERT') =>
@@ -209,6 +216,32 @@ test('transfer confirmation only accepts the concrete member in EXPERT role and 
   expect(f.m.flow.currentNodeCode).toBe('TARGET_ENTRANCE_EXAM');
   expect(f.tx.projectMember.updateMany).not.toHaveBeenCalled();
   expect(f.tx.projectEventOutbox.create).toHaveBeenCalledTimes(2);
+});
+test('transfer response synchronizes independent progress in both projects before cards and events', async () => {
+  const f = fixture();
+  vi.mocked(refreshOwnerProgress).mockClear();
+  vi.mocked(syncSnapshots).mockClear();
+  await respondTransfer(f.db as never, { movementId: 1, decision: 'ACCEPT' }, principal());
+  expect(vi.mocked(refreshOwnerProgress).mock.calls.map((c) => [c[1], c[2]])).toEqual([
+    [1, ['member']],
+    [2, ['member']],
+  ]);
+  for (let i = 0; i < 2; i++)
+    expect(vi.mocked(refreshOwnerProgress).mock.invocationCallOrder[i]).toBeLessThan(
+      vi.mocked(syncSnapshots).mock.invocationCallOrder[i]!,
+    );
+});
+test('transfer independent progress failure propagates before cards and outbox', async () => {
+  const f = fixture();
+  vi.mocked(syncSnapshots).mockClear();
+  vi.mocked(refreshOwnerProgress).mockImplementationOnce(async () => {
+    throw new Error('transfer progress fault');
+  });
+  await expect(
+    respondTransfer(f.db as never, { movementId: 1, decision: 'ACCEPT' }, principal()),
+  ).rejects.toThrow('transfer progress fault');
+  expect(syncSnapshots).not.toHaveBeenCalled();
+  expect(f.tx.projectEventOutbox.create).not.toHaveBeenCalled();
 });
 test('manual approval cannot consume either business wait even when caller is snapshotted approver', async () => {
   for (const code of ['MEMBER_CONFIRM', 'TARGET_ENTRANCE_EXAM']) {

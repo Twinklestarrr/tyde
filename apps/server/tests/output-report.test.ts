@@ -1,3 +1,5 @@
+import * as ownerProgress from '../src/modules/expert/expert-owner-command.js';
+import * as managementCards from '../src/modules/projects/project-management-card-snapshot.js';
 import { PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import { reportQuantity, reportDay } from '../src/modules/production/output-report.domain.js';
@@ -204,49 +206,18 @@ test('output Swagger examples and six real HTTP routes validate nesting, null re
   }
 });
 
-test('output snapshots emit existing database branch codes, retain round types and protect unrelated production snapshots', async () => {
-  const { readFileSync } = await import('node:fs');
+test('output snapshots delegate to complete cross-domain arbitration and return expert recipients without altering task types', async () => {
+  const recipients = { cardChangedRecipients: [{ userId: p.userId, role: 'EXPERT' as const }] };
+  const refresh = vi
+    .spyOn(managementCards, 'refreshManagementCardSnapshots')
+    .mockResolvedValue(recipients);
   const { syncOutputSnapshots } =
     await import('../src/modules/production/output-report-progress.js');
-  const sql = readFileSync(
-    new URL('../prisma/migrations/20261021000000_project_cards/migration.sql', import.meta.url),
-    'utf8',
-  );
-  const allowed = sql
-    .match(/"branchNodeCode" IN \(([^)]+)\)/)![1]!
-    .match(/'[^']+'/g)!
-    .map((v) => v.slice(1, -1));
-  const scope = {
-    userId: p.userId,
-    role: 'EXPERT' as const,
-    perspective: 'EXPERT_MEMBER',
-    currentNodeCode: 'PRODUCTION_TASK',
-    mainEligible: false,
-    boardVisible: true,
-  };
-  let old: { branchNodeCode: string; branchPriority: number; sourceBizType: string } | null = null;
-  const upsert = vi.fn(
-    async ({
-      create,
-    }: {
-      create: { branchNodeCode: string; branchPriority: number; sourceBizType: string };
-    }) => {
-      expect(allowed).toContain(create.branchNodeCode);
-      old = create;
-    },
-  );
-  const remove = vi.fn(async () => {
-    old = null;
-  });
-  const tx = {
-    projectRoleNodeSnapshot: { findUnique: vi.fn(async () => old), upsert, delete: remove },
-    projectOutputReport: {
-      findUniqueOrThrow: vi.fn(async () => ({ updatedAt: new Date('2026-10-26T00:00Z') })),
-    },
-  };
-  const empty = { scopes: [scope], sources: [] };
+  const progress = vi.spyOn(ownerProgress, 'refreshOwnerProgress').mockResolvedValue();
+  const tx = {};
+  const empty = { scopes: [], sources: [] };
   const correction = {
-    scopes: [scope],
+    scopes: [],
     sources: [
       {
         userId: p.userId,
@@ -257,42 +228,9 @@ test('output snapshots emit existing database branch codes, retain round types a
     ],
   };
   const now = new Date('2026-10-26T00:00Z');
-  await syncOutputSnapshots(tx as never, 1, empty, correction, now);
-  expect(upsert).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      create: expect.objectContaining({
-        branchNodeCode: 'PRODUCTION_TASK',
-        branchPriority: 10,
-        sourceBizType: 'OUTPUT_REPORT',
-      }),
-    }),
-  );
+  expect(await syncOutputSnapshots(tx as never, 1, empty, correction, now)).toEqual(recipients);
+  expect(progress).toHaveBeenCalledWith(tx, 1, null, now);
+  expect(progress.mock.invocationCallOrder[0]).toBeLessThan(refresh.mock.invocationCallOrder[0]!);
+  expect(refresh).toHaveBeenCalledWith(tx, 1, now);
   expect(correction.sources[0]!.taskType).toBe('OUTPUT_REPORT_CORRECTION');
-  await syncOutputSnapshots(tx as never, 1, correction, empty, now);
-  expect(remove).toHaveBeenCalledTimes(1);
-  old = { branchNodeCode: 'PRODUCTION_TASK', branchPriority: 10, sourceBizType: 'PROJECT_MEMBER' };
-  upsert.mockClear();
-  remove.mockClear();
-  await syncOutputSnapshots(tx as never, 1, empty, correction, now);
-  await syncOutputSnapshots(tx as never, 1, correction, empty, now);
-  expect(upsert).not.toHaveBeenCalled();
-  expect(remove).not.toHaveBeenCalled();
-  old = null;
-  const review = {
-    scopes: [scope],
-    sources: [
-      {
-        userId: p.userId,
-        role: 'EXPERT' as const,
-        taskType: 'OUTPUT_DATA_REVIEW',
-        sources: ['OUTPUT_REPORT:1'],
-      },
-    ],
-  };
-  await syncOutputSnapshots(tx as never, 1, empty, review, now);
-  expect(upsert).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      create: expect.objectContaining({ branchNodeCode: 'OUTPUT_DATA_REVIEW', branchPriority: 70 }),
-    }),
-  );
 });

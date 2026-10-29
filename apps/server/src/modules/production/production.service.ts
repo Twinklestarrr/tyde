@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
@@ -43,7 +45,7 @@ async function eligible(tx: Prisma.TransactionClient, projectId: number, now: Da
   return members.filter((m) => qualifiedForEntry(m, plan?.needWrittenExam ?? false));
 }
 // 本批只采集首次创建支线；验收和报量来源随后接入，不取消其他领域轮次。
-async function creationTasks(
+export async function creationTasks(
   tx: Prisma.TransactionClient,
   projectId: number,
 ): Promise<TaskSnapshot> {
@@ -187,14 +189,8 @@ export class ProductionService {
             ['SUBTASK_CREATE'],
             now,
           );
-          // 只撤销本领域已消解的快照，保留其他优先级支线。
-          await tx.projectRoleNodeSnapshot.deleteMany({
-            where: {
-              projectId: input.projectId,
-              perspective: 'PROJECT_MANAGER',
-              branchNodeCode: 'SUBTASK_CREATE',
-            },
-          });
+          await refreshOwnerProgress(tx, input.projectId, null, now);
+          const cardChanges = await refreshManagementCardSnapshots(tx, input.projectId, now);
           await tx.projectEventOutbox.create({
             data: {
               projectId: input.projectId,
@@ -205,6 +201,7 @@ export class ProductionService {
                 schemaVersion: 1,
                 projectId: input.projectId,
                 subtaskId: task.id,
+                ...cardChanges,
                 actorUserId: principal.userId,
               },
             },

@@ -271,9 +271,13 @@ export class OutputReportService {
             reportTypes,
             now,
           );
-          await syncOutputSnapshots(tx, projectId, before, after, now);
-          // 核准只静默重算轮次/快照；保存、退回及代修正产生PENDING事实，14负责实际投递。
-          if (recipients.length)
+          const cardChanges = await syncOutputSnapshots(tx, projectId, before, after, now);
+          // 核准保持静默；本人修正虽无报量人受众，仍须记录其他角色的真实卡片变化。
+          // 沿用原事件与事务，14负责实际投递。
+          if (
+            recipients.length ||
+            (operation !== 'VERIFIED' && cardChanges.cardChangedRecipients.length)
+          )
             await tx.projectEventOutbox.create({
               data: {
                 projectId,
@@ -284,6 +288,7 @@ export class OutputReportService {
                   schemaVersion: 1,
                   projectId,
                   reporterUserIds: [...new Set(recipients)],
+                  ...cardChanges,
                   actorUserId: p.userId,
                 },
               },

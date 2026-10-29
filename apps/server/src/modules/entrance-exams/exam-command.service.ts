@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { AuthError } from '../auth/auth.error.js';
@@ -56,6 +58,8 @@ export class ExamCommandService {
           managementTaskTypes,
           now,
         );
+        await refreshOwnerProgress(tx, project.id, null, now);
+        await refreshManagementCardSnapshots(tx, project.id, now);
         return {
           examId: exam.id,
           status: 'CLOSED',
@@ -301,6 +305,8 @@ export class ExamCommandService {
             managementTaskTypes,
             now,
           );
+          await refreshOwnerProgress(tx, project.id, null, now);
+          await refreshManagementCardSnapshots(tx, project.id, now);
           return {
             examId: exam.id,
             examNo: exam.examNo,

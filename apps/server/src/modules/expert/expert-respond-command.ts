@@ -272,7 +272,7 @@ export async function respondToAssignment(db: PrismaClient, input: RespondInput,
         ['EXPERT_RECRUITMENT_RETRY'],
         now,
       );
-      await syncRecruitmentRetrySnapshot(tx, a.projectId, after);
+      const cardChanges = await syncRecruitmentRetrySnapshot(tx, a.projectId, after);
       await tx.projectEventOutbox.create({
         data: {
           projectId: a.projectId,
@@ -287,6 +287,7 @@ export async function respondToAssignment(db: PrismaClient, input: RespondInput,
             organizationId: a.organizationId,
             participantUserIds: participants,
             ...taskEventFacts(before, after),
+            ...cardChanges,
           },
         },
       });

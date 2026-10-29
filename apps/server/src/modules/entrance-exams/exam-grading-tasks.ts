@@ -1,3 +1,5 @@
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
 import type { Prisma } from '@prisma/client';
 import type { TaskSnapshot, TaskSource, TaskScope } from '../projects/project-task-rounds.js';
 
@@ -83,76 +85,14 @@ export async function collectGradingTasks(
   return { scopes: [...scopes.values()], sources: [...sources.values()] };
 }
 
-// 仅更新本采集器负责的阅卷快照；其他领域已有快照保留，完整跨领域优先级重算仍归04回补。
+// 阅卷结果可能改变其他领域的候选（例如准入产生入项待办），统一重新仲裁。
 export async function refreshGradingSnapshots(
   tx: Prisma.TransactionClient,
   projectId: number,
-  snapshot: TaskSnapshot,
+  _snapshot: TaskSnapshot,
   now: Date,
 ) {
-  const records = await tx.entranceExamGradingRecord.findMany({
-    where: { attempt: { exam: { projectId, deleted: false } } },
-  });
-  const byId = new Map(records.map((r) => [r.id, r]));
-  const existing = await tx.projectRoleNodeSnapshot.findMany({
-    where: { projectId, perspective: { in: ['NAVIGATOR', 'PROJECT_MANAGER'] } },
-  });
-  const recipients = new Map(snapshot.scopes.map((s) => [`${s.userId}:${s.perspective}`, s]));
-  for (const old of existing)
-    if (
-      gradingTaskTypes.includes(old.branchNodeCode) &&
-      !recipients.has(`${old.userId}:${old.perspective}`)
-    ) {
-      await tx.projectRoleNodeSnapshot.deleteMany({
-        where: { id: old.id, sourceBizType: 'GRADING_RECORD' },
-      });
-    }
-  for (const scope of snapshot.scopes) {
-    const old = existing.find(
-      (s) => s.userId === scope.userId && s.perspective === scope.perspective,
-    );
-    if (old && !gradingTaskTypes.includes(old.branchNodeCode)) continue;
-    const candidate = snapshot.sources
-      .filter((s) => s.userId === scope.userId && s.role === scope.role)
-      .flatMap((s) =>
-        s.sources.map((id) => ({
-          taskType: s.taskType,
-          record: byId.get(Number(id.split(':')[1])),
-        })),
-      )
-      .filter((c) => c.record)
-      .sort(
-        (a, b) =>
-          (b.taskType === 'ENTRANCE_EXAM_GRADING_RETRY' ? 95 : 75) -
-            (a.taskType === 'ENTRANCE_EXAM_GRADING_RETRY' ? 95 : 75) ||
-          a.record!.createdAt.getTime() - b.record!.createdAt.getTime() ||
-          a.record!.id - b.record!.id,
-      )[0];
-    if (!candidate) {
-      if (old)
-        await tx.projectRoleNodeSnapshot.deleteMany({
-          where: { id: old.id, sourceBizType: 'GRADING_RECORD' },
-        });
-      continue;
-    }
-    const data = {
-      branchNodeCode: candidate.taskType,
-      branchPriority: candidate.taskType === 'ENTRANCE_EXAM_GRADING_RETRY' ? 95 : 75,
-      sourceBizType: 'GRADING_RECORD',
-      sourceBizId: candidate.record!.id,
-      sourceEventAt: candidate.record!.createdAt,
-      calculatedAt: now,
-    };
-    await tx.projectRoleNodeSnapshot.upsert({
-      where: {
-        projectId_userId_perspective: {
-          projectId,
-          userId: scope.userId,
-          perspective: scope.perspective,
-        },
-      },
-      create: { projectId, userId: scope.userId, perspective: scope.perspective, ...data },
-      update: data,
-    });
-  }
+  // 先同步全部真实独立来源；阅卷卡片优先级不能代替考试/培训轮次。
+  await refreshOwnerProgress(tx, projectId, null, now);
+  return refreshManagementCardSnapshots(tx, projectId, now);
 }

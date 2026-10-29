@@ -143,7 +143,7 @@ export const expertTaskExample = {
 export const expertTasksResponse = {
   type: 'array',
   description:
-    '本人待办，分配创建时间/ID倒序；无结果空数组。组织有效身份优先个人，结项及拒绝/取消/替换不推送。已聚合真实转项接单、考试、当前审批及生效成员；其他生产/跨域卡片仍部分迁移，067已接入待响应个人/组织主管/普通成员接单按钮。',
+    '本人待办，分配创建时间/ID倒序；无结果空数组。组织有效身份优先个人，结项及拒绝/取消/替换不推送。已聚合真实转项接单、考试、当前审批及生效成员；报量核查/修正按当前组织与实时权限读取，普通生产待办在本人上海当日已有报量（含零量）后隐藏，次日恢复；核查、退回修正及独立培训保留。其余跨域卡片仍部分迁移，067已接入待响应个人/组织主管/普通成员接单按钮。',
   items: object('本人一条分配待办。', {
     assignmentId: {
       ...id,
@@ -167,7 +167,7 @@ export const expertTasksResponse = {
       '项目主线；历史null回退RECRUIT_PROJECT_MANAGER=招募策略官，PRODUCTION_PLAN=生产计划、ENTRANCE_EXAM=准入考试、STANDARD_TRAINING=标准培训、RECRUIT_EXECUTION_EXPERT=招募专家、PERSONNEL_MANAGEMENT=人员管理、PRODUCTION_TASK=生产、COMPLETED=结项（不推送）。',
     ),
     branchNodeCode: text(
-      '本人支线：ENTRANCE_EXAM=准入考试、MEMBER_MOVEMENT_APPROVAL=人员转项人工审批、MEMBER_ENTRY_CONFIRM=负责人确认成员入项时间、STANDARD_TRAINING=标准培训、PRODUCTION_TASK=生产任务；无待办null。按实际接单/准入/成员/交卷及负责人考试开放事实重算。',
+      '本人支线：ENTRANCE_EXAM=准入考试、MEMBER_MOVEMENT_APPROVAL=人员转项人工审批、MEMBER_ENTRY_CONFIRM=负责人确认成员入项时间、OUTPUT_DATA_REVIEW=报量核查、STANDARD_TRAINING=标准培训、PRODUCTION_TASK=生产任务；无待办null。按实际接单/准入/成员/交卷及负责人考试开放事实重算；报量核查优先入项/考试/培训，修正沿PRODUCTION_TASK且不覆盖独立培训。',
       true,
     ),
     accessContext: object('当前分配身份；下游接口独立鉴权。', {
@@ -178,7 +178,9 @@ export const expertTasksResponse = {
     operations: object('当前操作；未迁移入口不开放。', {
       canAccept: flag('能否接单；有效待响应个人/组织主体或普通成员为true，其他false。'),
       canReject: flag('能否拒单；与canAccept相同，拒绝须填写原因。'),
-      canReportOutput: flag('能否报量；11未接入，本批false。'),
+      canReportOutput: flag(
+        '能否从任务卡进入报量：已接单且本人处于生产阶段，当前卡片组织有有效本人或负责人代报成员，且本人上海当天尚未报量时为true；核查、培训、待响应及失权为false。不要求已有可写子任务，保存接口仍逐笔鉴权。',
+      ),
     }),
   }),
   examples: [

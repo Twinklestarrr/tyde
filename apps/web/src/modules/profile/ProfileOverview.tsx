@@ -34,7 +34,7 @@ export function ProfileOverview({
 }: {
   user: AuthUser;
   showProjects: boolean;
-  onProjects: (assignmentId?: number) => void;
+  onProjects: (projectId?: number) => void;
   onAttendance: (month: string) => void;
   onApplications: () => void;
 }) {
@@ -92,10 +92,10 @@ export function ProfileOverview({
             (projects.data.length ? (
               <ul aria-label="所在项目列表" className="grid min-w-0 gap-[16px] sm:grid-cols-2">
                 {projects.data.slice(0, 4).map((project) => (
-                  <li key={project.assignmentId} className="min-w-0">
+                  <li key={project.projectId} className="min-w-0">
                     <button
                       type="button"
-                      onClick={() => onProjects(project.assignmentId)}
+                      onClick={() => onProjects(project.projectId)}
                       className="flex min-h-[126px] w-full min-w-0 flex-col gap-[10px] rounded-[8px] border bg-card p-[16px] text-left transition-colors hover:border-primary focus-visible:outline-2 focus-visible:outline-ring"
                     >
                       <span className="flex w-full min-w-0 items-start gap-[8px]">

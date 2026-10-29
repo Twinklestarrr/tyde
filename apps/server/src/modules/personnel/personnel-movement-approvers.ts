@@ -9,6 +9,7 @@ export async function refreshMovementApprovers(
   tx: Prisma.TransactionClient,
   projectId: number,
   now = new Date(),
+  refreshCards = true,
 ) {
   const rows = await tx.projectMemberMovement.findMany({
     where: {
@@ -111,20 +112,19 @@ export async function refreshMovementApprovers(
       ['MEMBER_MOVEMENT_APPROVAL'],
       now,
     );
-    await tx.projectRoleNodeSnapshot.deleteMany({
-      where: {
-        projectId,
-        sourceBizType: 'PROJECT_MEMBER_MOVEMENT',
-        branchNodeCode: 'MEMBER_MOVEMENT_APPROVAL',
-      },
-    });
-    await syncSnapshots(tx, projectId, after, now);
+    // 负责人命令可延迟到全部业务与轮次更新后统一重算，避免提前吞掉卡片变化。
+    const cards = refreshCards ? await syncSnapshots(tx, projectId, after, now) : undefined;
     await tx.projectEventOutbox.create({
       data: {
         projectId,
         eventType: 'PROJECT_MEMBER_MOVEMENTS_CHANGED',
         operation: 'REFRESH_MOVEMENT_APPROVERS',
-        payload: { schemaVersion: 1, movementIds: changed, deliveryStatus: 'NOT_DELIVERED' },
+        payload: {
+          schemaVersion: 1,
+          ...cards,
+          movementIds: changed,
+          deliveryStatus: 'NOT_DELIVERED',
+        },
       },
     });
   }

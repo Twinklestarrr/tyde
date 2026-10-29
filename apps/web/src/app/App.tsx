@@ -1,4 +1,4 @@
-import { useEffect, type PropsWithChildren } from 'react';
+import { useEffect, useState, type PropsWithChildren } from 'react';
 import {
   createHashHistory,
   createRootRoute,
@@ -8,6 +8,7 @@ import {
   Navigate,
   Outlet,
   RouterProvider,
+  useNavigate,
   useRouterState,
 } from '@tanstack/react-router';
 import { AuthLayout } from '../layouts/AuthLayout';
@@ -15,7 +16,6 @@ import { WorkspaceLayout } from '../layouts/WorkspaceLayout';
 import { WorkspaceViewProvider } from '../layouts/WorkspaceView';
 import { LoginPage } from '../modules/auth/LoginPage';
 import { RegisterPage } from '../modules/auth/RegisterPage';
-import { WelcomePage } from '../modules/auth/WelcomePage';
 import { ProfilePage } from '../modules/profile/ProfilePage';
 import { OrganizationPage } from '../modules/organizations/OrganizationPage';
 import { OrganizationCreatePage } from '../modules/organizations/OrganizationCreatePage';
@@ -24,6 +24,12 @@ import { useSession } from '../hooks/useSession';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { Button } from '../components/ui/button';
 import { PageRecovery } from '../components/PageRecovery';
+import { NavigatorProjectsPage } from '../modules/projects/NavigatorProjectsPage';
+import { ProjectCreatePage } from '../modules/projects/ProjectCreatePage';
+import { ProjectDetailPage } from '../modules/projects/ProjectDetailPage';
+import { StrategistProjectsPage } from '../modules/projects/StrategistProjectsPage';
+import { StrategistProjectPage } from '../modules/projects/StrategistProjectPage';
+import { ExpertProjectsPage } from '../modules/projects/ExpertProjectsPage';
 
 /** 离开注册资料页后销毁一次性凭证；布局由匹配路由决定。 */
 function RootLayout() {
@@ -98,9 +104,21 @@ function Workspace() {
   ) : null;
 }
 
-/** 会话请求失败时保留错误和重试入口，仅 401 视为未登录。 */
+/** 首次恢复有界重试；失败回登录入口，但不清除仍可能有效的会话。 */
 function SessionBoundary({ children }: PropsWithChildren) {
   const session = useSession();
+  const navigate = useNavigate();
+  const [expired, setExpired] = useState(false);
+  const recovering = session.isPending && session.failureCount > 0;
+  useEffect(() => {
+    if (recovering && !expired) void navigate({ to: '/', replace: true });
+  }, [recovering, expired, navigate]);
+  useEffect(() => {
+    if (!session.isPending) return;
+    const timer = window.setTimeout(() => setExpired(true), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [session.isPending]);
+  if (!session.data && (expired || session.isError)) return <Navigate to="/auth" replace />;
   if (session.isPending)
     return (
       <div className="grid min-h-svh place-items-center bg-muted p-[24px]">
@@ -109,23 +127,81 @@ function SessionBoundary({ children }: PropsWithChildren) {
         </p>
       </div>
     );
-  if (session.isError && !session.data)
-    return (
-      <PageRecovery
-        fullPage
-        title="暂时无法加载账户资料"
-        description="请稍后重试，或返回首页重新加载。"
-        onRetry={() => void session.refetch()}
-        loading={session.isFetching}
-      />
-    );
   if (!session.data) return <Navigate to="/auth" replace />;
   return children;
 }
 
 function HomePage() {
   const session = useSession();
-  return session.data && <WelcomePage user={session.data} />;
+  if (session.data && (session.data.selectedRole ?? session.data.role) === 'NAVIGATOR')
+    return <NavigatorProjectsPage key={session.data.id} user={session.data} />;
+  if (session.data && (session.data.selectedRole ?? session.data.role) === 'PM')
+    return <StrategistProjectsPage key={session.data.id} user={session.data} />;
+  return session.data && <ExpertProjectsPage key={session.data.id} user={session.data} />;
+}
+
+function NavigatorProjectsRoute() {
+  const session = useSession();
+  const { created } = projectsRoute.useSearch();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'NAVIGATOR')
+    return <Navigate to="/" replace />;
+  return (
+    session.data && (
+      <NavigatorProjectsPage key={session.data.id} user={session.data} created={created} />
+    )
+  );
+}
+
+function StrategistProjectsRoute() {
+  const session = useSession();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'PM')
+    return <Navigate to="/" replace />;
+  return session.data && <StrategistProjectsPage key={session.data.id} user={session.data} />;
+}
+
+function StrategistProjectRoute() {
+  const session = useSession();
+  const { projectId } = strategistProjectRoute.useParams();
+  const { tab } = strategistProjectRoute.useSearch();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'PM')
+    return <Navigate to="/" replace />;
+  if (!/^[1-9]\d*$/.test(projectId) || Number(projectId) > 2_147_483_647)
+    return <PageRecovery title="项目地址无效" description="请返回工作台，重新选择项目。" />;
+  return (
+    session.data && (
+      <StrategistProjectPage
+        key={`${session.data.id}:${projectId}`}
+        user={session.data}
+        projectId={Number(projectId)}
+        initialTab={tab}
+      />
+    )
+  );
+}
+
+function NavigatorProjectCreateRoute() {
+  const session = useSession();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'NAVIGATOR')
+    return <Navigate to="/" replace />;
+  return session.data && <ProjectCreatePage key={session.data.id} user={session.data} />;
+}
+
+function NavigatorProjectDetailRoute() {
+  const session = useSession();
+  const { projectId } = projectDetailRoute.useParams();
+  if (session.data && (session.data.selectedRole ?? session.data.role) !== 'NAVIGATOR')
+    return <Navigate to="/" replace />;
+  if (!/^[1-9]\d*$/.test(projectId) || Number(projectId) > 2_147_483_647)
+    return <PageRecovery title="项目地址无效" description="请返回工作台，重新选择项目。" />;
+  return (
+    session.data && (
+      <ProjectDetailPage
+        key={`${session.data.id}:${projectId}`}
+        user={session.data}
+        projectId={Number(projectId)}
+      />
+    )
+  );
 }
 
 function CurrentProfilePage() {
@@ -171,6 +247,49 @@ const profileRoute = createRoute({
   component: CurrentProfilePage,
   errorComponent: () => <PageRecovery />,
 });
+const projectsRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/projects',
+  validateSearch: (search: Record<string, unknown>): { created?: number } => {
+    const created = Number(search.created);
+    return {
+      created:
+        Number.isSafeInteger(created) && created > 0 && created <= 2_147_483_647
+          ? created
+          : undefined,
+    };
+  },
+  component: NavigatorProjectsRoute,
+  errorComponent: () => <PageRecovery />,
+});
+const projectCreateRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/projects/create',
+  component: NavigatorProjectCreateRoute,
+  errorComponent: () => <PageRecovery />,
+});
+const strategistProjectsRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/strategist/projects',
+  component: StrategistProjectsRoute,
+  errorComponent: () => <PageRecovery />,
+});
+const strategistProjectRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/strategist/projects/$projectId',
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM' } =>
+    search.tab === 'ENTRANCE_EXAM' || search.tab === 'PRODUCTION_PLAN' ? { tab: search.tab } : {},
+  component: StrategistProjectRoute,
+  errorComponent: () => <PageRecovery />,
+});
+const projectDetailRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/projects/$projectId',
+  component: NavigatorProjectDetailRoute,
+  errorComponent: () => <PageRecovery />,
+});
 const organizationRoute = createRoute({
   getParentRoute: () => workspaceRoute,
   path: '/organization',
@@ -214,6 +333,11 @@ const router = createRouter({
     workspaceRoute.addChildren([
       homeRoute,
       profileRoute,
+      projectsRoute,
+      projectCreateRoute,
+      projectDetailRoute,
+      strategistProjectsRoute,
+      strategistProjectRoute,
       organizationRoute,
       organizationCreateRoute,
     ]),

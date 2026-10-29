@@ -51,6 +51,7 @@ export class ExamAutoService {
           where: { id: attempt.id },
           data: { gradingStatus: 'PENDING', updatedBy: principal.uid },
         });
+        const cardChanges = await syncGradingTasks(tx, input.projectId, before, now);
         await tx.projectEventOutbox.create({
           data: {
             projectId: input.projectId,
@@ -58,13 +59,13 @@ export class ExamAutoService {
             operation: 'entrance-exam.auto.retry',
             actorUserId: principal.userId,
             payload: {
+              ...cardChanges,
               gradingRecordId: record.id,
               provider: 'mock',
               executionStatus: 'NOT_EXECUTED',
             },
           },
         });
-        await syncGradingTasks(tx, input.projectId, before, now);
         return gradingResponse(updated, pending);
       },
       { timeout: 30000 },

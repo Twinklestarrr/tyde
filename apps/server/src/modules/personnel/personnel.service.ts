@@ -1,3 +1,4 @@
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
@@ -254,13 +255,14 @@ export class PersonnelService {
           ['MEMBER_ENTRY_CONFIRM'],
           now,
         );
-        await refreshOwnerProgress(
+        await refreshOwnerProgress(tx, input.projectId, null, now);
+        const cardChanges = await syncEntrySnapshots(
           tx,
           input.projectId,
-          [...new Set(members.map((m) => m.userId))],
+          beforeEntry,
+          afterEntry,
           now,
         );
-        await syncEntrySnapshots(tx, input.projectId, beforeEntry, afterEntry, now);
         await tx.projectEventOutbox.create({
           data: {
             projectId: input.projectId,
@@ -271,6 +273,7 @@ export class PersonnelService {
               schemaVersion: 1,
               projectId: input.projectId,
               memberIds: ids,
+              ...cardChanges,
               entryDecision: input.entryDecision,
               plannedEntryDate: input.entryDecision === 'YES' ? input.plannedEntryDate! : null,
               actorUserId: principal.userId,
@@ -351,14 +354,15 @@ export class PersonnelService {
               managementTaskTypes,
               now,
             );
-            await refreshOwnerProgress(tx, project.id, [m.userId], now);
+            await refreshOwnerProgress(tx, project.id, null, now);
+            const cards = await refreshManagementCardSnapshots(tx, project.id, now);
             await tx.projectEventOutbox.create({
               data: {
                 projectId: project.id,
                 eventType: 'PROJECT_MEMBER_ENTRY_ACTIVATED',
                 operation: 'PROCESS_DUE_ENTRY',
                 actorUserId: null,
-                payload: { schemaVersion: 1, projectId: project.id, memberIds: [m.id] },
+                payload: { schemaVersion: 1, projectId: project.id, memberIds: [m.id], ...cards },
               },
             });
             return true;

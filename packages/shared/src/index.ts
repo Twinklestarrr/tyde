@@ -17,12 +17,18 @@ export { IPC } from './ipc.js';
 export * from './auth.js';
 export * from './organizations.js';
 export * from './workbench.js';
+export * from './projects.js';
+export * from './expert-tasks.js';
+export * from './entrance-exams.js';
 import type {
   BusinessLicenseUploadResult,
   OrganizationApi,
   OrganizationImportResult,
 } from './organizations.js';
 import type { WorkbenchApi } from './workbench.js';
+import type { ProjectApi } from './projects.js';
+import type { ExpertTasksApi } from './expert-tasks.js';
+import type { EntranceExamApi } from './entrance-exams.js';
 
 /** 登录令牌由平台适配器保管，页面只接收登录状态或注册指引。 */
 export interface Authenticated {
@@ -93,7 +99,8 @@ export interface ImageUploadResult {
 }
 export type AvatarUploadResult = ImageUploadResult;
 export type OrganizationLogoUploadResult = ImageUploadResult;
-export interface AuthApi extends OrganizationApi, WorkbenchApi {
+export interface AuthApi
+  extends OrganizationApi, WorkbenchApi, ProjectApi, ExpertTasksApi, EntranceExamApi {
   health(): Promise<{ status: string }>;
   sendCode(input: SmsSendInput): Promise<string>;
   login(input: LoginInput): Promise<void>;

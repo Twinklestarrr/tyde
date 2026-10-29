@@ -126,6 +126,7 @@ async function createBackend(
       state.sessionReads += 1;
       return reply(state.user);
     }
+    if (path === '/api/v1/projects/manager/list' && request.method() === 'GET') return reply([]);
     if (path === '/api/v1/auth/switch-role' && request.method() === 'POST') {
       if (body?.role !== 'EXPERT') return reply(null, 400, '角色无效');
       state.user.role = 'EXPERT';
@@ -264,7 +265,7 @@ test('非执行专家不能直接访问创建页，顶栏切换真实角色后�
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(`${origin}/#/organization/create`);
   await expect(page).toHaveURL(/#\/$/);
-  await expect(page.getByRole('heading', { name: '策略官工作台', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
   await expect(page.getByLabel('组织名称')).toHaveCount(0);
   await expect(page.getByRole('link', { name: /^(我的组织|组织管理|创建组织)$/ })).toHaveCount(0);
   expect(calls(requests, '/api/v1/organizations')).toHaveLength(0);

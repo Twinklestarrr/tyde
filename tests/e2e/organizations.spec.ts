@@ -244,6 +244,10 @@ async function organizationBackend(
       route.fulfill({ status, json: { code: status, message, data } });
     if (!authenticated) return reply(null, 401, '请先登录');
     if (url.pathname === '/api/v1/users/me') return reply(state.user);
+    if (url.pathname === '/api/v1/expert-assignments/my-tasks' && request.method() === 'POST') {
+      expect(body).toEqual({});
+      return reply([]);
+    }
     if (url.pathname === '/api/v1/files/upload') {
       expect(record.form.bizType).toBe('ORG_LOGO');
       return reply(logoReceipt);
@@ -805,7 +809,10 @@ test('组织管理 ADMIN权限、MEMBER只读摘要和本人退出，不请求�
       .getByRole('navigation', { name: '主导航' })
       .getByRole('link', { name: '我的组织', exact: true }),
   ).toBeVisible();
-  await page.getByRole('main').getByRole('link', { name: '我的组织', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: '主导航' })
+    .getByRole('link', { name: '我的组织', exact: true })
+    .click();
   await expect(page.getByRole('heading', { name: '我的组织', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '账户菜单', exact: true }).click();
   await page
@@ -943,7 +950,9 @@ test('组织管理375px列表与弹窗不撑出页面，无组织不查询组织
   await page.goto(`${origin}/#/`);
   await page.reload();
   await expect(
-    page.getByRole('main').getByRole('link', { name: '我的组织', exact: true }),
+    page
+      .getByRole('navigation', { name: '主导航' })
+      .getByRole('link', { name: '我的组织', exact: true }),
   ).toBeVisible();
   await page
     .getByRole('navigation', { name: '主导航' })

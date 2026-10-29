@@ -1,0 +1,52 @@
+name: Sync release to production main
+
+on:
+  push:
+    branches: [release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-release-to-production-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'txbo/tyde' && vars.ENABLE_UPSTREAM_SYNC == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Read latest release
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: release
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read production main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: Twinklestarrr/tyde
+          ref: main
+          path: target
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_UPSTREAM_TOKEN }}
+
+      - name: Merge release into main
+        working-directory: target
+        shell: bash
+        run: |
+          # Keep the automated merge attributed to the target account linked to Vercel.
+          git config user.name Twinklestarrr
+          git config user.email 48853899+Twinklestarrr@users.noreply.github.com
+          git fetch --no-tags ../source HEAD:refs/remotes/source/release
+          git merge --no-ff refs/remotes/source/release \
+            -m "chore: sync txbo/tyde release into main (automated)"
+          if ! git diff --quiet refs/remotes/source/release HEAD --; then
+            echo "::error::Production main contains changes missing from release; backport them to txbo/tyde:release first."
+            git diff --stat refs/remotes/source/release HEAD --
+            exit 1
+          fi
+          git push origin HEAD:refs/heads/main

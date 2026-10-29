@@ -1,9 +1,12 @@
+import type * as Exam from '@tyde/shared';
 import {
   API_PREFIX,
   ApiError,
   OrganizationImportError,
   AVATAR_MAX_BYTES,
   AVATAR_EXTENSIONS,
+  PROJECT_ATTACHMENT_MAX_BYTES,
+  PROJECT_ATTACHMENT_EXTENSIONS,
   BUSINESS_ROLES,
   type AuthApi,
   type ApiFailure,
@@ -24,7 +27,24 @@ import {
   type OrganizationSchedulesResult,
   type OrganizationScheduleResult,
   type WorkbenchProject,
+  type ExpertTask,
+  type ExpertProjectOwnerCandidate,
+  type ExpertTaskResponse,
+  type WorkbenchProjectSource,
   type WorkbenchProjectDetail,
+  type NavigatorProjectCard,
+  type StrategistProjectCard,
+  type ProjectProductionPlan,
+  type ProjectProductionPlanInput,
+  type ProjectCategory,
+  type ProjectRequester,
+  type ProjectDraft,
+  type CurrentProjectDraft,
+  type ProjectMutation,
+  type ProjectManagerCandidate,
+  type ProjectManagerRecruitmentInput,
+  type ProjectManagerRecruitmentResult,
+  type ProjectAttachmentUploadResult,
   type WorkbenchAssignmentDetail,
   type WorkbenchProductionPlan,
   type WorkbenchApplication,
@@ -487,10 +507,90 @@ export function createHttpAuth(
         (typeof value[key] === 'number' && Number.isFinite(value[key])) ||
         (nullable && value[key] === null),
     );
+  const expertAcceptanceStatuses = [
+    'PENDING_ACCEPTANCE',
+    'ACCEPTED',
+    'REJECTED',
+    'CANCELLED',
+    'REPLACED',
+  ];
+  function expertTask(value: unknown): ExpertTask {
+    if (!record(value)) invalidResponse();
+    const basic = value.basicInfo;
+    const validId = (id: unknown) => integer(id, 1) && Number(id) <= 2147483647;
+    if (
+      !(value.sourceBizType === 'EXPERT_ASSIGNMENT'
+        ? validId(value.assignmentId) &&
+          value.movementId === null &&
+          value.sourceBizId === value.assignmentId
+        : value.sourceBizType === 'PROJECT_MEMBER_TRANSFER' &&
+          value.assignmentId === null &&
+          validId(value.movementId) &&
+          value.sourceBizId === value.movementId) ||
+      !record(basic) ||
+      !validId(basic.projectId) ||
+      !strings(basic, ['requesterName', 'creatorName', 'assignedAt']) ||
+      !strings(
+        basic,
+        [
+          'projectName',
+          'projectDescription',
+          'projectManagerName',
+          'categoryLevel1Name',
+          'categoryLevel2Name',
+          'deadline',
+          'organizationName',
+          'projectOwnerName',
+          'projectOwnerAvatarUrl',
+        ],
+        true,
+      ) ||
+      !['creatorId', 'projectManagerId', 'organizationId', 'projectOwnerUserId'].every(
+        (key) => basic[key] === null || uuid(basic[key]),
+      ) ||
+      !inEnum(basic.subjectType, ['INDIVIDUAL', 'ORGANIZATION']) ||
+      !Array.isArray(basic.categoryLevel3Names) ||
+      !basic.categoryLevel3Names.every((name) => typeof name === 'string') ||
+      !numbers(basic, ['productionRequirement'], true) ||
+      !integers(basic, ['operatorHeadcount', 'inspectorHeadcount'], true) ||
+      !Array.isArray(basic.projectOwners) ||
+      !basic.projectOwners.every(
+        (owner) =>
+          record(owner) &&
+          (owner.userId === null || uuid(owner.userId)) &&
+          strings(owner, ['name']) &&
+          strings(owner, ['avatarUrl'], true),
+      ) ||
+      !inEnum(value.acceptanceStatus, expertAcceptanceStatuses) ||
+      !booleans(value, ['needWrittenExam']) ||
+      !strings(value, ['currentNodeCode']) ||
+      !strings(value, ['branchNodeCode'], true) ||
+      !record(value.accessContext) ||
+      !booleans(value.accessContext, [
+        'projectOwner',
+        'acceptedOrganizationOwner',
+        'canViewOrganizationData',
+      ]) ||
+      !record(value.operations) ||
+      !booleans(value.operations, ['canAccept', 'canReject', 'canReportOutput'])
+    )
+      invalidResponse();
+    return value as unknown as ExpertTask;
+  }
+  function workbenchProjectSource(
+    value: unknown,
+  ): value is WorkbenchProjectSource & Record<string, unknown> {
+    return (
+      record(value) &&
+      (value.assignmentId === null) !== (value.movementId === null) &&
+      integer(value.assignmentId ?? value.movementId, 1) &&
+      Number(value.assignmentId ?? value.movementId) <= 2147483647
+    );
+  }
   function workbenchProject(value: unknown): WorkbenchProject {
     if (
       !record(value) ||
-      !integer(value.assignmentId, 1) ||
+      !workbenchProjectSource(value) ||
       !integer(value.projectId, 1) ||
       !strings(value, ['requesterName', 'currentNodeCode']) ||
       !strings(value, ['projectName'], true) ||
@@ -500,19 +600,24 @@ export function createHttpAuth(
       invalidResponse();
     return value as unknown as WorkbenchProject;
   }
-  function workbenchProjectDetail(value: unknown): WorkbenchProjectDetail {
+  function workbenchProjectDetail(value: unknown): WorkbenchProjectDetail;
+  function workbenchProjectDetail(value: unknown, draft: true): ProjectDraft;
+  function workbenchProjectDetail(
+    value: unknown,
+    draft = false,
+  ): WorkbenchProjectDetail | ProjectDraft {
     if (
       !record(value) ||
       !integer(value.id, 1) ||
       !integer(value.versionNo) ||
-      value.status !== 'PUBLISHED' ||
+      value.status !== (draft ? 'DRAFT' : 'PUBLISHED') ||
+      (draft ? value.creatorName !== null : typeof value.creatorName !== 'string') ||
       !inEnum(value.requesterType, ['INDIVIDUAL', 'ORGANIZATION']) ||
       !strings(value, [
         'projectNo',
         'requesterId',
         'requesterName',
         'creatorUid',
-        'creatorName',
         'createdAt',
         'updatedAt',
       ]) ||
@@ -560,7 +665,392 @@ export function createHttpAuth(
       )
     )
       invalidResponse();
-    return value as unknown as WorkbenchProjectDetail;
+    return value as unknown as WorkbenchProjectDetail | ProjectDraft;
+  }
+  function navigatorProject(value: unknown): NavigatorProjectCard {
+    if (
+      !record(value) ||
+      !integer(value.id, 1) ||
+      !strings(value, [
+        'projectNo',
+        'categoryDisplayName',
+        'statusDescription',
+        'currentNodeCode',
+        'workbenchStatusDescription',
+        'currentActionDescription',
+        'requesterName',
+        'creatorName',
+        'projectManagerStatusDescription',
+        'createdAt',
+        'updatedAt',
+      ]) ||
+      !strings(
+        value,
+        [
+          'projectName',
+          'projectDescription',
+          'categoryLevel1Name',
+          'categoryLevel2Name',
+          'branchNodeCode',
+          'creatorId',
+          'projectManagerId',
+          'projectManagerName',
+          'deadline',
+        ],
+        true,
+      ) ||
+      value.status !== 'PUBLISHED' ||
+      !inEnum(value.workbenchStatus, ['PENDING', 'PROCESSING']) ||
+      !inEnum(value.currentAction, ['RECRUIT_PROJECT_MANAGER', 'VIEW_DETAIL']) ||
+      !booleans(value, ['needAssistGrading']) ||
+      !integer(value.activeExpertCount) ||
+      !integers(value, ['requiredHeadcount'], true) ||
+      !Array.isArray(value.categoryLevel3Names) ||
+      !value.categoryLevel3Names.every((name) => typeof name === 'string') ||
+      !Array.isArray(value.projectOwners) ||
+      !value.projectOwners.every(
+        (owner) =>
+          record(owner) &&
+          strings(owner, ['userId', 'name']) &&
+          strings(owner, ['avatarUrl'], true),
+      )
+    )
+      invalidResponse();
+    return value as unknown as NavigatorProjectCard;
+  }
+  function strategistProject(value: unknown): StrategistProjectCard {
+    navigatorProject(value);
+    if (!record(value) || !booleans(value, ['primaryProjectManager', 'expertRecruitmentHandler']))
+      invalidResponse();
+    return value as unknown as StrategistProjectCard;
+  }
+  const projectNodes = [
+    'RECRUIT_PROJECT_MANAGER',
+    'PRODUCTION_PLAN',
+    'ENTRANCE_EXAM',
+    'STANDARD_TRAINING',
+    'RECRUIT_EXECUTION_EXPERT',
+    'PERSONNEL_MANAGEMENT',
+    'PRODUCTION_TASK',
+    'COMPLETED',
+  ];
+  const projectPlanId = (value: unknown) => integer(value, 1) && Number(value) <= 2147483647;
+  const projectPlanDate = (value: unknown): value is string => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith('0000'))
+      return false;
+    const date = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  };
+  const planNumber = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0;
+  const planDecimal = (value: unknown) => {
+    if (!planNumber(value) || Number(value) >= 1e16) return false;
+    const [coefficient = '', exponent = '0'] = String(value).toLowerCase().split('e');
+    return (coefficient.split('.')[1]?.length ?? 0) - Number(exponent) <= 4;
+  };
+  function projectJson(value: unknown, ancestors = new Set<object>()): boolean {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if ((!record(value) && !Array.isArray(value)) || ancestors.has(value)) return false;
+    if (
+      !Array.isArray(value) &&
+      Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null
+    )
+      return false;
+    ancestors.add(value);
+    const valid = Object.values(value).every((item) => projectJson(item, ancestors));
+    ancestors.delete(value);
+    return valid;
+  }
+  function validateProductionPlanInput(value: ProjectProductionPlanInput) {
+    if (
+      !record(value) ||
+      !onlyKeys(value, [
+        'operatorHeadcount',
+        'operatorCpd',
+        'inspectorHeadcount',
+        'inspectorCpd',
+        'needWrittenExam',
+        'maxActiveExamCount',
+        'needInterview',
+        'extJson',
+        'crowds',
+        'stages',
+      ]) ||
+      !projectPlanId(value.operatorHeadcount) ||
+      !planDecimal(value.operatorCpd) ||
+      (value.inspectorHeadcount == null) !== (value.inspectorCpd == null) ||
+      (value.inspectorHeadcount != null && !projectPlanId(value.inspectorHeadcount)) ||
+      (value.inspectorCpd != null && !planDecimal(value.inspectorCpd)) ||
+      (value.maxActiveExamCount != null && !projectPlanId(value.maxActiveExamCount)) ||
+      (value.needWrittenExam != null && typeof value.needWrittenExam !== 'boolean') ||
+      (value.needInterview != null && typeof value.needInterview !== 'boolean') ||
+      (value.extJson !== undefined && !projectJson(value.extJson)) ||
+      !Array.isArray(value.crowds) ||
+      value.crowds.length < 1 ||
+      value.crowds.length > 50 ||
+      !value.crowds.every(
+        (crowd) =>
+          record(crowd) &&
+          onlyKeys(crowd, ['crowdName', 'profileRequirement']) &&
+          typeof crowd.crowdName === 'string' &&
+          Boolean(crowd.crowdName.trim()) &&
+          crowd.crowdName.length <= 100 &&
+          typeof crowd.profileRequirement === 'string' &&
+          Boolean(crowd.profileRequirement.trim()),
+      ) ||
+      !Array.isArray(value.stages) ||
+      value.stages.length < 1 ||
+      value.stages.length > 50 ||
+      !value.stages.every(
+        (stage) =>
+          record(stage) &&
+          onlyKeys(stage, [
+            'stageName',
+            'startDate',
+            'endDate',
+            'workdayCount',
+            'workdayCountSource',
+            'operatorHeadcount',
+            'operatorCpd',
+            'accuracyRate',
+          ]) &&
+          typeof stage.stageName === 'string' &&
+          Boolean(stage.stageName.trim()) &&
+          stage.stageName.length <= 100 &&
+          projectPlanDate(stage.startDate) &&
+          projectPlanDate(stage.endDate) &&
+          stage.endDate >= stage.startDate &&
+          (stage.workdayCountSource == null ||
+            inEnum(stage.workdayCountSource, ['AUTO', 'MANUAL'])) &&
+          (stage.workdayCountSource !== 'MANUAL' || projectPlanId(stage.workdayCount)) &&
+          (stage.workdayCount == null || projectPlanId(stage.workdayCount)) &&
+          projectPlanId(stage.operatorHeadcount) &&
+          (stage.operatorCpd == null || planDecimal(stage.operatorCpd)) &&
+          (stage.accuracyRate == null ||
+            (planDecimal(stage.accuracyRate) && stage.accuracyRate <= 100)),
+      )
+    )
+      throw new ApiError(400, {
+        code: 'VALIDATION_ERROR',
+        message: '生产计划参数不完整，请检查人数、产能、人群、阶段日期和有效天数',
+      });
+  }
+  function productionPlan(
+    value: unknown,
+    projectId: number,
+    confirmed = false,
+  ): ProjectProductionPlan {
+    if (
+      !record(value) ||
+      !booleans(value, ['hasPlan', 'editable', 'needWrittenExam', 'needInterview']) ||
+      value.projectId !== projectId ||
+      !inEnum(value.currentNodeCode, projectNodes, true) ||
+      !projectPlanId(value.maxActiveExamCount) ||
+      !strings(value, ['confirmedBy', 'confirmedAt'], true) ||
+      !projectJson(value.extJson) ||
+      !record(value.projectReference) ||
+      !numbers(value.projectReference, ['projectQuantity'], true) ||
+      !strings(
+        value.projectReference,
+        [
+          'quantityUnit',
+          'deadline',
+          'experienceRequirement',
+          'workSummary',
+          'specialRequirement',
+          'mandatoryRequirement',
+        ],
+        true,
+      ) ||
+      (value.projectReference.requiredHeadcount !== null &&
+        !projectPlanId(value.projectReference.requiredHeadcount)) ||
+      !inEnum(
+        value.projectReference.educationRequirement,
+        ['PHD', 'MASTER', 'BACHELOR', 'COLLEGE', 'BELOW_COLLEGE'],
+        true,
+      ) ||
+      !inEnum(
+        value.projectReference.employmentType,
+        ['FULL_TIME', 'PART_TIME', 'UNLIMITED'],
+        true,
+      ) ||
+      (value.inspectorHeadcount === null) !== (value.inspectorCpd === null) ||
+      (value.inspectorHeadcount !== null && !projectPlanId(value.inspectorHeadcount)) ||
+      (value.inspectorCpd !== null && !planNumber(value.inspectorCpd)) ||
+      !Array.isArray(value.crowds) ||
+      !value.crowds.length ||
+      value.crowds.length > 50 ||
+      !Array.isArray(value.stages) ||
+      !value.stages.length ||
+      value.stages.length > 50
+    )
+      invalidResponse();
+    const hasPlan = value.hasPlan;
+    if (
+      (confirmed && !hasPlan) ||
+      (hasPlan
+        ? !projectPlanId(value.id) ||
+          value.editable !== false ||
+          !projectPlanId(value.operatorHeadcount) ||
+          !planNumber(value.operatorCpd) ||
+          !planNumber(value.totalExpectedOutput) ||
+          typeof value.confirmedBy !== 'string' ||
+          !attendanceTime(value.confirmedAt) ||
+          value.nextStage !== (value.needWrittenExam ? 'ENTRANCE_EXAM' : 'STANDARD_TRAINING')
+        : value.id !== null ||
+          value.operatorHeadcount !== null ||
+          value.operatorCpd !== null ||
+          value.inspectorHeadcount !== null ||
+          value.inspectorCpd !== null ||
+          value.totalExpectedOutput !== null ||
+          value.confirmedBy !== null ||
+          value.confirmedAt !== null ||
+          value.nextStage !== null) ||
+      !value.crowds.every(
+        (crowd, index) =>
+          record(crowd) &&
+          crowd.sequenceNo === index + 1 &&
+          (hasPlan
+            ? projectPlanId(crowd.id) && strings(crowd, ['crowdName', 'profileRequirement'])
+            : crowd.id === null && strings(crowd, ['crowdName', 'profileRequirement'], true)),
+      ) ||
+      !value.stages.every(
+        (stage, index) =>
+          record(stage) &&
+          stage.sequenceNo === index + 1 &&
+          strings(stage, ['stageName'], !hasPlan) &&
+          inEnum(stage.workdayCountSource, ['AUTO', 'MANUAL'], !hasPlan) &&
+          (hasPlan
+            ? projectPlanId(stage.id) &&
+              projectPlanDate(stage.startDate) &&
+              projectPlanDate(stage.endDate) &&
+              stage.endDate >= stage.startDate &&
+              projectPlanId(stage.naturalDayCount) &&
+              projectPlanId(stage.workdayCount) &&
+              projectPlanId(stage.operatorHeadcount) &&
+              planNumber(stage.operatorCpd) &&
+              planNumber(stage.expectedOutput) &&
+              (stage.accuracyRate === null ||
+                (planNumber(stage.accuracyRate) && Number(stage.accuracyRate) <= 100))
+            : [
+                'id',
+                'startDate',
+                'endDate',
+                'naturalDayCount',
+                'workdayCount',
+                'operatorHeadcount',
+                'operatorCpd',
+                'accuracyRate',
+                'expectedOutput',
+              ].every((field) => stage[field] === null)),
+      )
+    )
+      invalidResponse();
+    return value as unknown as ProjectProductionPlan;
+  }
+  function projectCategory(value: unknown): ProjectCategory {
+    if (
+      !record(value) ||
+      !integer(value.id, 1) ||
+      !strings(value, ['categoryCode', 'categoryName']) ||
+      ![1, 2, 3].includes(Number(value.categoryLevel)) ||
+      typeof value.categoryLevel !== 'number' ||
+      !Number.isSafeInteger(value.sortNo)
+    )
+      invalidResponse();
+    return value as unknown as ProjectCategory;
+  }
+  function currentProjectDraft(value: unknown): CurrentProjectDraft {
+    if (!record(value) || typeof value.hasDraft !== 'boolean') invalidResponse();
+    if (value.hasDraft) workbenchProjectDetail(value.draft, true);
+    else if (value.draft !== null) invalidResponse();
+    return value as unknown as CurrentProjectDraft;
+  }
+  function projectMutation(value: unknown, operation: string): ProjectMutation {
+    const published = operation === 'CREATE_PROJECT';
+    if (
+      !record(value) ||
+      !integer(value.id, 1) ||
+      !integer(value.versionNo) ||
+      !strings(value, ['projectNo', 'updatedAt']) ||
+      value.operation !== operation ||
+      value.status !== (published ? 'PUBLISHED' : 'DRAFT') ||
+      value.currentNodeCode !== (published ? 'RECRUIT_PROJECT_MANAGER' : null) ||
+      (published ? typeof value.publishedAt !== 'string' : value.publishedAt !== null)
+    )
+      invalidResponse();
+    return value as unknown as ProjectMutation;
+  }
+  function projectManagerCandidate(value: unknown): ProjectManagerCandidate {
+    if (
+      !record(value) ||
+      !inEnum(value.status, ['CURRENT', 'RECOMMENDED']) ||
+      !uuid(value.userId) ||
+      !strings(value, ['uid', 'name']) ||
+      !strings(value, ['avatarUrl'], true) ||
+      !integer(value.currentProjectCount)
+    )
+      invalidResponse();
+    return value as unknown as ProjectManagerCandidate;
+  }
+  function projectManagerRecruitment(
+    value: unknown,
+    input: ProjectManagerRecruitmentInput,
+  ): ProjectManagerRecruitmentResult {
+    if (
+      !record(value) ||
+      !integer(value.recruitmentId, 1) ||
+      value.projectId !== input.projectId ||
+      !inEnum(value.recruitmentType, ['INITIAL', 'REPLACEMENT']) ||
+      value.assignmentMode !== 'DIRECT' ||
+      value.status !== 'ASSIGNED' ||
+      !inEnum(value.currentNodeCode, projectNodes, true) ||
+      (value.recruitmentType === 'INITIAL' && value.currentNodeCode !== 'PRODUCTION_PLAN') ||
+      value.nextStage !== value.currentNodeCode ||
+      value.primaryAction !== 'CHANGE_PROJECT_MANAGER' ||
+      !attendanceTime(value.assignedAt)
+    )
+      invalidResponse();
+    const manager = projectManagerCandidate(value.manager);
+    if (
+      manager.status !== 'CURRENT' ||
+      manager.userId.toLowerCase() !== input.candidateUserId.toLowerCase()
+    )
+      invalidResponse();
+    return value as unknown as ProjectManagerRecruitmentResult;
+  }
+  function projectUploaded(
+    value: unknown,
+    file: File,
+    extension: string,
+    directory: 'project-attachment' | 'entrance-exam-attachment' = 'project-attachment',
+  ): ProjectAttachmentUploadResult {
+    if (
+      !record(value) ||
+      !uuid(value.fileId) ||
+      !strings(value, [
+        'objectKey',
+        'uploadToken',
+        'fileName',
+        'extension',
+        'contentType',
+        'fileHash',
+      ]) ||
+      value.url !== null ||
+      value.sensitive !== true ||
+      value.size !== file.size ||
+      value.extension !== extension ||
+      !new RegExp(`^${directory}/\\d{4}/\\d{2}/\\d{2}/[a-f0-9]{32}\\.[a-z0-9]+$`).test(
+        String(value.objectKey),
+      ) ||
+      !String(value.objectKey).endsWith(`.${extension}`) ||
+      !/^[A-Za-z0-9_-]{43}$/.test(String(value.uploadToken)) ||
+      !/^[a-f0-9]{64}$/.test(String(value.fileHash))
+    )
+      invalidResponse();
+    return value as unknown as ProjectAttachmentUploadResult;
   }
   function workbenchPlan(value: unknown): WorkbenchProductionPlan {
     if (
@@ -590,10 +1080,15 @@ export function createHttpAuth(
       invalidResponse();
     return value as unknown as WorkbenchProductionPlan;
   }
-  function workbenchAssignment(value: unknown, assignmentId: number): WorkbenchAssignmentDetail {
+  function workbenchAssignment(
+    value: unknown,
+    source: WorkbenchProjectSource,
+  ): WorkbenchAssignmentDetail {
     if (
       !record(value) ||
-      value.assignmentId !== assignmentId ||
+      !workbenchProjectSource(value) ||
+      value.assignmentId !== source.assignmentId ||
+      value.movementId !== source.movementId ||
       !strings(value, ['currentNodeCode'], true) ||
       !Array.isArray(value.availableOperations) ||
       !value.availableOperations.every((operation) => operation === 'VIEW_DETAIL')
@@ -1198,7 +1693,755 @@ export function createHttpAuth(
     });
   }
 
+  const examModes = ['AUTO', 'MANUAL'];
+  const examResults = ['PENDING', 'ADMITTED', 'ELIMINATED'];
+  const examAdmissionStatuses = [
+    'PENDING',
+    'PENDING_ENTRY',
+    'ADMITTED',
+    'ENTRY_DECLINED',
+    'ELIMINATED',
+  ];
+  const examRoundStatuses = ['WAITING', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'];
+  const examScore = (value: unknown, zero = false) =>
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    (zero ? value >= 0 : value > 0) &&
+    value <= 99999999.99;
+  const examText = (value: unknown, max: number, nullable = true) =>
+    (nullable && value == null) || (typeof value === 'string' && value.length <= max);
+  function examInputError(): never {
+    throw new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: '准入考试参数不合法，请核对项目、考试、配置与判卷信息',
+    });
+  }
+  function examLocator(value: unknown): asserts value is Exam.EntranceExamLocator {
+    if (!record(value) || !projectPlanId(value.projectId) || !projectPlanId(value.examId))
+      examInputError();
+  }
+  function examManagement(value: unknown, projectId: number): Exam.EntranceExamManagement {
+    if (
+      !record(value) ||
+      value.projectId !== projectId ||
+      !booleans(value, ['needWrittenExam', 'canCreateExam']) ||
+      !integer(value.activeExamCount) ||
+      !projectPlanId(value.maxActiveExamCount) ||
+      !strings(value, ['createDisabledReason'], true) ||
+      !Array.isArray(value.exams) ||
+      !value.exams.every(
+        (row) =>
+          record(row) &&
+          projectPlanId(row.examId) &&
+          strings(row, ['examNo', 'examName']) &&
+          inEnum(row.status, ['ACTIVE', 'CLOSED']) &&
+          integer(row.examineeCount) &&
+          integer(row.admittedCount) &&
+          Number(row.admittedCount) <= Number(row.examineeCount) &&
+          typeof row.admissionRate === 'number' &&
+          row.admissionRate >= 0 &&
+          row.admissionRate <= 100 &&
+          (row.currentVersionId === null || projectPlanId(row.currentVersionId)) &&
+          attendanceTime(row.createdAt) &&
+          (row.closedAt === null || attendanceTime(row.closedAt)),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamManagement;
+  }
+  function examConfiguration(
+    value: unknown,
+    locator: Exam.EntranceExamLocator,
+  ): Exam.EntranceExamConfiguration {
+    if (
+      !record(value) ||
+      value.projectId !== locator.projectId ||
+      value.examId !== locator.examId ||
+      value.status !== 'ACTIVE' ||
+      !strings(value, ['examNo', 'examName']) ||
+      !projectPlanId(value.currentVersionId) ||
+      !projectPlanId(value.versionNo) ||
+      !(value.durationMinutes === null || projectPlanId(value.durationMinutes)) ||
+      !attendanceTime(value.registrationDeadline) ||
+      !examScore(value.fullScore) ||
+      !examScore(value.passScore) ||
+      Number(value.passScore) > Number(value.fullScore) ||
+      !inEnum(value.decisionRule, ['MAJORITY', 'MANUAL_PRIORITY']) ||
+      !inEnum(value.tieBreakRule, ['STRICT', 'LENIENT'], true) ||
+      !Array.isArray(value.papers) ||
+      !value.papers.every(
+        (paper) =>
+          record(paper) &&
+          projectPlanId(paper.paperId) &&
+          projectPlanId(paper.sequenceNo) &&
+          strings(paper, ['paperName'], true) &&
+          examScore(paper.totalScore) &&
+          Array.isArray(paper.questions) &&
+          paper.questions.every(
+            (q) =>
+              record(q) &&
+              projectPlanId(q.questionId) &&
+              projectPlanId(q.sequenceNo) &&
+              strings(q, ['questionContent', 'referenceAnswer'], true) &&
+              projectJson(q.questionFiles) &&
+              projectJson(q.referenceFiles) &&
+              typeof q.requiredFlag === 'boolean' &&
+              examScore(q.score) &&
+              inEnum(q.scoreSource, examModes),
+          ),
+      ) ||
+      !Array.isArray(value.gradingRounds) ||
+      !value.gradingRounds.every(
+        (round) =>
+          record(round) &&
+          projectPlanId(round.gradingRoundId) &&
+          projectPlanId(round.roundNo) &&
+          inEnum(round.gradingMode, examModes) &&
+          strings(round, ['toolCode', 'toolName'], true) &&
+          ['toolConfig', 'toolFiles', 'reviewers'].every((key) => projectJson(round[key])),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamConfiguration;
+  }
+  function examMutation(
+    value: unknown,
+    input: Exam.EntranceExamConfigInput,
+  ): Exam.EntranceExamMutation {
+    if (
+      !record(value) ||
+      !projectPlanId(value.examId) ||
+      value.projectId !== input.projectId ||
+      ('examId' in input && value.examId !== input.examId) ||
+      value.status !== 'ACTIVE' ||
+      !strings(value, ['examNo', 'examName']) ||
+      !projectPlanId(value.currentVersionId) ||
+      !projectPlanId(value.versionNo) ||
+      !attendanceTime(value.publishedAt)
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamMutation;
+  }
+  function examRoundSummary(value: unknown): value is Exam.EntranceExamRoundSummary {
+    return (
+      record(value) &&
+      projectPlanId(value.gradingRoundId) &&
+      (value.gradingRecordId === null || projectPlanId(value.gradingRecordId)) &&
+      projectPlanId(value.roundNo) &&
+      inEnum(value.gradingMode, examModes) &&
+      inEnum(value.status, examRoundStatuses, true) &&
+      (value.score === null || examScore(value.score, true)) &&
+      inEnum(value.roundResult, ['ADMITTED', 'ELIMINATED'], true) &&
+      strings(value, ['conclusionSummary', 'errorMessage'], true)
+    );
+  }
+  function examGradingDetail(
+    value: unknown,
+    input: Exam.EntranceExamLocator & { attemptId: number; roundNo?: number | null },
+  ): Exam.EntranceExamGradingDetail {
+    if (
+      !record(value) ||
+      value.examId !== input.examId ||
+      value.attemptId !== input.attemptId ||
+      !strings(value, ['candidateUid', 'candidateName']) ||
+      !examScore(value.passScore) ||
+      !inEnum(value.gradingStatus, ['NOT_STARTED', 'PENDING', 'IN_PROGRESS', 'COMPLETED']) ||
+      !inEnum(value.finalResult, examResults) ||
+      !Array.isArray(value.rounds) ||
+      !value.rounds.every(examRoundSummary) ||
+      !examRoundSummary(value.selectedRound) ||
+      value.selectedRound.roundNo !== (input.roundNo ?? 1) ||
+      !value.rounds.some(
+        (round) =>
+          record(round) &&
+          round.gradingRoundId ===
+            (value.selectedRound as Exam.EntranceExamRoundSummary).gradingRoundId,
+      ) ||
+      !Array.isArray(value.questions) ||
+      !value.questions.every(
+        (q) =>
+          record(q) &&
+          projectPlanId(q.questionId) &&
+          projectPlanId(q.sequenceNo) &&
+          examScore(q.score) &&
+          strings(
+            q,
+            ['questionContent', 'referenceAnswer', 'answerContent', 'gradingOpinion'],
+            true,
+          ) &&
+          ['questionFiles', 'referenceFiles', 'answerFiles'].every((key) => projectJson(q[key])) &&
+          (q.answerId === null || projectPlanId(q.answerId)) &&
+          typeof q.answeredFlag === 'boolean' &&
+          inEnum(q.correctness, ['PENDING', 'CORRECT', 'INCORRECT'], true),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamGradingDetail;
+  }
+  function examRosterRow(value: unknown): Exam.EntranceExamRosterItem {
+    if (
+      !record(value) ||
+      !projectPlanId(value.attemptId) ||
+      !uuid(value.candidateUserId) ||
+      !strings(value, ['attemptNo', 'candidateUid', 'candidateName']) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !strings(value, ['organizationName'], true) ||
+      !inEnum(value.finalResult, examResults, true) ||
+      !(value.enteredAt === null || attendanceTime(value.enteredAt)) ||
+      !(value.submittedAt === null || attendanceTime(value.submittedAt)) ||
+      !Array.isArray(value.roundScores) ||
+      !value.roundScores.every(
+        (round) =>
+          record(round) &&
+          projectPlanId(round.roundNo) &&
+          inEnum(round.gradingMode, examModes) &&
+          (round.score === null || examScore(round.score, true)) &&
+          inEnum(round.roundResult, ['ADMITTED', 'ELIMINATED'], true),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamRosterItem;
+  }
+  function examAdmissionRow(value: unknown): Exam.EntranceExamAdmissionItem {
+    if (
+      !record(value) ||
+      !projectPlanId(value.attemptId) ||
+      !projectPlanId(value.examId) ||
+      !uuid(value.candidateUserId) ||
+      !strings(value, ['examName', 'candidateUid', 'candidateName']) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !strings(value, ['organizationName'], true) ||
+      !inEnum(value.employmentType, employments, true) ||
+      !attendanceTime(value.examDate) ||
+      !inEnum(value.admissionStatus, examAdmissionStatuses)
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamAdmissionItem;
+  }
+  function examPage<T>(value: unknown, parser: (row: unknown) => T): Exam.EntranceExamPage<T> {
+    const result = page(value, parser);
+    if (
+      result.size > 100 ||
+      result.pages !== Math.ceil(result.total / result.size) ||
+      result.records.length > result.size
+    )
+      invalidResponse();
+    return result;
+  }
+  function examSubmitResult(
+    value: unknown,
+    input: { gradingRecordId: number; attemptId?: number },
+    manual = false,
+  ): Exam.EntranceExamGradingSubmitResult {
+    if (
+      !record(value) ||
+      !projectPlanId(value.attemptId) ||
+      (input.attemptId !== undefined && input.attemptId !== value.attemptId) ||
+      value.gradingRecordId !== input.gradingRecordId ||
+      !inEnum(
+        value.recordStatus,
+        manual ? ['COMPLETED'] : ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'],
+      ) ||
+      !(value.score === null || examScore(value.score, true)) ||
+      !inEnum(value.roundResult, ['ADMITTED', 'ELIMINATED'], true) ||
+      !inEnum(value.gradingStatus, ['PENDING', 'IN_PROGRESS', 'COMPLETED']) ||
+      !inEnum(value.finalResult, examResults) ||
+      (manual && (value.score === null || value.roundResult === null))
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamGradingSubmitResult;
+  }
+  function examFileKey(value: unknown): value is string {
+    return (
+      typeof value === 'string' &&
+      value.length <= 500 &&
+      value.startsWith('entrance-exam-attachment/') &&
+      !/[\\\p{Cc}]/u.test(value) &&
+      !value.split('/').some((part) => !part || part === '.' || part === '..')
+    );
+  }
+  function examFileInput(value: unknown, preview = false) {
+    return (
+      record(value) &&
+      onlyKeys(value, [
+        'objectKey',
+        'uploadedFileId',
+        'uploadToken',
+        'fileName',
+        'extension',
+        'contentType',
+        'size',
+        'fileHash',
+        'url',
+        'sensitive',
+        ...(preview ? ['fileId'] : []),
+      ]) &&
+      examFileKey(value.objectKey) &&
+      (value.uploadedFileId == null || uuid(value.uploadedFileId)) &&
+      examText(value.uploadToken, 128) &&
+      !(value.uploadedFileId && value.uploadToken) &&
+      ['fileName', 'extension', 'contentType', 'fileHash', 'url'].every(
+        (key) => value[key] === undefined || value[key] === null || typeof value[key] === 'string',
+      ) &&
+      (value.size === undefined || integer(value.size)) &&
+      (value.sensitive === undefined || typeof value.sensitive === 'boolean')
+    );
+  }
+  function examFileList(value: unknown, max: number, preview = false) {
+    return (
+      value == null ||
+      (Array.isArray(value) &&
+        value.length <= max &&
+        value.every((file) => examFileInput(file, preview)))
+    );
+  }
+  function examPublicJson(value: unknown): boolean {
+    if (!projectJson(value)) return false;
+    if (Array.isArray(value)) return value.every(examPublicJson);
+    if (!record(value)) return true;
+    return Object.entries(value).every(
+      ([key, nested]) =>
+        !['secret', 'password', 'apikey', 'accesstoken', 'token'].includes(
+          key.toLowerCase().replace(/[_-]/g, ''),
+        ) && examPublicJson(nested),
+    );
+  }
+  function examConfigInput(value: Exam.EntranceExamConfigInput, preview = false) {
+    if (
+      !record(value) ||
+      !onlyKeys(value, [
+        'projectId',
+        'examId',
+        'expectedCurrentVersionId',
+        'examName',
+        'durationMinutes',
+        'registrationDeadline',
+        'fullScore',
+        'passScore',
+        'decisionRule',
+        'tieBreakRule',
+        'papers',
+        'gradingRounds',
+      ]) ||
+      !projectPlanId(value.projectId) ||
+      !examText(value.examName, 128) ||
+      (!preview && !value.examName?.trim()) ||
+      !(value.durationMinutes == null || projectPlanId(value.durationMinutes)) ||
+      !(value.registrationDeadline == null
+        ? preview
+        : attendanceTime(value.registrationDeadline)) ||
+      !(value.fullScore == null ? preview : examScore(value.fullScore)) ||
+      !(value.passScore == null ? preview : examScore(value.passScore)) ||
+      (value.fullScore != null && value.passScore != null && value.passScore > value.fullScore) ||
+      !(
+        value.decisionRule == null || inEnum(value.decisionRule, ['MAJORITY', 'MANUAL_PRIORITY'])
+      ) ||
+      !(value.tieBreakRule == null || inEnum(value.tieBreakRule, ['STRICT', 'LENIENT'])) ||
+      !Array.isArray(value.papers) ||
+      value.papers.length < 1 ||
+      value.papers.length > 20 ||
+      !value.papers.every(
+        (paper) =>
+          record(paper) &&
+          onlyKeys(paper, ['paperName', 'questions']) &&
+          examText(paper.paperName, 100) &&
+          Array.isArray(paper.questions) &&
+          paper.questions.length >= 1 &&
+          paper.questions.length <= 200 &&
+          paper.questions.every(
+            (q) =>
+              record(q) &&
+              onlyKeys(q, [
+                'questionContent',
+                'questionFiles',
+                'requiredFlag',
+                'score',
+                'scoreSource',
+                'referenceAnswer',
+                'referenceFiles',
+              ]) &&
+              examText(q.questionContent, Number.MAX_SAFE_INTEGER) &&
+              examText(q.referenceAnswer, Number.MAX_SAFE_INTEGER) &&
+              examFileList(q.questionFiles, 20, preview) &&
+              examFileList(q.referenceFiles, 20, preview) &&
+              (q.requiredFlag == null || typeof q.requiredFlag === 'boolean') &&
+              (q.score == null || (typeof q.score === 'number' && Number.isFinite(q.score))) &&
+              (q.scoreSource == null || inEnum(q.scoreSource, examModes)),
+          ),
+      ) ||
+      !Array.isArray(value.gradingRounds) ||
+      value.gradingRounds.length > 20 ||
+      (!preview && !value.gradingRounds.length) ||
+      !value.gradingRounds.every(
+        (round) =>
+          record(round) &&
+          onlyKeys(round, [
+            'gradingMode',
+            'toolCode',
+            'toolName',
+            'toolConfig',
+            'toolFiles',
+            'reviewerUserIds',
+          ]) &&
+          inEnum(round.gradingMode, examModes) &&
+          examText(round.toolCode, 64) &&
+          examText(round.toolName, 128) &&
+          (round.toolConfig === undefined || examPublicJson(round.toolConfig)) &&
+          examFileList(round.toolFiles, 10, preview) &&
+          (round.reviewerUserIds == null ||
+            (Array.isArray(round.reviewerUserIds) &&
+              round.reviewerUserIds.length <= 100 &&
+              round.reviewerUserIds.every(uuid))),
+      )
+    )
+      examInputError();
+  }
+  function examGradingInput(
+    value: Exam.EntranceExamManualGradingInput | Exam.EntranceExamAutoCompensateInput,
+    manual: boolean,
+  ) {
+    examLocator(value);
+    if (
+      !projectPlanId(value.gradingRecordId) ||
+      (manual && (!('attemptId' in value) || !projectPlanId(value.attemptId))) ||
+      !onlyKeys(
+        value as unknown as Record<string, unknown>,
+        manual
+          ? ['projectId', 'examId', 'attemptId', 'gradingRecordId', 'conclusionSummary', 'items']
+          : ['projectId', 'examId', 'gradingRecordId', 'summary', 'compensationReason', 'items'],
+      ) ||
+      !['summary', 'conclusionSummary'].every((key) =>
+        examText((value as unknown as Record<string, unknown>)[key], 5000),
+      ) ||
+      !examText((value as unknown as Record<string, unknown>).compensationReason, 1000) ||
+      !Array.isArray(value.items) ||
+      !value.items.length ||
+      value.items.length > 500 ||
+      new Set(value.items.map((item) => (record(item) ? item.questionId : undefined))).size !==
+        value.items.length ||
+      !value.items.every(
+        (item) =>
+          record(item) &&
+          onlyKeys(item, ['questionId', 'correctness', 'gradingOpinion']) &&
+          projectPlanId(item.questionId) &&
+          inEnum(item.correctness, ['CORRECT', 'INCORRECT']) &&
+          examText(item.gradingOpinion, 5000),
+      )
+    )
+      examInputError();
+  }
+
   return {
+    getEntranceExamManagement: async (projectId) => {
+      if (!projectPlanId(projectId)) examInputError();
+      return examManagement(
+        await request(`/entrance-exams/management?projectId=${projectId}`, undefined, 'GET', true),
+        projectId,
+      );
+    },
+    listEntranceExamReviewers: async (projectId, keyword) => {
+      if (!projectPlanId(projectId) || (keyword !== undefined && typeof keyword !== 'string'))
+        examInputError();
+      const query = new URLSearchParams({
+        projectId: String(projectId),
+        ...(keyword === undefined ? {} : { keyword }),
+      });
+      const data = await request(`/entrance-exams/reviewers?${query}`, undefined, 'GET', true);
+      if (
+        !Array.isArray(data) ||
+        !data.every(
+          (row) =>
+            record(row) &&
+            uuid(row.userId) &&
+            strings(row, ['uid', 'name']) &&
+            strings(row, ['avatarUrl'], true),
+        )
+      )
+        invalidResponse();
+      return data as Exam.EntranceExamReviewer[];
+    },
+    getEntranceExamConfiguration: async (input) => {
+      examLocator(input);
+      if (!onlyKeys(input as unknown as Record<string, unknown>, ['projectId', 'examId']))
+        examInputError();
+      return examConfiguration(await request('/entrance-exams/detail', input, 'POST', true), input);
+    },
+    publishEntranceExam: async (input) => {
+      examConfigInput(input);
+      if ('examId' in input || 'expectedCurrentVersionId' in input) examInputError();
+      return examMutation(await request('/entrance-exams/publish', input, 'POST', true), input);
+    },
+    editEntranceExam: async (input) => {
+      examLocator(input);
+      examConfigInput(input);
+      if (!projectPlanId(input.expectedCurrentVersionId)) examInputError();
+      return examMutation(await request('/entrance-exams/edit', input, 'PUT', true), input);
+    },
+    closeEntranceExam: async (input) => {
+      examLocator(input);
+      if (
+        !onlyKeys(input as unknown as Record<string, unknown>, [
+          'projectId',
+          'examId',
+          'closeReason',
+        ]) ||
+        !examText(input.closeReason, 500)
+      )
+        examInputError();
+      const data = await request('/entrance-exams/close', input, 'POST', true);
+      if (
+        !record(data) ||
+        data.examId !== input.examId ||
+        data.status !== 'CLOSED' ||
+        !strings(data, ['closedBy']) ||
+        !attendanceTime(data.closedAt)
+      )
+        invalidResponse();
+      return data as unknown as Exam.EntranceExamCloseResult;
+    },
+    getEntranceExamRoster: async (input) => {
+      examLocator(input);
+      if (
+        !onlyKeys(input as unknown as Record<string, unknown>, [
+          'projectId',
+          'examId',
+          'keyword',
+          'finalResult',
+          'current',
+          'size',
+        ]) ||
+        !examText(input.keyword, Number.MAX_SAFE_INTEGER) ||
+        !(input.finalResult == null || inEnum(input.finalResult, examResults)) ||
+        [input.current, input.size].some((value) => value != null && !Number.isSafeInteger(value))
+      )
+        examInputError();
+      const current = Math.max(1, input.current ?? 1);
+      const size = Math.min(100, Math.max(1, input.size ?? 20));
+      if (!Number.isSafeInteger((current - 1) * size)) examInputError();
+      const result = examPage(
+        await request('/entrance-exams/roster', input, 'POST', true),
+        examRosterRow,
+      );
+      if (result.current !== current || result.size !== size) invalidResponse();
+      return result;
+    },
+    getEntranceExamAdmissions: async (input) => {
+      if (
+        !record(input) ||
+        !projectPlanId(input.projectId) ||
+        !onlyKeys(input, ['projectId', 'keyword', 'admissionStatus', 'current', 'size']) ||
+        (input.keyword !== undefined && typeof input.keyword !== 'string') ||
+        (input.admissionStatus !== undefined &&
+          !inEnum(input.admissionStatus, examAdmissionStatuses)) ||
+        (input.current !== undefined && !integer(input.current, 1)) ||
+        (input.size !== undefined && (!integer(input.size, 1) || input.size > 100)) ||
+        !Number.isSafeInteger(((input.current ?? 1) - 1) * (input.size ?? 20))
+      )
+        examInputError();
+      const query = new URLSearchParams({
+        projectId: String(input.projectId),
+        ...(input.keyword === undefined ? {} : { keyword: input.keyword }),
+        ...(input.admissionStatus === undefined ? {} : { admissionStatus: input.admissionStatus }),
+        ...(input.current === undefined ? {} : { current: String(input.current) }),
+        ...(input.size === undefined ? {} : { size: String(input.size) }),
+      });
+      const result = examPage(
+        await request(`/entrance-exams/admissions?${query}`, undefined, 'GET', true),
+        examAdmissionRow,
+      );
+      if (result.current !== (input.current ?? 1) || result.size !== (input.size ?? 20))
+        invalidResponse();
+      return result;
+    },
+    getEntranceExamGradingDetail: async (input) => {
+      examLocator(input);
+      if (
+        !onlyKeys(input as unknown as Record<string, unknown>, [
+          'projectId',
+          'examId',
+          'attemptId',
+          'roundNo',
+        ]) ||
+        !projectPlanId(input.attemptId) ||
+        !(input.roundNo == null || projectPlanId(input.roundNo))
+      )
+        examInputError();
+      return examGradingDetail(
+        await request('/entrance-exams/grading/detail', input, 'POST', true),
+        input,
+      );
+    },
+    submitEntranceExamManualGrading: async (input) => {
+      examGradingInput(input, true);
+      if (new TextEncoder().encode(JSON.stringify(input)).byteLength > 16 * 1024)
+        throw new ApiError(413, {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: '阅卷内容超过当前可提交大小，请缩短阅卷意见或本轮总结后重试。',
+        });
+      return examSubmitResult(
+        await request('/entrance-exams/grading/manual', input, 'POST', true),
+        input,
+        true,
+      );
+    },
+    retryEntranceExamAutoGrading: async (input) => {
+      examLocator(input);
+      if (
+        !projectPlanId(input.gradingRecordId) ||
+        !onlyKeys(input as unknown as Record<string, unknown>, [
+          'projectId',
+          'examId',
+          'gradingRecordId',
+        ])
+      )
+        examInputError();
+      return examSubmitResult(
+        await request('/entrance-exams/grading/retry', input, 'POST', true),
+        input,
+      );
+    },
+    compensateEntranceExamAutoGrading: async (input) => {
+      examGradingInput(input, false);
+      return examSubmitResult(
+        await request('/entrance-exams/grading/auto/compensate', input, 'POST', true),
+        input,
+      );
+    },
+    downloadEntranceExamTemplate: async (type) => {
+      const templates = {
+        EXCEL: ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+        TXT: ['txt', 'text/plain'],
+        REDOC: ['xml', 'application/xml'],
+      };
+      if (!Object.hasOwn(templates, type)) examInputError();
+      const [extension, mime] = templates[type];
+      return (await request(
+        `/entrance-exams/import/template?type=${type}`,
+        undefined,
+        'GET',
+        true,
+        {
+          decode: async (response) => {
+            if (!response.ok) await read(response);
+            if (response.headers.get('Content-Type')?.split(';')[0]?.trim() !== mime)
+              invalidResponse();
+            const blob = await response.blob();
+            if (!blob.size) invalidResponse();
+            return { blob, fileName: `entrance-exam-import-v1.${extension}` };
+          },
+        },
+      )) as { fileName: string; blob: Blob };
+    },
+    parseEntranceExamImport: async (input) => {
+      if (
+        !record(input) ||
+        !projectPlanId(input.projectId) ||
+        !onlyKeys(input, ['projectId', 'file', 'redocUrl', 'attachmentRefs']) ||
+        (input.file !== undefined && !(input.file instanceof File)) ||
+        (input.redocUrl !== undefined && typeof input.redocUrl !== 'string') ||
+        Boolean(input.file) === Boolean(input.redocUrl?.trim()) ||
+        (input.redocUrl !== undefined && input.redocUrl.length > 500) ||
+        (input.attachmentRefs !== undefined &&
+          (!Array.isArray(input.attachmentRefs) ||
+            input.attachmentRefs.length > 100 ||
+            !input.attachmentRefs.every(
+              (ref) =>
+                record(ref) &&
+                onlyKeys(ref, ['name', 'objectKey', 'uploadToken']) &&
+                typeof ref.name === 'string' &&
+                !!ref.name.trim() &&
+                ref.name.trim().length <= 200 &&
+                examFileKey(ref.objectKey) &&
+                typeof ref.uploadToken === 'string' &&
+                !!ref.uploadToken.trim() &&
+                ref.uploadToken.length <= 128,
+            )))
+      )
+        examInputError();
+      if (input.file && (!/\.(xls|xlsx|txt)$/i.test(input.file.name) || !input.file.size))
+        examInputError();
+      if (input.file && input.file.size > 10 * 1024 * 1024)
+        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '题目文件最大 10 MiB' });
+      if (
+        input.attachmentRefs &&
+        new Set(input.attachmentRefs.map((ref) => ref.name.trim())).size !==
+          input.attachmentRefs.length
+      )
+        examInputError();
+      const body = new FormData();
+      body.append('projectId', String(input.projectId));
+      if (input.file) body.append('file', input.file);
+      else body.append('redocUrl', input.redocUrl!.trim());
+      if (input.attachmentRefs !== undefined)
+        body.append('attachmentRefs', JSON.stringify(input.attachmentRefs));
+      const data = await request('/entrance-exams/import/parse', body, 'POST', true, {
+        timeoutMs: 120_000,
+      });
+      if (
+        !record(data) ||
+        data.formatVersion !== '1' ||
+        !inEnum(data.sourceType, ['EXCEL', 'TXT']) ||
+        !record(data.config) ||
+        data.config.projectId !== input.projectId
+      )
+        invalidResponse();
+      try {
+        examConfigInput(data.config as unknown as Exam.EntranceExamConfigInput, true);
+      } catch {
+        invalidResponse();
+      }
+      return data as unknown as Exam.EntranceExamImportResult;
+    },
+    uploadEntranceExamAttachment: async (file) => {
+      if (!(file instanceof File)) examInputError();
+      const name = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
+      const extension = name.includes('.') ? name.split('.').at(-1)!.toLowerCase() : '';
+      if (!(PROJECT_ATTACHMENT_EXTENSIONS as readonly string[]).includes(extension) || !file.size)
+        examInputError();
+      if (file.size > PROJECT_ATTACHMENT_MAX_BYTES)
+        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '考试附件最大 50 MiB' });
+      const body = new FormData();
+      body.append('bizType', 'ENTRANCE_EXAM_ATTACHMENT');
+      body.append('category', 'PROJECT_ATTACHMENT');
+      body.append('file', file);
+      return projectUploaded(
+        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+        file,
+        extension,
+        'entrance-exam-attachment',
+      );
+    },
+    readEntranceExamAttachment: async (objectKey) => {
+      if (!examFileKey(objectKey)) examInputError();
+      return (await request(
+        `/files/view?${new URLSearchParams({ objectKey })}`,
+        undefined,
+        'GET',
+        true,
+        {
+          decode: async (response) => {
+            if (!response.ok) await read(response);
+            const type = response.headers.get('Content-Type')?.split(';')[0]?.trim();
+            if (
+              !inEnum(type, [
+                'application/octet-stream',
+                'application/pdf',
+                'image/jpeg',
+                'image/png',
+                'image/gif',
+                'image/bmp',
+                'image/webp',
+              ])
+            )
+              invalidResponse();
+            const blob = await response.blob();
+            if (!blob.size) invalidResponse();
+            return blob;
+          },
+          timeoutMs: 60_000,
+        },
+      )) as Blob;
+    },
     health: async () => {
       const data = await read(await send('/health/ready', undefined, 'GET'), false);
       if (!record(data) || typeof data.status !== 'string') invalidResponse();
@@ -1377,6 +2620,300 @@ export function createHttpAuth(
         }),
       );
     },
+    listNavigatorProjects: async () => {
+      const data = await request('/projects/list', undefined, 'GET', true);
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(navigatorProject);
+    },
+    listStrategistProjects: async () => {
+      const data = await request('/projects/manager/list', undefined, 'GET', true);
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(strategistProject);
+    },
+    getCurrentProjectDraft: async () =>
+      currentProjectDraft(await request('/projects/draft/current', undefined, 'GET', true)),
+    getProjectCategories: async (input = {}) => {
+      if (
+        (input.categoryLevel !== undefined && ![1, 2, 3].includes(input.categoryLevel)) ||
+        (input.keyword !== undefined && typeof input.keyword !== 'string')
+      )
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目分类条件' });
+      const query = new URLSearchParams({
+        ...(input.categoryLevel !== undefined
+          ? { categoryLevel: String(input.categoryLevel) }
+          : {}),
+        ...(input.keyword !== undefined ? { keyword: input.keyword } : {}),
+      });
+      const data = await request(
+        `/project-categories${query.size ? `?${query}` : ''}`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(projectCategory);
+    },
+    getCurrentProjectRequester: async (userId) => {
+      if (!uuid(userId))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的本人用户 ID' });
+      const data = await request(
+        `/project-requesters/INDIVIDUAL/${encodeURIComponent(userId)}/backfill`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (
+        !record(data) ||
+        data.requesterType !== 'INDIVIDUAL' ||
+        data.requesterId !== userId ||
+        typeof data.requesterName !== 'string' ||
+        data.orgId !== null ||
+        data.orgVerifyStatus !== null
+      )
+        invalidResponse();
+      return data as unknown as ProjectRequester;
+    },
+    saveProject: async (input) => {
+      if (
+        !inEnum(input.operation, ['SAVE_DRAFT', 'CREATE_PROJECT']) ||
+        (input.versionNo != null && !attendanceVersion(input.versionNo)) ||
+        (input.requesterType != null && input.requesterType !== 'INDIVIDUAL') ||
+        (input.requesterId != null && !uuid(input.requesterId))
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '项目操作、需求方或草稿版本不合法',
+        });
+      // 接口不提供幂等键：仅沿用明确401后的会话刷新，不重放网络/5xx/409失败。
+      return projectMutation(
+        await request('/projects/create', input, 'POST', true),
+        input.operation,
+      );
+    },
+    getProjectDetail: async (projectId) => {
+      if (!integer(projectId, 1) || projectId > 2147483647)
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+      const data = workbenchProjectDetail(
+        await request(`/projects/${projectId}`, undefined, 'GET', true),
+      );
+      if (data.id !== projectId) invalidResponse();
+      return data;
+    },
+    getProjectProductionPlan: async (projectId) => {
+      if (!projectPlanId(projectId))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+      return productionPlan(
+        await request(`/projects/production-plan?projectId=${projectId}`, undefined, 'GET', true),
+        projectId,
+      );
+    },
+    confirmProjectProductionPlan: async (projectId, input) => {
+      if (!projectPlanId(projectId))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+      validateProductionPlanInput(input);
+      // 此确认只能执行一次；只沿用明确401后的刷新，不重放网络/5xx/409结果。
+      return productionPlan(
+        await request(
+          `/projects/production-plan/confirm?projectId=${projectId}`,
+          input,
+          'POST',
+          true,
+        ),
+        projectId,
+        true,
+      );
+    },
+    listProjectManagerCandidates: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['projectId', 'keyword']) ||
+        !integer(input.projectId, 1) ||
+        input.projectId > 2147483647 ||
+        (input.keyword !== undefined &&
+          (typeof input.keyword !== 'string' || input.keyword.length > 100))
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目 ID 和不超过 100 字符的姓名或昵称',
+        });
+      const query = new URLSearchParams({ projectId: String(input.projectId) });
+      if (input.keyword?.trim()) query.set('keyword', input.keyword.trim());
+      const data = await request(`/projects/manager-candidates?${query}`, undefined, 'GET', true);
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(projectManagerCandidate);
+    },
+    recruitProjectManager: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['projectId', 'candidateUserId']) ||
+        !integer(input.projectId, 1) ||
+        input.projectId > 2147483647 ||
+        !uuid(input.candidateUserId)
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目 ID 和策略官用户 ID',
+        });
+      // 无幂等键：仅明确401时沿既有会话刷新重试，不重放网络/5xx/409失败。
+      return projectManagerRecruitment(
+        await request('/projects/manager-recruitments', input, 'POST', true),
+        input,
+      );
+    },
+    uploadProjectAttachment: async (file) => {
+      const name = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
+      const extension = name.includes('.') ? name.split('.').at(-1)!.toLowerCase() : '';
+      if (!(PROJECT_ATTACHMENT_EXTENSIONS as readonly string[]).includes(extension) || !file.size)
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请选择支持类型的非空项目附件',
+        });
+      if (file.size > PROJECT_ATTACHMENT_MAX_BYTES)
+        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '项目附件最大 50 MiB' });
+      const body = new FormData();
+      body.append('bizType', 'PROJECT_ATTACHMENT');
+      body.append('category', 'PROJECT_ATTACHMENT');
+      body.append('file', file);
+      return projectUploaded(
+        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+        file,
+        extension,
+      );
+    },
+    readProjectAttachment: async (objectKey) => {
+      if (
+        typeof objectKey !== 'string' ||
+        objectKey.length > 512 ||
+        !objectKey.startsWith('project-attachment/') ||
+        /[\\\p{Cc}]/u.test(objectKey) ||
+        objectKey.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目附件对象 Key',
+        });
+      return (await request(
+        `/files/view?${new URLSearchParams({ objectKey })}`,
+        undefined,
+        'GET',
+        true,
+        {
+          decode: async (response) => {
+            if (!response.ok) await read(response);
+            const type = response.headers.get('Content-Type')?.split(';')[0]?.trim();
+            if (
+              !inEnum(type, [
+                'application/octet-stream',
+                'application/pdf',
+                'image/jpeg',
+                'image/png',
+                'image/gif',
+                'image/bmp',
+                'image/webp',
+              ])
+            )
+              invalidResponse();
+            const blob = await response.blob();
+            if (!blob.size) invalidResponse();
+            return blob;
+          },
+          timeoutMs: 60_000,
+        },
+      )) as Blob;
+    },
+    getMyExpertTasks: async (input = {}) => {
+      if (
+        !record(input) ||
+        (input.keyword != null &&
+          (typeof input.keyword !== 'string' || input.keyword.length > 100)) ||
+        [input.acceptanceStatus, input.status].some(
+          (status) => status != null && !inEnum(status, expertAcceptanceStatuses),
+        ) ||
+        (input.acceptanceStatus != null &&
+          input.status != null &&
+          input.acceptanceStatus !== input.status)
+      )
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目筛选条件' });
+      const data = await request('/expert-assignments/my-tasks', input, 'POST', true);
+      if (!Array.isArray(data)) invalidResponse();
+      return data.map(expertTask);
+    },
+    getExpertProjectOwnerCandidates: async (assignmentId) => {
+      if (!integer(assignmentId, 1) || assignmentId > 2147483647)
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配 ID' });
+      const data = await request(
+        `/expert-assignments/project-owner-candidates?${new URLSearchParams({ assignmentId: String(assignmentId) })}`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (
+        !Array.isArray(data) ||
+        !data.every(
+          (candidate) =>
+            record(candidate) &&
+            uuid(candidate.userId) &&
+            strings(candidate, ['uid', 'name']) &&
+            strings(candidate, ['avatarUrl'], true) &&
+            inEnum(candidate.position, ['OWNER', 'ADMIN', 'MEMBER']) &&
+            typeof candidate.projectOwner === 'boolean',
+        ) ||
+        new Set(data.map((candidate) => candidate.userId)).size !== data.length
+      )
+        invalidResponse();
+      return data as ExpertProjectOwnerCandidate[];
+    },
+    respondExpertTask: async (input) => {
+      const validId = (id: unknown) => integer(id, 1) && Number(id) <= 2147483647;
+      if (
+        !record(input) ||
+        !onlyKeys(input, [
+          'assignmentId',
+          'movementId',
+          'decision',
+          'projectOwnerUserIds',
+          'rejectReason',
+        ]) ||
+        (input.assignmentId == null) === (input.movementId == null) ||
+        (input.assignmentId != null && !validId(input.assignmentId)) ||
+        (input.movementId != null && !validId(input.movementId)) ||
+        !inEnum(input.decision, ['ACCEPT', 'REJECT']) ||
+        (input.rejectReason !== undefined &&
+          (typeof input.rejectReason !== 'string' || input.rejectReason.length > 500)) ||
+        (input.decision === 'REJECT' && !input.rejectReason?.trim()) ||
+        (input.projectOwnerUserIds !== undefined &&
+          (!Array.isArray(input.projectOwnerUserIds) ||
+            !input.projectOwnerUserIds.every(uuid) ||
+            new Set(input.projectOwnerUserIds).size > 20 ||
+            (input.movementId != null && input.projectOwnerUserIds.length > 0)))
+      )
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的接单来源、负责人或拒绝原因',
+        });
+      const data = await request('/expert-assignments/respond', input, 'POST', true);
+      if (
+        !record(data) ||
+        (input.assignmentId != null
+          ? data.assignmentId !== input.assignmentId ||
+            !(data.movementId === null || validId(data.movementId))
+          : data.assignmentId !== null || data.movementId !== input.movementId) ||
+        !inEnum(data.status, ['ACCEPTED', 'REJECTED']) ||
+        !inEnum(data.memberStatus, ['ACCEPTED', 'REJECTED'], true) ||
+        (data.memberStatus ?? data.status) !==
+          (input.decision === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED') ||
+        !inEnum(data.nextAction, [
+          'NONE',
+          'VIEW_RESULT',
+          'MANAGE_PROJECT_MEMBERS',
+          'TAKE_ENTRANCE_EXAM',
+          'WAIT_ENTRY_CONFIRMATION',
+        ]) ||
+        !integer(data.notifiedMemberCount)
+      )
+        invalidResponse();
+      return data as unknown as ExpertTaskResponse;
+    },
     getMyExpertProjects: async (keyword) => {
       if (keyword !== undefined && keyword.length > 100)
         throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '项目关键字最多 100 字符' });
@@ -1385,17 +2922,18 @@ export function createHttpAuth(
       if (!Array.isArray(data)) invalidResponse();
       return data.map(workbenchProject);
     },
-    getExpertAssignmentDetail: async (assignmentId) => {
-      if (!integer(assignmentId, 1) || assignmentId > 2147483647)
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配 ID' });
+    getExpertAssignmentDetail: async (input) => {
+      const source = typeof input === 'number' ? { assignmentId: input, movementId: null } : input;
+      if (!workbenchProjectSource(source))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配或转项 ID' });
+      const query = new URLSearchParams(
+        source.assignmentId === null
+          ? { movementId: String(source.movementId) }
+          : { assignmentId: String(source.assignmentId) },
+      );
       return workbenchAssignment(
-        await request(
-          `/expert-assignments/detail?${new URLSearchParams({ assignmentId: String(assignmentId) })}`,
-          undefined,
-          'GET',
-          true,
-        ),
-        assignmentId,
+        await request(`/expert-assignments/detail?${query}`, undefined, 'GET', true),
+        source,
       );
     },
     listMyApplications: async (input) =>

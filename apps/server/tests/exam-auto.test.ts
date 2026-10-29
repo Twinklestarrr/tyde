@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import { createApp } from '../src/application.js';
@@ -453,3 +455,55 @@ test('mock callback transport failure attempts guarded failure persistence witho
     expect.objectContaining({ status: 'FAILED', items: null, errorCode: 'MOCK_DELIVERY_FAILED' }),
   );
 });
+
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(),
+}));
+
+test.each(['failed', 'success', 'compensate', 'retry'])(
+  'grading %s carries cross-domain card changes on its existing event',
+  async (operation) => {
+    const { service, db, record, tx } = setup();
+    const cardChanges = {
+      cardChangedRecipients: [{ userId: 'other-domain-manager', role: 'PM' as const }],
+    };
+    vi.mocked(refreshManagementCardSnapshots).mockResolvedValueOnce(cardChanges);
+    let eventType = 'EXAM_REVIEW_QUEUE_CHANGED';
+    if (operation === 'retry') {
+      record.status = 'FAILED';
+      tx.entranceExamGradingRound.findMany.mockResolvedValueOnce([]);
+      await new ExamAutoService(db).retry(
+        { projectId: 3001, examId: 5001, gradingRecordId: record.id },
+        principal,
+      );
+      eventType = 'EXAM_AUTO_DISPATCH_REQUESTED';
+    } else if (operation === 'failed') {
+      await service.callback({
+        ...callbackExample,
+        status: 'FAILED',
+        items: null,
+        errorMessage: 'mock failure',
+      } as never);
+      eventType = 'EXAM_AUTO_FAILED';
+    } else if (operation === 'compensate') {
+      record.status = 'FAILED';
+      await service.compensate(compensateExample as never, principal);
+    } else await service.callback(callbackExample as never);
+    expect(tx.projectEventOutbox.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ eventType, payload: expect.objectContaining(cardChanges) }),
+    });
+    const carrying = tx.projectEventOutbox.create.mock.calls.filter(
+      ([input]) => 'cardChangedRecipients' in input.data.payload,
+    );
+    expect(carrying).toHaveLength(1);
+    expect(refreshManagementCardSnapshots).toHaveBeenLastCalledWith(tx, 3001, expect.any(Date));
+    expect(refreshOwnerProgress).toHaveBeenLastCalledWith(tx, 3001, null, expect.any(Date));
+    expect(vi.mocked(refreshOwnerProgress).mock.invocationCallOrder.at(-1)).toBeLessThan(
+      vi.mocked(refreshManagementCardSnapshots).mock.invocationCallOrder.at(-1)!,
+    );
+  },
+);
+
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(),
+}));

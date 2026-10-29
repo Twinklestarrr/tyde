@@ -152,6 +152,12 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
       }
       if (!record.cookie) return void reply(null, 401);
       if (path === '/api/v1/users/me') return void reply(user);
+      if (path === '/api/v1/expert-assignments/my-tasks' && request.method === 'POST') {
+        expect(body).toEqual({});
+        return void reply([]);
+      }
+      if (path === '/api/v1/projects/manager/list' && request.method === 'GET')
+        return void reply([]);
       if (path === '/api/v1/auth/switch-role') {
         const role = body?.role as AuthUser['role'];
         if (!user.roles.includes(role)) return void reply(null, 403);
@@ -264,13 +270,11 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
     await page.getByLabel(/^手机号/).fill(phone);
     await page.getByLabel(/^密码\s*\*?\s*$/).fill(password);
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expect(
-      page.getByRole('heading', { name: `欢迎，${user.nickname}`, exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
     await page.getByRole('combobox', { name: '当前角色', exact: true }).click();
     await page.getByRole('option', { name: '策略官', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '策略官工作台', exact: true })).toBeVisible();
-    await expect(page.getByText('工作台功能尚未接入', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+    await expect(page.getByText('暂无待办项目', { exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: '组织管理', exact: true })).toHaveCount(0);
     await page.getByRole('combobox', { name: '当前角色', exact: true }).click();
     await page.getByRole('option', { name: '执行专家', exact: true }).click();
@@ -354,10 +358,16 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
     expect(preflights).toContain('/api/v1/organizations/member-imports/generate');
     expect(preflights).not.toContain(`/api/v1/organizations?orgId=${orgId}`);
   } finally {
-    await app?.close();
-    await new Promise<void>((accept, reject) =>
-      server.close((error) => (error ? reject(error) : accept())),
-    );
-    await rm(profile, { recursive: true, force: true });
+    try {
+      await app?.close();
+    } finally {
+      try {
+        await new Promise<void>((accept, reject) =>
+          server.close((error) => (error ? reject(error) : accept())),
+        );
+      } finally {
+        await rm(profile, { recursive: true, force: true });
+      }
+    }
   }
 });

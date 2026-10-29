@@ -19,6 +19,8 @@ export const workspaceViewOptions = [
   { value: 'PM', label: '策略官' },
 ] as const;
 export type WorkspaceView = (typeof workspaceViewOptions)[number]['value'];
+/** 编辑页可在真实角色变更前保护未保存内容；取消时不发起会话写入。 */
+export const WORKSPACE_ROLE_SWITCH_REQUEST = 'tyde:before-role-switch';
 
 type WorkspaceViewState = {
   view: WorkspaceView;
@@ -87,6 +89,8 @@ export function WorkspaceViewProvider({ user, children }: PropsWithChildren<{ us
 
   function setView(role: WorkspaceView) {
     if (switching.current || role === view || !user.roles.includes(role)) return;
+    if (!window.dispatchEvent(new Event(WORKSPACE_ROLE_SWITCH_REQUEST, { cancelable: true })))
+      return;
     switching.current = true;
     switchRole.mutate(role);
   }

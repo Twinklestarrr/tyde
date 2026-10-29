@@ -1,3 +1,5 @@
+import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
@@ -125,50 +127,6 @@ export async function acceptanceTasks(
   }
   return snapshot;
 }
-async function syncAcceptance(
-  tx: Prisma.TransactionClient,
-  projectId: number,
-  before: TaskSnapshot,
-  after: TaskSnapshot,
-  now: Date,
-) {
-  const priority = (type: string) =>
-    type === 'SUBTASK_REWORK_REVIEW' ? 90 : type === 'SUBTASK_REWORK_SUBMIT' ? 85 : 80;
-  for (const scope of [...before.scopes, ...after.scopes]) {
-    const where = {
-      projectId_userId_perspective: {
-        projectId,
-        userId: scope.userId,
-        perspective: scope.perspective,
-      },
-    };
-    const old = await tx.projectRoleNodeSnapshot.findUnique({ where });
-    const owned = old?.sourceBizType === 'SUBTASK' && acceptanceTypes.includes(old.branchNodeCode);
-    const source = after.sources
-      .filter((s) => s.userId === scope.userId && s.role === scope.role)
-      .sort((a, b) => priority(b.taskType) - priority(a.taskType))[0];
-    if (!source) {
-      if (owned) await tx.projectRoleNodeSnapshot.delete({ where });
-      continue;
-    }
-    if (old && !owned && old.branchPriority >= priority(source.taskType)) continue;
-    const id = Number(source.sources[0]!.split(':')[1]);
-    const t = await tx.projectSubtask.findUniqueOrThrow({ where: { id } });
-    const data = {
-      branchNodeCode: source.taskType,
-      branchPriority: priority(source.taskType),
-      sourceBizType: 'SUBTASK',
-      sourceBizId: id,
-      sourceEventAt: t.reviewedAt ?? t.submittedAt ?? now,
-      calculatedAt: now,
-    };
-    await tx.projectRoleNodeSnapshot.upsert({
-      where,
-      create: { projectId, userId: scope.userId, perspective: scope.perspective, ...data },
-      update: data,
-    });
-  }
-}
 async function publish(
   tx: Prisma.TransactionClient,
   q: AcceptanceKey,
@@ -190,7 +148,8 @@ async function publish(
     acceptanceTypes,
     now,
   );
-  await syncAcceptance(tx, q.projectId, before, after, now);
+  await refreshOwnerProgress(tx, q.projectId, null, now);
+  const cardChanges = await refreshManagementCardSnapshots(tx, q.projectId, now);
   await tx.projectEventOutbox.create({
     data: {
       projectId: q.projectId,
@@ -201,6 +160,7 @@ async function publish(
         schemaVersion: 1,
         projectId: q.projectId,
         subtaskId: q.subtaskId,
+        ...cardChanges,
         actorUserId: p.userId,
       },
     },

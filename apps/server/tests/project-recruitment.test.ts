@@ -1,3 +1,8 @@
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => undefined),
+}));
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import {
@@ -312,68 +317,44 @@ test('recruitment HTTP paths, examples, schema validation, serialization and Swa
   }
 });
 
-test('recruitment retry snapshot repairs its own stale owner/source while preserving other domain branches', async () => {
+test('recruitment snapshot delegates to complete cross-domain arbitration', async () => {
   const { syncRecruitmentRetrySnapshot } =
     await import('../src/modules/projects/project-recruitment-snapshot.js');
   const { tx } = setup();
-  tx.projectRoleNodeSnapshot.findMany.mockResolvedValue([
-    {
-      id: 1,
-      userId: 'old-owner',
-      perspective: 'EXPERT_RECRUITMENT_HANDLER',
-      branchNodeCode: 'EXPERT_RECRUITMENT_RETRY',
-    },
-    {
-      id: 2,
-      userId: primary,
-      perspective: 'PROJECT_MANAGER',
-      branchNodeCode: 'ENTRANCE_EXAM_GRADING_RETRY',
-    },
-  ] as never);
-  tx.projectExpertAssignment.findMany.mockResolvedValue([
-    { id: 8, createdAt: new Date('2026-01-01'), rejectedAt: new Date('2026-01-02') },
-  ] as never);
-  const scopes = [
-    {
-      userId: primary,
-      role: 'PM' as const,
-      perspective: 'PROJECT_MANAGER',
-      currentNodeCode: 'PRODUCTION_TASK',
-      mainEligible: true,
-      boardVisible: true,
-    },
-    {
-      userId: handler,
-      role: 'PM' as const,
-      perspective: 'EXPERT_RECRUITMENT_HANDLER',
-      currentNodeCode: 'PRODUCTION_TASK',
-      mainEligible: true,
-      boardVisible: true,
-    },
-  ];
-  await syncRecruitmentRetrySnapshot(tx as never, 3001, {
-    scopes,
-    sources: [
-      {
-        userId: handler,
-        role: 'PM',
-        taskType: 'EXPERT_RECRUITMENT_RETRY',
-        sources: ['EXPERT_ASSIGNMENT:8'],
-      },
-    ],
-  });
-  expect(tx.projectRoleNodeSnapshot.deleteMany).toHaveBeenCalledWith({
-    where: { id: 1, sourceBizType: 'EXPERT_ASSIGNMENT' },
-  });
-  expect(tx.projectRoleNodeSnapshot.upsert).toHaveBeenCalledWith(
-    expect.objectContaining({
-      create: expect.objectContaining({
-        userId: handler,
-        perspective: 'EXPERT_RECRUITMENT_HANDLER',
-        branchPriority: 90,
-        sourceBizId: 8,
-      }),
+  vi.mocked(refreshManagementCardSnapshots).mockClear();
+  await syncRecruitmentRetrySnapshot(tx as never, 3001, { scopes: [], sources: [] });
+  expect(refreshManagementCardSnapshots).toHaveBeenCalledExactlyOnceWith(tx, 3001);
+});
+
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(),
+}));
+
+test('assignment submission preserves arbitration recipients alongside existing task facts', async () => {
+  const { service, tx } = setup();
+  const cardChanges = { cardChangedRecipients: [{ userId: 'entry-manager', role: 'PM' as const }] };
+  vi.mocked(refreshManagementCardSnapshots).mockResolvedValueOnce(cardChanges);
+  await service.submit(input, p);
+  expect(tx.projectEventOutbox.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      eventType: 'EXPERT_ASSIGNMENTS_CREATED',
+      payload: expect.objectContaining({ ...cardChanges, assignmentIds: [4] }),
     }),
-  );
-  expect(tx.projectRoleNodeSnapshot.upsert).toHaveBeenCalledTimes(1);
+  });
+});
+
+test('independent progress refresh runs after business rounds and aborts cards and outbox on failure', async () => {
+  const { service, tx } = setup();
+  const cardsBefore = vi.mocked(refreshManagementCardSnapshots).mock.calls.length;
+  vi.mocked(refreshOwnerProgress).mockImplementationOnce(async (transaction, id, ids) => {
+    expect(transaction).toBe(tx);
+    expect(id).toBe(3001);
+    expect(ids).toBeNull();
+    expect(tx.projectTaskRound.findMany).toHaveBeenCalled();
+    expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
+    throw new Error('recruit independent progress fault');
+  });
+  await expect(service.submit(input, p)).rejects.toThrow('recruit independent progress fault');
+  expect(vi.mocked(refreshManagementCardSnapshots).mock.calls).toHaveLength(cardsBefore);
+  expect(tx.projectEventOutbox.create).not.toHaveBeenCalled();
 });

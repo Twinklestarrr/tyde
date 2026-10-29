@@ -1,3 +1,4 @@
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import type { Prisma } from '@prisma/client';
 import type { TaskSnapshot } from '../projects/project-task-rounds.js';
 import { participatingStatuses } from '../organizations/organization.service.js';
@@ -87,36 +88,8 @@ export async function syncEntrySnapshots(
   after: TaskSnapshot,
   now: Date,
 ) {
-  for (const scope of [...before.scopes, ...after.scopes]) {
-    const where = {
-      projectId_userId_perspective: {
-        projectId,
-        userId: scope.userId,
-        perspective: scope.perspective,
-      },
-    };
-    const old = await tx.projectRoleNodeSnapshot.findUnique({ where });
-    if (old && old.branchNodeCode !== 'MEMBER_ENTRY_CONFIRM' && old.branchPriority >= 60) continue;
-    const source = after.sources.find((s) => s.userId === scope.userId && s.role === scope.role)
-      ?.sources[0];
-    if (!source) {
-      if (old) await tx.projectRoleNodeSnapshot.delete({ where });
-      continue;
-    }
-    const id = Number(source.split(':')[1]);
-    const member = await tx.projectMember.findUniqueOrThrow({ where: { id } });
-    const data = {
-      branchNodeCode: 'MEMBER_ENTRY_CONFIRM',
-      branchPriority: 60,
-      sourceBizType: 'PROJECT_MEMBER',
-      sourceBizId: id,
-      sourceEventAt: member.admittedAt ?? member.createdAt,
-      calculatedAt: now,
-    };
-    await tx.projectRoleNodeSnapshot.upsert({
-      where,
-      create: { projectId, userId: scope.userId, perspective: scope.perspective, ...data },
-      update: data,
-    });
-  }
+  // 旧轮次参数保留调用契约；卡片在完整真实来源上统一仲裁。
+  void before;
+  void after;
+  return refreshManagementCardSnapshots(tx, projectId, now);
 }

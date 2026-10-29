@@ -2,15 +2,17 @@ import type { OrganizationFlowStatus, OrganizationPage } from './organizations.j
 
 /** 当前后端本人接口；前端工作台视图不作为这些接口的授权依据。 */
 export type WorkbenchPage<T> = OrganizationPage<T>;
-export interface WorkbenchProject {
-  assignmentId: number;
+/** 普通分配与独立转入身份二选一；不得为转入身份伪造分配 ID。 */
+export type WorkbenchProjectSource =
+  { assignmentId: number; movementId: null } | { assignmentId: null; movementId: number };
+export type WorkbenchProject = WorkbenchProjectSource & {
   projectId: number;
   projectName: string | null;
   requesterName: string;
   needWrittenExam: boolean;
   admissionStatus: 'PASSED' | 'PENDING' | 'NOT_PASSED' | 'NOT_EXAMINED';
   currentNodeCode: string;
-}
+};
 export interface WorkbenchProjectDetail {
   id: number;
   projectNo: string;
@@ -89,14 +91,13 @@ export interface WorkbenchProductionPlan {
     expectedOutput: number | null;
   }[];
 }
-export interface WorkbenchAssignmentDetail {
-  assignmentId: number;
+export type WorkbenchAssignmentDetail = WorkbenchProjectSource & {
   projectDetail: WorkbenchProjectDetail;
   productionPlan: WorkbenchProductionPlan;
   /** 项目主线节点，不是项目列表里的本人支线节点。 */
   currentNodeCode: string | null;
   availableOperations: 'VIEW_DETAIL'[];
-}
+};
 export interface WorkbenchApplicationQuery {
   /** 省略默认退出组织；null/空白查询全部类型。 */
   businessType?: string | null;
@@ -297,7 +298,9 @@ export interface WorkbenchHolidayMonth {
 }
 export interface WorkbenchApi {
   getMyExpertProjects(keyword?: string): Promise<WorkbenchProject[]>;
-  getExpertAssignmentDetail(assignmentId: number): Promise<WorkbenchAssignmentDetail>;
+  getExpertAssignmentDetail(
+    source: number | WorkbenchProjectSource,
+  ): Promise<WorkbenchAssignmentDetail>;
   listMyApplications(
     input: WorkbenchApplicationQuery,
   ): Promise<WorkbenchPage<WorkbenchApplication>>;

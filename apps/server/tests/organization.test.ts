@@ -11,6 +11,7 @@ import {
   organizationUpdateBody,
   organizationDetailResponse,
   organizationUpdateResponse,
+  organizationOverviewResponse,
 } from '../src/modules/organizations/organization.schema.js';
 const config = readConfig({
   APP_ENV: 'test',
@@ -41,14 +42,19 @@ function setup(position = 'OWNER', joinStatus = 'ACTIVE', exists = true) {
     $queryRaw: vi.fn().mockResolvedValue([]),
     userOrgRel: {
       findUnique: vi.fn().mockResolvedValue(position ? { position, joinStatus } : null),
+      count: vi.fn().mockResolvedValue(21),
     },
+    projectMember: { count: vi.fn().mockResolvedValue(13) },
+    orgMemberSchedule: { count: vi.fn().mockResolvedValue(9) },
+    orgAttendanceDaily: { count: vi.fn().mockResolvedValue(8) },
+    approvalNode: { count: vi.fn().mockResolvedValue(3) },
     organization: {
       findFirst: vi.fn().mockResolvedValue(exists ? org : null),
       update: vi.fn(async ({ data }) => ({ ...org, ...data })),
     },
   };
   const db = {
-    $transaction: async (fn: (value: typeof tx) => unknown) => fn(tx),
+    $transaction: vi.fn(async (fn: (value: typeof tx) => unknown) => fn(tx)),
     $disconnect: vi.fn(),
   } as unknown as PrismaClient;
   const files = {
@@ -176,12 +182,28 @@ test('organization HTTP enforces Bearer/cookie isolation, validation and Result 
     });
   const detailImplementation = service.detail.bind(service);
   const updateImplementation = service.update.bind(service);
+  const overviewImplementation = service.overview.bind(service);
+  vi.spyOn(OrganizationService.prototype, 'overview').mockImplementation(overviewImplementation);
   vi.spyOn(OrganizationService.prototype, 'detail').mockImplementation(detailImplementation);
   vi.spyOn(OrganizationService.prototype, 'update').mockImplementation(updateImplementation);
   const app = await createApp(config, db);
   const headers = { authorization: 'Bearer token' };
   try {
     expect((await app.inject(`/api/v1/organizations?orgId=${orgId}`)).statusCode).toBe(401);
+    const overview = await app.inject({
+      url: `/api/v1/organizations/overview?orgId=${orgId}`,
+      headers,
+    });
+    expect(overview.statusCode, overview.body).toBe(200);
+    expect(overview.json().data).toEqual(organizationOverviewResponse.examples[0]);
+    expect(overview.headers['cache-control']).toBe('no-store');
+    expect((await app.inject(`/api/v1/organizations/overview?orgId=${orgId}`)).statusCode).toBe(
+      401,
+    );
+    for (const query of ['', '?orgId=10', `?orgId=${orgId}&extra=1`])
+      expect(
+        (await app.inject({ url: `/api/v1/organizations/overview${query}`, headers })).statusCode,
+      ).toBe(400);
     const detail = await app.inject({ url: `/api/v1/organizations?orgId=${orgId}`, headers });
     expect(detail.statusCode).toBe(200);
     expect(detail.headers['cache-control']).toBe('no-store');
@@ -258,6 +280,13 @@ test('generated organization OpenAPI includes Chinese parameters and valid compl
     const spec = (await app.inject('/api/v1/docs/json')).json();
     const get = spec.paths['/api/v1/organizations'].get;
     const post = spec.paths['/api/v1/organizations/update'].post;
+    const overview = spec.paths['/api/v1/organizations/overview'].get;
+    expect(overview.operationId).toBe('getOrganizationOverview');
+    expect(overview.parameters[0].required).toBe(true);
+    const data = overview.responses['200'].content['application/json'].schema.properties.data;
+    expect(data.required).toHaveLength(6);
+    for (const property of Object.values(data.properties) as { description: string }[])
+      expect(property.description).toMatch(/[\u4e00-\u9fff]/);
     expect(get.operationId).toBe('getOrganization');
     expect(get.parameters[0].description).toContain('UUID');
     expect(
@@ -268,6 +297,7 @@ test('generated organization OpenAPI includes Chinese parameters and valid compl
       organizationUpdateBody,
       organizationDetailResponse,
       organizationUpdateResponse,
+      organizationOverviewResponse,
     ]) {
       const validate = app.validatorCompiler!({
         schema,
@@ -287,4 +317,82 @@ test('generated organization OpenAPI includes Chinese parameters and valid compl
   } finally {
     await app.close();
   }
+});
+
+test('overview aggregates the old SQL scopes in one snapshot and uses the Shanghai midnight boundary', async () => {
+  const { db, service, tx } = setup();
+  for (const [instant, date] of [
+    ['2026-10-26T15:59:59Z', '2026-10-26'],
+    ['2026-10-26T16:00:00Z', '2026-10-27'],
+  ]) {
+    expect(await service.overview(orgId, identity, new Date(instant))).toEqual(
+      organizationOverviewResponse.examples[0],
+    );
+    expect(tx.orgMemberSchedule.count).toHaveBeenLastCalledWith({
+      where: { orgId, scheduleDate: new Date(date), status: 'ACTIVE', dayType: 'WORK' },
+    });
+    expect(tx.orgAttendanceDaily.count).toHaveBeenLastCalledWith({
+      where: { orgId, attendanceDate: new Date(date), finalStatus: 'PRESENT' },
+    });
+  }
+  expect(db.$transaction).toHaveBeenLastCalledWith(expect.any(Function), {
+    isolationLevel: 'RepeatableRead',
+  });
+  expect(tx.userOrgRel.count).toHaveBeenCalledWith({
+    where: {
+      orgId,
+      joinStatus: { in: ['PENDING_ACTIVATION', 'ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE'] },
+    },
+  });
+  expect(tx.projectMember.count).toHaveBeenCalledWith({
+    where: { status: 'ACTIVE', organizationMembership: { orgId } },
+  });
+  expect(tx.approvalNode.count).toHaveBeenCalledWith({
+    where: {
+      approverId: identity.userId,
+      nodeStatus: 'PENDING',
+      flow: { applicantOrgId: orgId, status: 'PENDING' },
+    },
+  });
+  tx.approvalNode.count.mockRejectedValue(new Error('query failed'));
+  await expect(service.overview(orgId, identity)).rejects.toThrow('query failed');
+});
+test('overview honors participating managers across session roles, denies lost membership before aggregating, and returns zero counts', async () => {
+  for (const position of ['OWNER', 'ADMIN'])
+    for (const joinStatus of ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE']) {
+      const { service, tx } = setup(position, joinStatus);
+      for (const role of ['NAVIGATOR', 'PM', 'EXPERT'] as const)
+        expect((await service.overview(orgId, { ...identity, role })).orgId).toBe(orgId);
+      for (const model of [
+        tx.userOrgRel,
+        tx.projectMember,
+        tx.orgMemberSchedule,
+        tx.orgAttendanceDaily,
+        tx.approvalNode,
+      ])
+        model.count.mockResolvedValue(0);
+      expect(await service.overview(orgId, identity)).toEqual({
+        orgId,
+        memberTotal: 0,
+        activeProjectMemberTotal: 0,
+        todayScheduledTotal: 0,
+        todayPresentTotal: 0,
+        pendingApprovalTotal: 0,
+      });
+    }
+  for (const [position, status] of [
+    ['MEMBER', 'ACTIVE'],
+    ['', 'ACTIVE'],
+    ['OWNER', 'PENDING'],
+    ['ADMIN', 'PENDING_ACTIVATION'],
+    ['OWNER', 'LEFT'],
+    ['ADMIN', 'REMOVED'],
+  ]) {
+    const { service, tx } = setup(position, status);
+    await expect(service.overview(orgId, identity)).rejects.toMatchObject({ status: 403 });
+    expect(tx.userOrgRel.count).not.toHaveBeenCalled();
+  }
+  const { service, tx } = setup('OWNER', 'ACTIVE', false);
+  await expect(service.overview(orgId, identity)).rejects.toMatchObject({ status: 404 });
+  expect(tx.userOrgRel.count).not.toHaveBeenCalled();
 });

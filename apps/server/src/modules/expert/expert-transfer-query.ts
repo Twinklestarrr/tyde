@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import { hasTransferExamTask } from './expert-transfer-exam.js';
 import type { AuthPrincipal } from '../auth/auth.service.js';
 import { AuthError } from '../auth/auth.error.js';
 import {
@@ -10,12 +11,15 @@ import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.
 import { displayName } from '../projects/project-detail.js';
 import { projectTime } from '../projects/project-time.js';
 import type { ExpertTaskQuery } from './expert-task-query.js';
+import { expertOutputTask } from './expert-output-task.js';
+import { canReportExpertOutput, hasReportedExpertOutputToday } from './expert-report-capability.js';
 
 export async function queryTransferTasks(
   tx: Prisma.TransactionClient,
   query: ExpertTaskQuery,
   p: AuthPrincipal,
   projectId?: number,
+  now = new Date(),
 ) {
   const keyword = query.keyword?.trim();
   const rows = await tx.projectMemberMovement.findMany({
@@ -76,6 +80,14 @@ export async function queryTransferTasks(
       )
         continue;
       branch = member.standardTrainingConfirmedAt ? 'PRODUCTION_TASK' : 'STANDARD_TRAINING';
+      const outputBranch = await expertOutputTask(tx, project.id, member.organizationId, p, now);
+      if (outputBranch === 'OUTPUT_DATA_REVIEW') branch = outputBranch;
+      if (
+        !outputBranch &&
+        branch === 'PRODUCTION_TASK' &&
+        (await hasReportedExpertOutputToday(tx, project.id, p.userId, now))
+      )
+        continue;
     } else {
       try {
         await requireTransferEligibility(tx, m);
@@ -102,11 +114,7 @@ export async function queryTransferTasks(
         : code === 'TARGET_ENTRANCE_EXAM'
           ? 'ENTRANCE_EXAM'
           : 'MEMBER_MOVEMENT_APPROVAL';
-      if (
-        code === 'TARGET_ENTRANCE_EXAM' &&
-        (m.targetExamAttempt?.submittedAt || m.targetExamAttempt?.cancelledAt)
-      )
-        continue;
+      if (code === 'TARGET_ENTRANCE_EXAM' && !(await hasTransferExamTask(tx, m, now))) continue;
     }
     const acceptanceStatus = pending ? 'PENDING_ACCEPTANCE' : 'ACCEPTED';
     if (
@@ -178,7 +186,14 @@ export async function queryTransferTasks(
         acceptedOrganizationOwner: false,
         canViewOrganizationData: false,
       },
-      operations: { canAccept: pending, canReject: pending, canReportOutput: false },
+      operations: {
+        canAccept: pending,
+        canReject: pending,
+        canReportOutput:
+          m.status === 'EFFECTIVE' &&
+          branch === 'PRODUCTION_TASK' &&
+          (await canReportExpertOutput(tx, project.id, m.member.organizationId, p, now)),
+      },
     });
   }
   return cards;

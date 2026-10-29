@@ -1,3 +1,9 @@
+import { refreshManagementCardSnapshots } from '../src/modules/projects/project-management-card-snapshot.js';
+import { refreshOwnerProgress } from '../src/modules/expert/expert-owner-command.js';
+vi.mock('../src/modules/expert/expert-owner-command.js', () => ({
+  refreshOwnerProgress: vi.fn(async () => {}),
+}));
+import { syncGradingTasks } from '../src/modules/entrance-exams/exam-grading-command.service.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ExamCandidateCommandService } from '../src/modules/entrance-exams/exam-candidate-command.service.js';
@@ -8,7 +14,14 @@ vi.mock('../src/modules/entrance-exams/exam-grading-tasks.js', () => ({
   reviewerIds: (value: { userId: string }[]) => value.map((v) => v.userId),
 }));
 vi.mock('../src/modules/entrance-exams/exam-grading-command.service.js', () => ({
-  syncGradingTasks: vi.fn(async () => {}),
+  syncGradingTasks: vi.fn(async () => ({
+    cardChangedRecipients: [{ userId: 'reviewer', role: 'NAVIGATOR' }],
+  })),
+}));
+vi.mock('../src/modules/projects/project-management-card-snapshot.js', () => ({
+  refreshManagementCardSnapshots: vi.fn(async () => ({
+    cardChangedRecipients: [{ userId: 'candidate', role: 'EXPERT' }],
+  })),
 }));
 const p = {
   userId: '00000000-0000-4000-8000-000000000001',
@@ -169,7 +182,12 @@ test('candidate AUTO first round persists mock dispatch without executing any se
   expect(f.tx.projectEventOutbox.create).toHaveBeenCalledWith({
     data: expect.objectContaining({
       eventType: 'EXAM_AUTO_DISPATCH_REQUESTED',
-      payload: { gradingRecordId: 18, provider: 'mock', executionStatus: 'NOT_EXECUTED' },
+      payload: {
+        gradingRecordId: 18,
+        provider: 'mock',
+        executionStatus: 'NOT_EXECUTED',
+        cardChangedRecipients: [{ userId: 'reviewer', role: 'NAVIGATOR' }],
+      },
     }),
   });
 });
@@ -276,4 +294,63 @@ test('candidate cancellation after timeout writes only cancellation fact, event 
       data: expect.objectContaining({ status: 'CANCELLED', participated: false }),
     }),
   );
+});
+
+test('candidate submit carries full arbitration audience on original event without deleting restored snapshots', async () => {
+  const f = fixture();
+  await f.service.submit(f.input, p);
+  expect(f.tx.projectEventOutbox.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      payload: expect.objectContaining({
+        cardChangedRecipients: [{ userId: 'reviewer', role: 'NAVIGATOR' }],
+      }),
+    }),
+  });
+  expect(f.tx.projectRoleNodeSnapshot.deleteMany).not.toHaveBeenCalled();
+  expect(f.tx.projectTaskRound.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(syncGradingTasks).mock.invocationCallOrder[0]!,
+  );
+  vi.mocked(syncGradingTasks).mockRejectedValueOnce(new Error('source failed'));
+  f.tx.projectEventOutbox.create.mockClear();
+  await expect(f.service.submit(f.input, p)).rejects.toThrow('source failed');
+  expect(f.tx.projectEventOutbox.create).not.toHaveBeenCalled();
+});
+test('candidate cancel reconciles complete cards before original event and propagates source or outbox failure', async () => {
+  const f = fixture();
+  await f.service.cancel(f.input, p);
+  expect(f.tx.projectEventOutbox.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      eventType: 'EXAM_RESULT_DECIDED',
+      payload: expect.objectContaining({
+        cardChangedRecipients: [{ userId: 'candidate', role: 'EXPERT' }],
+      }),
+    }),
+  });
+  expect(f.tx.projectRoleNodeSnapshot.deleteMany).not.toHaveBeenCalled();
+  vi.mocked(refreshManagementCardSnapshots).mockRejectedValueOnce(new Error('source failed'));
+  f.tx.projectEventOutbox.create.mockClear();
+  await expect(f.service.cancel(f.input, p)).rejects.toThrow('source failed');
+  expect(f.tx.projectEventOutbox.create).not.toHaveBeenCalled();
+  f.tx.projectEventOutbox.create.mockRejectedValueOnce(new Error('event failed'));
+  await expect(f.service.cancel(f.input, p)).rejects.toThrow('event failed');
+});
+
+test('candidate cancel synchronizes independent sources after cancellation and before cards, and aborts on round failure', async () => {
+  const f = fixture();
+  vi.mocked(refreshOwnerProgress).mockClear();
+  vi.mocked(refreshManagementCardSnapshots).mockClear();
+  await f.service.cancel(f.input, p);
+  expect(refreshOwnerProgress).toHaveBeenCalledWith(f.tx, 1, null, expect.any(Date));
+  expect(f.tx.entranceExamAttempt.update.mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(refreshOwnerProgress).mock.invocationCallOrder[0]!,
+  );
+  expect(vi.mocked(refreshOwnerProgress).mock.invocationCallOrder[0]).toBeLessThan(
+    vi.mocked(refreshManagementCardSnapshots).mock.invocationCallOrder[0]!,
+  );
+  vi.mocked(refreshOwnerProgress).mockRejectedValueOnce(new Error('independent failure'));
+  f.tx.projectEventOutbox.create.mockClear();
+  vi.mocked(refreshManagementCardSnapshots).mockClear();
+  await expect(f.service.cancel(f.input, p)).rejects.toThrow('independent failure');
+  expect(refreshManagementCardSnapshots).not.toHaveBeenCalled();
+  expect(f.tx.projectEventOutbox.create).not.toHaveBeenCalled();
 });
