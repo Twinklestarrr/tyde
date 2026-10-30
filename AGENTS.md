@@ -388,7 +388,7 @@
 
 > 以下 Web/Electron 前端专项记录保留其原有验收范围；任务13后端进度以以上第四十七—四十八批为准，不能相互替代验收。
 
-> 2026-10-27非空真实联调收尾：Web及实际Electron各完成三角色非空列表/详情、指定与替换策略官、生产计划确认、个人接拒单及组织主管选负责人/普通成员接单，页面152条HTTP响应全部200、14次业务写入，页面异常为零。修复项目共享路由遗漏desktopOrigins导致桌面写403；专家已有接拒单/负责人候选已接页面，未知写结果和成功后回读失败均禁止旧按钮重发。186 core、43后端定向、20页面回归及类型/构建/变更ESLint通过。本轮仅专用_test库独立夹具，20测试账号剩余会话已撤销，自启服务已清理，无新schema/迁移，未操作开发/部署库或发布。未开放模块及后续等待节点按原任务推进，不能据此宣称全项目业务流程完成；证据与复验见[非空项目真实联调](docs/WORKBENCH_PROJECTS_ACCEPTANCE.md)。
+> 2026-10-27非空真实联调收尾：Web及实际Electron各完成三角色非空列表/详情、指定与替换策略官、生产计划确认、个人接拒单及组织主管选负责人/普通成员接单，页面152条HTTP响应全部200、14次业务写入，页面异常为零。修复项目共享路由遗漏desktopOrigins导致桌面写403；专家已有接拒单/负责人候选已接页面，未知写结果和成功后回读失败均禁止旧按钮重发。186 core、43后端定向、20页面回归及类型/构建/变更ESLint通过。本轮仅专用_test库独立夹具，20测试账号剩余会话已撤销，自启服务已清理，无新schema/迁移，未操作开发/部署库或发布。未开放模块及后续等待节点按原任务推进，不能据此宣称全项目业务流程完成；证据与复验见[非空项目真实联调](docs/archive/ACCEPTANCE_HISTORY.md#workbench-projects-acceptance)。
 
 > 2026-10-27工作台三角色联调：领航员/策略官沿用真实待办与生产计划入口，执行专家首页改接既有POST `/expert-assignments/my-tasks`，覆盖组织主管、负责人、个人及转入卡片，支持搜索/刷新/错误重试及只读详情。修复个人项目列表与详情强制assignmentId导致的响应格式异常，普通分配与movementId转入来源互斥，个人中心按projectId选择卡片。55项平台契约、70项页面回归分批通过（68项首次通过，2项旧欢迎页入口断言修正后复验通过）；5项定向数据库集成通过（265跳过，共270项），新增1项真实Web HTTP三角色空列表/切换/刷新通过。用户明确授权后，仅将本机专用_test库从19补齐已有20—29迁移；无新迁移、未操作开发/部署库，未复跑全量集成。专家接单/考试/生产写操作及13剩余看板仍按原归属推进。
 
@@ -454,7 +454,7 @@
 
 > 2026-10-23最新09第二批：API-078上下文及079打卡已接入（已实现待验收），组织/个人本人范围、服务端判型、并发幂等不可变事件、午夜隔离及原始事件重放；073—075和076排班变更同步重放并保护人工结果，PENDING outbox同事务。新增第23迁移20261023020000_attendance_clock_events，Agent未应用或操作开发/部署库。500项单测（45文件，17:38:00，总23.15秒）、35定向及服务端类型/变更ESLint/后端包build/Prisma校验通过；新增5项集成17:37:58均在beforeEach因127.0.0.1:5432不可达（213跳过，共218项，总6.62秒），业务断言未执行。保持09，下一步用户本机专用_test库迁移23并仅定向复验attendance clock这5项，不重复073—075前批4项。真实HTTP/部署/完整兼容待验收，实际投递归14，业务Agent继续mock，不开始10。
 
-09打卡入口：`modules/attendance/attendance-clock.domain/service/schema.ts`及`attendance-replay.ts`，由现有attendance路由装配；组织和个人排班变更共用重放。第23迁移新增不可变原始事件，允许个人PENDING通知。契约和仅本批5项复验命令见[工作台打卡](docs/ATTENDANCE_CLOCK.md)。
+09打卡入口：`modules/attendance/attendance-clock.domain/service/schema.ts`及`attendance-replay.ts`，由现有attendance路由装配；组织和个人排班变更共用重放。第23迁移新增不可变原始事件，允许个人PENDING通知。契约和仅本批5项复验命令见[工作台打卡](docs/backend/ATTENDANCE_CLOCK.md)。
 
 > 2026-10-23最新09第一批集成通过：用户17:28:01定向复验剩余筛选/权限1项通过（212跳过，共213项，总3.85秒，测试1.07秒），结合17:25:34已通过3项，073—075本批4项集成分批全部通过，不是全213项复跑。原expertiseTags夹具遗漏已解除；并发幂等/覆盖、筛选月历/目标组织权限/离组失权、已有日考勤重算与人工结果保护、回执/outbox故障整事务回滚均已验证。第22迁移所需专用库结构已具备，迁移历史未另查，无需当前专用库再次迁移或重复本批4项。488单测、35项及修正后13项定向、类型/变更ESLint/build前批证据保留；本轮仅同步用户结果，未重跑测试、修改业务代码或操作数据库。保持09，下次直接078/079打卡上下文、写入与原始事件重放，072/076/077/080按需核对不重做；073—075保留已实现待真实HTTP/部署/完整兼容验收。业务Agent继续mock，实际投递归14，不开始10。
 
@@ -462,7 +462,7 @@
 
 > 2026-10-23最新09第一批：API-073—075组织排班已接入（已实现待验收），目标组织EXPERT主管/管理员、多组织隔离、筛选分页/月历、范围/明细幂等与已有日考勤重算（保护人工结果）、PENDING通知同事务。新增第22迁移20261023010000_organization_schedules，Agent未应用或操作开发/部署库。488项单测（44文件，17:14:44，总16.40秒）、35定向及类型/变更ESLint/build/Prisma校验通过；新增4项集成17:12:03均在beforeEach因127.0.0.1:5432不可达（209跳过，共213项，总11.63秒），业务断言未执行。保持09，先用户本机专用_test库迁移22并定向复验organization schedules四项，通过后078/079原始事件重放；072/076/077/080按需核对不重做。真实HTTP/部署/完整兼容待验收，实际投递归14，业务Agent继续mock，不开始10。
 
-09入口：`modules/attendance/organization-schedule.domain/service/schema.ts`，现有attendance路由装配；第22迁移增加组织幂等回执与PENDING考勤事件。契约及定向复验见[组织排班](docs/ORGANIZATION_SCHEDULES.md)。
+09入口：`modules/attendance/organization-schedule.domain/service/schema.ts`，现有attendance路由装配；第22迁移增加组织幂等回执与PENDING考勤事件。契约及定向复验见[组织排班](docs/backend/ORGANIZATION_SCHEDULES.md)。
 
 > 2026-10-23最新08真实HTTP/OSS验收：运行中的本机后端245个HTTP请求及6项汇总/回读断言通过（251项，256条记录，5条修正前记录不计通过）。个人/多组织、入场与历史卷恢复、真实并发交卷、取消/一分钟超时、两轮人工录取淘汰、准入待入项、真实OSS/离组失权及Cookie隔离均通过。发现交卷沿全局16KiB上限，已单独修为2MiB并验证10万汉字提交回读、超字段400及超整卷413；48定向/类型/变更ESLint/build通过。本批仅8新账号/2组织/3项目（9、10、11）/2考试（5、6），11会话已退出并逐一401，两考试已关闭；4个OSS对象删除1个未认领、保留3个已认领。自动mock签名回调/失败重试因未配置AUTO_GRADING_HMAC_SECRET尚未完成，记录7/11为PENDING，不称自动执行已验收；业务Agent继续mock。用户日志确认开发库21迁移无pending，Agent未迁移/直连库/清库/复跑集成。默认入口仍09，本轮只验收08，未执行09；部署及完整兼容遗留保留。
 
@@ -476,9 +476,9 @@
 
 > 2026-10-23最新08第一批：API-068当前状态及069入场已接入（已实现待验收），真实接单/有效多组织/组织身份优先、主管兼负责人、项目锁并发随机绑定及历史卷恢复、不泄露参考答案已实现；考生仅可读绑定试卷题干附件。455项单测（42文件，14:18:44，总13.58秒）、服务端类型/变更ESLint/后端build通过；最终20项考生/OpenAPI定向复验（14:19:11，总6.44秒）通过。用户14:23:18定向运行本批3项集成全部通过（200跳过，共203项，总5.55秒，测试2.75秒），并发绑定/历史卷恢复、组织资格/离组/身份不换绑及异常卷整事务回滚已验证；原数据库初始化连接阻塞解除，不是全203项复跑，无需重复本批3项或07/06通过项。下次直接070/071。无新增schema/迁移/依赖、未应用迁移或操作开发/部署库；业务Agent继续mock。保持08，不交接09。
 
-08入口：`modules/entrance-exams/exam-candidate.service/schema.ts`及`exam-candidate-command.service.ts`经现有management路由及application装配；`exam-file-access.ts`按绑定试卷题干/本人答案/有效组织职责答案精确objectKey授权，文件代理传入对象Key。070/071复用05阅卷待办与mock派发，`expert-task-query.ts`排除取消考试卡片。契约与复验命令见[执行专家考试](docs/ENTRANCE_EXAM_CANDIDATE.md)。
+08入口：`modules/entrance-exams/exam-candidate.service/schema.ts`及`exam-candidate-command.service.ts`经现有management路由及application装配；`exam-file-access.ts`按绑定试卷题干/本人答案/有效组织职责答案精确objectKey授权，文件代理传入对象Key。070/071复用05阅卷待办与mock派发，`expert-task-query.ts`排除取消考试卡片。契约与复验命令见[执行专家考试](docs/backend/ENTRANCE_EXAM_CANDIDATE.md)。
 
-> 2026-10-23 W4／W5 联调补证：合并基线 `51a863e`；固定 Pi 1.3.0，已修复工具回调重入授权和未获准调用的投影边界。103 Schema、Agent／全仓类型、服务 189 通过＋1 PG 单列跳过、前端 76、业务 438、核心 91、lint、两构建及专用 PG 49 项分批通过；无演示独立目录安装／契约／类型／同一 Agent 测试／构建／lint 通过。全仓格式仅既有业务测试文件失败，未改该文件。真实工具、追问、普通问题、运行中停止、刷新／切换／重启重连通过；默认无演示 PG 普通聊天走真实产品 HTTP，未声称 clean 页面浏览器验通。共 9 次真实模型／3 次工具，重启只读恢复前后 head／工具／事件／计数相同，显式追问复用原 Pi Session。仅操作新 Agent 专用库，业务 Agent 继续 mock；保留本机 3102／3103 供自测，未自行暂存、提交或推送。完整证据见 [联合记录](docs/AGENT_W4_W5_INTEGRATION.md)，精确文件与提交建议见 [交付清单](docs/AGENT_W4_W5_DELIVERY.md)。
+> 2026-10-23 W4／W5 联调补证：合并基线 `51a863e`；固定 Pi 1.3.0，已修复工具回调重入授权和未获准调用的投影边界。103 Schema、Agent／全仓类型、服务 189 通过＋1 PG 单列跳过、前端 76、业务 438、核心 91、lint、两构建及专用 PG 49 项分批通过；无演示独立目录安装／契约／类型／同一 Agent 测试／构建／lint 通过。全仓格式仅既有业务测试文件失败，未改该文件。真实工具、追问、普通问题、运行中停止、刷新／切换／重启重连通过；默认无演示 PG 普通聊天走真实产品 HTTP，未声称 clean 页面浏览器验通。共 9 次真实模型／3 次工具，重启只读恢复前后 head／工具／事件／计数相同，显式追问复用原 Pi Session。仅操作新 Agent 专用库，业务 Agent 继续 mock；保留本机 3102／3103 供自测，未自行暂存、提交或推送。完整证据见 [联合记录](docs/archive/AGENT_MILESTONES.md#agent-w4-w5-integration)，精确文件与提交建议见 [交付清单](docs/archive/AGENT_MILESTONES.md#agent-w4-w5-delivery)。
 
 > 2026-10-23最新07真实HTTP验收通过：运行中的本机后端共228个HTTP请求及1项并发汇总断言通过（229项），覆盖API-061—067全部7种方法/路径；另4条脚本构造/预期修正前记录保留，不计入通过数，未发现业务实现失败。个人/组织/成员接单拒绝、多组织权限、本人项目/详情、负责人集合及兼容入口、真实并发与幂等、拒单补招、Cookie/角色隔离、实际离组失权和个人身份恢复均已验证。本批仅新建6账号/3组织/3项目（6、7、8）及1考试（4，已关闭），既有分类只读；9个新会话已退出并逐一验证401。未直连数据库、未应用迁移、未清库、未改业务代码、未重跑单测/专用库集成；业务Agent继续mock。061—063及067保留部分迁移，064—066已通过本机HTTP但仍待部署/完整兼容；067转项及完整审批/生产/转项真值归10—12，实际投递归14。默认入口仍08，本轮仅验收07，未执行08。 07验收清单已补齐本机交付范围的完成证据；部分迁移及部署/完整兼容遗留保留，不因勾选提升接口状态。
 
@@ -490,9 +490,9 @@
 
 > 07第三批入口：`expert-owner-command.ts`共用065/066事务，`expert-owner.schema.ts`提供中文Swagger，现有expert service/routes装配；`AuthService.profileInclude/publicUser`接实API-008负责人管理能力。仅本域考试/培训轮次同步和PENDING事件，完整跨域支线/实际投递仍归原任务。
 
-> 2026-10-23 Agent 工具与 Skill 接入：新增可信宿主工具／Skill 注入、资源与执行配置摘要、原生调用关联、可等待保存／派发门禁及独立工具过程投影；只读过程不生成 Operation。22 源为 `1.2.0-w4-design`，21 保持 `1.1.0-design`，103 个生成 Schema，公开版本仍为 1；新事件需前后端配套升级，未知可靠事件仍失败关闭。具体演示包仅留忽略的 `.local/agent-w4-demo/`，默认启动与通用检查不依赖它。该 W4 独立验收仅覆盖进程内存，不建表、不迁移、不接业务写接口；W5 持久能力另见下方记录，公开继续／重试仍未开放。实现与实际证据见 [工具接入验收](docs/AGENT_W4_VALIDATION.md)，逐文件分类和建议提交见 [交付清单](docs/AGENT_W4_DELIVERY.md)；既有模型与聊天验收历史保持原记录。该独立工程进展不改变业务 Agent 继续 mock、业务默认入口仍为 08 的安排。
+> 2026-10-23 Agent 工具与 Skill 接入：新增可信宿主工具／Skill 注入、资源与执行配置摘要、原生调用关联、可等待保存／派发门禁及独立工具过程投影；只读过程不生成 Operation。22 源为 `1.2.0-w4-design`，21 保持 `1.1.0-design`，103 个生成 Schema，公开版本仍为 1；新事件需前后端配套升级，未知可靠事件仍失败关闭。具体演示包仅留忽略的 `.local/agent-w4-demo/`，默认启动与通用检查不依赖它。该 W4 独立验收仅覆盖进程内存，不建表、不迁移、不接业务写接口；W5 持久能力另见下方记录，公开继续／重试仍未开放。实现与实际证据见 [工具接入验收](docs/archive/AGENT_MILESTONES.md#agent-w4-validation)，逐文件分类和建议提交见 [交付清单](docs/archive/AGENT_MILESTONES.md#agent-w4-delivery)；既有模型与聊天验收历史保持原记录。该独立工程进展不改变业务 Agent 继续 mock、业务默认入口仍为 08 的安排。
 
-> 2026-10-23 Agent W5 独立阶段开发位于独立 `feature/agent-w5-persistence` worktree（基线 d73ea7a，含 W3 与四项聊天优化），不与 W4 共用目录。PostgreSQL 18/Kysely/pg、完整原生版本、持久命令/outbox/预算和单机隔离恢复已接入；专用PG49项、真实600000ms受控计时及真实页面模型两轮跨重启追问已通过；仅新建 Agent 专用数据库，不操作业务 Prisma 或业务接口。最终范围与分阶段证据以 [W5 验收记录](docs/AGENT_W5_VALIDATION.md) 为准；W2/W3 历史证据保留，W4 联调、公开继续/重试和完整 M3/W6 不据此宣称完成。该记录保留独立阶段验收范围；当前合流状态以上方合流记录为准。
+> 2026-10-23 Agent W5 独立阶段开发位于独立 `feature/agent-w5-persistence` worktree（基线 d73ea7a，含 W3 与四项聊天优化），不与 W4 共用目录。PostgreSQL 18/Kysely/pg、完整原生版本、持久命令/outbox/预算和单机隔离恢复已接入；专用PG49项、真实600000ms受控计时及真实页面模型两轮跨重启追问已通过；仅新建 Agent 专用数据库，不操作业务 Prisma 或业务接口。最终范围与分阶段证据以 [W5 验收记录](docs/archive/AGENT_MILESTONES.md#agent-w5-validation) 为准；W2/W3 历史证据保留，W4 联调、公开继续/重试和完整 M3/W6 不据此宣称完成。该记录保留独立阶段验收范围；当前合流状态以上方合流记录为准。
 
 > 2026-10-22最新07第二批集成通过：用户18:09:22定向复验成员进度/负责人历史1项通过（191跳过，共192项，总11.60秒，测试1.12秒），原免试计划夹具P2025已解除；结合18:03:22已通过的来源/多组织权限/身份优先/status筛选1项，本批2项集成分批全部通过，不是全192项复跑，无需重复。061保留部分迁移，064前批通过证据不变；421单测及类型/ESLint/build、修正后18项定向证据保留。无新迁移，迁移历史未另查；本轮仅同步用户结果和文档，未重跑测试、修改业务代码或操作数据库。保持07，下次直接065—067及API-008，061按钮随067接回，完整生产/报量当天撤卡及审批/转项真值归10—12，062/063按需回补；业务Agent继续mock，不开始08。
 
@@ -510,7 +510,7 @@
 
 > 2026-10-22最新06第三批集成通过：用户17:00:34运行056/057新增2项集成全部通过（182跳过，共184项，总4.07秒，测试1.69秒），已验证当前主策略官权限、统一ACTIVE候选、并发重复指定/轮次交接/不推进节点、替换后失权及outbox故障整事务回滚，原初始化连接阻塞解除。结合053—055前批5项，06累计7项集成分批全部通过，不是全184项复跑，无需重复。无新迁移，迁移历史未另查；前批402单测及类型/ESLint/build证据保留。本轮仅同步用户结果，未重跑测试、修改业务代码或操作数据库。保持06，下次058—060，不开始07，业务Agent继续mock；真实HTTP/部署/完整兼容仍待验收。
 
-> 入口：`project-recruitment.service.ts`实现058—060，`project-recruitment-candidates.ts`共用候选/写前资格SQL，`project-recruitment-snapshot.ts`修本域拒单快照，`project-recruitment.schema.ts`提供Swagger；056/057沿`project-recruitment-handler.service/schema.ts`。均由现有项目路由/application装配，契约及复验命令见[专家招募](docs/PROJECT_RECRUITMENT.md)。
+> 入口：`project-recruitment.service.ts`实现058—060，`project-recruitment-candidates.ts`共用候选/写前资格SQL，`project-recruitment-snapshot.ts`修本域拒单快照，`project-recruitment.schema.ts`提供Swagger；056/057沿`project-recruitment-handler.service/schema.ts`。均由现有项目路由/application装配，契约及复验命令见[专家招募](docs/backend/PROJECT_RECRUITMENT.md)。
 
 > 2026-10-22最新06第三批：API-056负责人候选及057指定/更换已接入（已实现待验收）；仅当前PM主策略官可操作，候选为全部ACTIVE统一账号，包含本人，允许重复指定。用户→项目锁、负责人变更、管理主线轮次及PENDING outbox同事务，不推进项目节点/版本。402项单测（36文件，16:54:21，总14.02秒）、类型/变更ESLint/后端build及9项修正后定向测试通过；新增2项集成首次因数据库初始化不可达未执行断言，用户17:00:34已复测2项全过（182跳过，共184项）。无新增迁移/依赖，未操作开发/部署库，真实HTTP/部署/兼容待验收。053—055前批5项通过证据保留，无需重复；保持06，下次058—060，不开始07，业务Agent继续mock。
 
@@ -520,7 +520,7 @@
 
 > 2026-10-22最新06第二批：API-055确认已读已接入（已实现待验收），沿用POST查询参数projectId及当前EXPERT/接单/组织/准入读取权限，仅ACTIVE已实际入项普通成员可确认，项目负责人403。首次时间、本人STANDARD_TRAINING轮次及个人履约快照同事务；重复确认保留时间并修复陈旧快照，不修改项目共享节点/版本，不发布实时事件。396项单测（35文件，16:40:36启动，总13.11秒）、服务端类型/变更ESLint/后端build通过。新增2项集成均在beforeEach因127.0.0.1:5432不可达失败，180跳过，业务断言未执行；053/054前批3项亦待本机复测。本批无新迁移、未应用迁移或操作开发/部署库。当前保持06，下次056—060；不开始07，所有业务Agent继续mock。
 
-> 2026-10-22最新06第一批：API-053标准材料读取及054修改已接入（已实现待验收），按当前会话角色与真实项目/任职/接单/组织/准入关系鉴权；复用附件认领事务、项目版本及管理主线轮次，主策略官编辑单向推进且创建人不推进。392项单测（35文件，16:31:39启动，总12.53秒）、服务端类型/变更ESLint/后端build通过。新增3项集成尝试均在beforeEach因127.0.0.1:5432不可达失败，177跳过，业务断言未执行；待用户本机定向复测，不撤销05前批通过证据。本批无新迁移、未应用迁移或操作开发/部署库。当前保持06，下次API-055已读确认，再056—060；不开始07，所有业务Agent继续mock。 入口：`project-materials.service/schema.ts`，由现有项目路由及application装配。契约及复测命令见[标准材料](docs/PROJECT_STANDARD_MATERIALS.md)。
+> 2026-10-22最新06第一批：API-053标准材料读取及054修改已接入（已实现待验收），按当前会话角色与真实项目/任职/接单/组织/准入关系鉴权；复用附件认领事务、项目版本及管理主线轮次，主策略官编辑单向推进且创建人不推进。392项单测（35文件，16:31:39启动，总12.53秒）、服务端类型/变更ESLint/后端build通过。新增3项集成尝试均在beforeEach因127.0.0.1:5432不可达失败，177跳过，业务断言未执行；待用户本机定向复测，不撤销05前批通过证据。本批无新迁移、未应用迁移或操作开发/部署库。当前保持06，下次API-055已读确认，再056—060；不开始07，所有业务Agent继续mock。 入口：`project-materials.service/schema.ts`，由现有项目路由及application装配。契约及复测命令见[标准材料](docs/backend/PROJECT_STANDARD_MATERIALS.md)。
 
 > 2026-10-22最新05→06交接：用户2026-10-22回传16:04:30启动的本批6项集成全部通过（1文件，171跳过，共177项，总6.63秒，测试4.35秒）；并发领取、签名HTTP回调/幂等、失败重试/旧trace拒绝、补偿及不可逆反转回滚、权限/逐题来源、超时和outbox故障整事务回滚已验证。第21迁移所需专用测试库结构已具备，迁移历史未另查；不是全177项复跑。原127.0.0.1:5432初始化连接阻塞解除，无需当前专用库再次迁移21或重复本批6项。 05全部15个HTTP入口已有代码，050—052按用户约定仅mock，保留已实现待验收，039/049保留部分迁移；前批382项单测及类型/ESLint/后端build证据不变，本轮仅同步结果与交接，未重跑测试、修改业务代码或操作数据库。默认入口切至06（标准培训、招募负责人及专家下发），本轮未执行06。05真实HTTP写链路/部署/完整兼容、039远程文档/XLS嵌图仍保留原任务；跨领域卡片重算/转项审批消费/实际投递分别归04/12/14，考生交卷和文件职责仍归07/08及01，不阻塞06。所有业务Agent继续mock，不连接真实服务。
 
@@ -536,9 +536,9 @@
 
 > 2026-10-22最新05第四批：API-040已接入，`modules/entrance-exams/exam-admission.ts`实现当前角色下项目/组织准入查询，由`ExamQueryService.admissions`以RepeatableRead事务调用，现有management路由装配；`exam-admission.schema.ts`提供完整中文Swagger。348项单测、类型/变更ESLint/后端build通过。用户12:01:20启动的本批2项数据库集成全部通过（161跳过，总5.71秒），原初始化连接阻塞解除；无新增/应用迁移，未验收真实HTTP/部署。保持05，下次048—052；以下“本轮不执行05”为此前交接历史。
 
-> 2026-10-22统一账号真实HTTP验收完成：255项检查全部通过（254个HTTP请求+1项并发汇总断言，覆盖46种方法/路径）。统一注册/三角色、会话隔离、Cookie/来源、多组织创建/导入/管理权限、刷新/退出/改密、真实OSS证照与项目/考试附件均通过；项目发布→策略官任职→生产计划→考试导入/发布/版本编辑/关闭及更换策略官后的权限回收均通过。用户仅补本批3个分类，未修改已有用户或清库、未应用迁移。未接远程文档503为预期能力边界，部署/前端联调及未开发考生/阅卷写入口仍待原任务回补。默认恢复05的040/048—052，本轮不执行05或06。 详见[验收记录](docs/UNIFIED_ACCOUNTS_ACCEPTANCE.md)。下方“尚未验证真实HTTP”系前批历史结论，以本条为最新。
+> 2026-10-22统一账号真实HTTP验收完成：255项检查全部通过（254个HTTP请求+1项并发汇总断言，覆盖46种方法/路径）。统一注册/三角色、会话隔离、Cookie/来源、多组织创建/导入/管理权限、刷新/退出/改密、真实OSS证照与项目/考试附件均通过；项目发布→策略官任职→生产计划→考试导入/发布/版本编辑/关闭及更换策略官后的权限回收均通过。用户仅补本批3个分类，未修改已有用户或清库、未应用迁移。未接远程文档503为预期能力边界，部署/前端联调及未开发考生/阅卷写入口仍待原任务回补。默认恢复05的040/048—052，本轮不执行05或06。 详见[验收记录](docs/archive/ACCEPTANCE_HISTORY.md#unified-accounts-acceptance)。下方“尚未验证真实HTTP”系前批历史结论，以本条为最新。
 
-> 当前后端插队（2026-10-22）：统一注册自带NAVIGATOR/PM/EXPERT；Session.selectedRole保存当前会话角色，API-121切换与刷新保留，OPS不开放。API-124 POST /organizations独立创建，资料沿原组织注册，创建即ACTIVE/APPROVED、本人ACTIVE/OWNER，支持多个组织及跨组织任职。已开发管理入口以当前会话角色+原项目/组织/阅卷关系鉴权，不再查询ManagementGrant；本人资料新增organizations。现行契约见[统一账号](docs/UNIFIED_ACCOUNTS.md)，未开发接口约束已回写根各任务。下方固定EXPERT/独立授权/组织注册描述是旧策略历史。343单测、41项定向及类型/build为前批证据；用户2026-10-22回传10:28:08启动的161项集成全部通过（1文件，总82.14秒，测试79.27秒）。第19迁移所需专用测试库结构、统一账号三角色、多组织创建及并发唯一性、证照/成员/策略官事件/生产计划嵌套写入回滚已验证，原两项故障注入测试主体失败解除；迁移历史未另查；该161项结果回传时开发HTTP/OSS尚未验证，后续本次255项真实验收已通过，部署库/前端联调仍未验证。 统一账号插队基础已交回05，根默认入口恢复040/048—052；本轮仅同步结果未重跑/操作数据库，不重复插队或要求当前专用库迁移18/19，不执行05实现或06。
+> 当前后端插队（2026-10-22）：统一注册自带NAVIGATOR/PM/EXPERT；Session.selectedRole保存当前会话角色，API-121切换与刷新保留，OPS不开放。API-124 POST /organizations独立创建，资料沿原组织注册，创建即ACTIVE/APPROVED、本人ACTIVE/OWNER，支持多个组织及跨组织任职。已开发管理入口以当前会话角色+原项目/组织/阅卷关系鉴权，不再查询ManagementGrant；本人资料新增organizations。现行契约见[统一账号](docs/backend/UNIFIED_ACCOUNTS.md)，未开发接口约束已回写根各任务。下方固定EXPERT/独立授权/组织注册描述是旧策略历史。343单测、41项定向及类型/build为前批证据；用户2026-10-22回传10:28:08启动的161项集成全部通过（1文件，总82.14秒，测试79.27秒）。第19迁移所需专用测试库结构、统一账号三角色、多组织创建及并发唯一性、证照/成员/策略官事件/生产计划嵌套写入回滚已验证，原两项故障注入测试主体失败解除；迁移历史未另查；该161项结果回传时开发HTTP/OSS尚未验证，后续本次255项真实验收已通过，部署库/前端联调仍未验证。 统一账号插队基础已交回05，根默认入口恢复040/048—052；本轮仅同步结果未重跑/操作数据库，不重复插队或要求当前专用库迁移18/19，不执行05实现或06。
 
 > 供 Codex 开发新需求时快速定位。按当前实现整理，架构或模块入口变化时同步更新本文。
 
@@ -558,7 +558,7 @@
 
 ## 项目概况
 
-pnpm Workspace Monorepo，TypeScript + ESM，当前有 5 个应用、3 个共享包；Agent W1 提供工程、前端基础切片、共享契约和受控身份，W2 增加固定 Pi 1.3.0 内存执行、URL／Key 模型主入口及独立可选平台适配；W3 已接通开发内存模式的会话／任务 API、产品 SSE 与真实聊天页面。当前另已接通可信工具／Skill 宿主注入、原生调用关联及独立工具过程展示；资源与接口边界见 [工具接入验收](docs/AGENT_W4_VALIDATION.md)。用户已提供 W2 DeepSeek Flash 真实两轮召回、流式与本地停止日志；W3 浏览器验证与边界见 [验收记录](docs/AGENT_W3_VALIDATION.md)。
+pnpm Workspace Monorepo，TypeScript + ESM，当前有 5 个应用、3 个共享包；Agent W1 提供工程、前端基础切片、共享契约和受控身份，W2 增加固定 Pi 1.3.0 内存执行、URL／Key 模型主入口及独立可选平台适配；W3 已接通开发内存模式的会话／任务 API、产品 SSE 与真实聊天页面。当前另已接通可信工具／Skill 宿主注入、原生调用关联及独立工具过程展示；资源与接口边界见 [工具接入验收](docs/archive/AGENT_MILESTONES.md#agent-w4-validation)。用户已提供 W2 DeepSeek Flash 真实两轮召回、流式与本地停止日志；W3 浏览器验证与边界见 [验收记录](docs/archive/AGENT_MILESTONES.md#agent-w3-validation)。
 业务 Web 与 Electron 共用 `apps/web` 这一份 React 前端，连接 Fastify 业务后端；业务后端是按模块组织的单体。业务后端部署包包含 Web，由 Fastify 统一托管页面与 API；Vercel 使用现有业务后端项目统一发布。本地仍可分别启动。Agent 使用独立界面与服务，Pi 只在服务端运行，产品任务接口同时保留显式开发内存模式和 W5 PostgreSQL 持久模式，W4 工具／Skill 与持久运行时的联合证据待本轮确认后补充；完整协作说明见 [Agent 开发与跨端协作](docs/AGENT_DEVELOPMENT.md)。
 当前前端：认证入口提供“验证码登录 / 密码登录”双页签，默认验证码登录；认证接口通过平台适配访问现有后端。短信登录按后端结果区分已有账号与待注册账号；待注册账号在内存中携带手机号、一次性注册凭证进入个人资料页，注册成功后返回密码登录。登录、注册页不主动查询当前用户；工作台与个人中心启动时查询。开发与生产均查询真实当前用户，不再叠加固定用户预览；认证写请求和退出仍访问后端，失败不回退为模拟成功。后端现有能力：密码/短信登录、统一注册及登录后独立创建组织、当前会话角色切换、一次性注册凭证、刷新令牌、密码重置、退出、昵称查重、当前用户资料更新，以及上传台账和 OSS 文件接口。真实短信尚未接入；验证规则由后端管理，固定测试码统一定义在 shared 的 `MOCK_SMS_CODE`，后端 `MOCK_CODE` 与前端展示共用该值；页面不另行定义验证码，只在真实发码成功后保留服务端提示并展示测试码，已含验证码时不重复追加。
 
@@ -576,9 +576,9 @@ pnpm Workspace Monorepo，TypeScript + ESM，当前有 5 个应用、3 个共享
 
 页面恢复：`app/App.tsx` 使用无路径工作台父路由，将会话边界、`WorkspaceViewProvider`、公共布局和业务 Outlet 绑定到同一匹配链；登录/注册独立包裹认证布局，不根据先行更新的 location 切换工作台 Provider。`PageRecovery.tsx` 为页面异常提供温和提示、返回首页和重试；业务页异常保留公共顶栏，根/布局异常使用独立品牌恢复页，不向用户展示技术异常。返回首页保留 Cookie 并刷新首页，重试实际刷新当前页面，不调用退出或重放写请求。首次账户读取遇网络/5xx时自动返回首页，3秒后最多重查一次；硬错误或重查失败自动回登录入口，启动等待总计不超过15秒，不显示需要点击的错误卡片，不清除Cookie或伪造匿名状态。已有资料读取失败将错误放在工作台内容内，保留草稿及原轮询/401策略。开发热更新仅通过 `import.meta.hot.data` 复用 Context 对象身份，真实角色与缺失 Provider 校验保持原逻辑。
 
-Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:test:memory` 显式开启，每 10 秒记录进程指标与主进程内存到 userData，最多保留两份各 1 MiB 日志。普通开发默认关闭，安装包不启用。原 20 GB 报告尚未现场复现，短时验证不能视为泄漏修复；详见 [排查记录](docs/ELECTRON_MEMORY_INVESTIGATION.md)。
+Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:test:memory` 显式开启，每 10 秒记录进程指标与主进程内存到 userData，最多保留两份各 1 MiB 日志。普通开发默认关闭，安装包不启用。原 20 GB 报告尚未现场复现，短时验证不能视为泄漏修复；详见 排查记录（历史或本地文件：`docs/ELECTRON_MEMORY_INVESTIGATION.md`）。
 
-Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:test:memory` 显式开启，每 10 秒记录进程指标与主进程内存到 userData，最多保留两份各 1 MiB 日志。普通开发默认关闭，安装包不启用。原 20 GB 报告尚未现场复现，短时验证不能视为泄漏修复；详见 [排查记录](docs/ELECTRON_MEMORY_INVESTIGATION.md)。
+Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:test:memory` 显式开启，每 10 秒记录进程指标与主进程内存到 userData，最多保留两份各 1 MiB 日志。普通开发默认关闭，安装包不启用。原 20 GB 报告尚未现场复现，短时验证不能视为泄漏修复；详见 排查记录（历史或本地文件：`docs/ELECTRON_MEMORY_INVESTIGATION.md`）。
 
 领航员项目首批：`modules/projects/NavigatorProjectsPage.tsx` 承接真实 NAVIGATOR 首页及 `/projects`，本人待办和唯一草稿分别读取；`GET /projects/list` 仅返回本人当前待办，不代表全部创建历史，关键词只筛选本次返回的待办。`ProjectCreatePage.tsx` 在 `/projects/create` 提供基础信息、人员画像、标准配置三步向导，通过现有 `POST /projects/create` 保存唯一草稿或发布，完整快照携带草稿版本；失败保留表单，409 显式重读，写成功与后续回读失败分别提示，不自动重放不确定写结果。附件沿用 PROJECT_ATTACHMENT 上传台账与鉴权代理，新凭证只留表单内存，草稿保存后回读归一为已有附件 ID。`ProjectDetailPage.tsx` 在 `/projects/$projectId` 展示项目摘要与领航员流程 Tab，详情档案通过弹框按需查看。不提供已发布编辑、删除；后续主模块逐项经用户确认迁移，不扩全局顶栏。Web/Electron 共用当前组件与 HTTP 适配，仅改前端及客户端 DTO，不改后端/Prisma/依赖或执行迁移。
 
@@ -615,17 +615,17 @@ Electron 开发内存诊断：`pnpm dev:electron:memory` / `pnpm dev:electron:te
 | `packages/config`                       | 共用 TypeScript / ESLint 配置                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `scripts/`、`deploy/`                   | 本地数据库、验证、打包脚本及 Nginx / systemd 部署模板                                                                                                                                                                                                                                                                                                                                                                              |
 
-以下 04 模块及其后续批次为历史实现与验证记录；当前三角色与组织授权以文首统一账号说明及 `docs/UNIFIED_ACCOUNTS.md` 为准，不继续使用历史 ManagementGrant 策略。
+以下 04 模块及其后续批次为历史实现与验证记录；当前三角色与组织授权以文首统一账号说明及 `docs/backend/UNIFIED_ACCOUNTS.md` 为准，不继续使用历史 ManagementGrant 策略。
 
-04模块：`apps/server/src/modules/management/management.service.ts`历史上按独立授权校验NAVIGATOR/PM，`src/management-grants.ts`供运维维护授权及审计，无授权HTTP。`modules/projects/project-foundation.*`接入分类/需求方回填；`project-creation.service/types/schema.ts`、`project-requester.ts`、`project-time.ts`及`project-attachments.ts`接入草稿发布、本人需求方解析、上海时间和同事务附件同步，由`application.ts`装配。第8迁移授权/字典已有80项集成通过；第9迁移`20261019060000_project_drafts`新增Project/ProjectCategoryRelation/ProjectAttachment，专用库结构已就绪（用户91项集成88通过/3失败）；剩余附件认领500需第10迁移`20261019070000_file_business_identifiers`将UploadedFile.claimedBizId从UUID改为VARCHAR(64)，保留组织UUID和数值项目ID文本，用户回传2026-10-19 18:18:48运行92项集成全部通过（总36.64秒），第9/10专用库结构及附件修复已验证，迁移历史未另查，开发/部署仍待验收。草稿/发布按旧代码只要求有效登录和本人范围，不修改EXPERT注册登录；已认领项目附件仅接回有NAVIGATOR授权的创建人读取，PM读取已在后续批次接回并通过专用库集成，专家/考试仍待回补。成员表基础已在后续批次接入（118项专用库集成已通过），成员写流程及完整卡片尚未实现；生产计划已在后续本批接入（110项专用库集成已通过）；任职/管理主线任务和PENDING事件已在后续本批接入代码，详见[项目草稿与发布](docs/PROJECT_CREATION.md)。
+04模块：`apps/server/src/modules/management/management.service.ts`历史上按独立授权校验NAVIGATOR/PM，`src/management-grants.ts`供运维维护授权及审计，无授权HTTP。`modules/projects/project-foundation.*`接入分类/需求方回填；`project-creation.service/types/schema.ts`、`project-requester.ts`、`project-time.ts`及`project-attachments.ts`接入草稿发布、本人需求方解析、上海时间和同事务附件同步，由`application.ts`装配。第8迁移授权/字典已有80项集成通过；第9迁移`20261019060000_project_drafts`新增Project/ProjectCategoryRelation/ProjectAttachment，专用库结构已就绪（用户91项集成88通过/3失败）；剩余附件认领500需第10迁移`20261019070000_file_business_identifiers`将UploadedFile.claimedBizId从UUID改为VARCHAR(64)，保留组织UUID和数值项目ID文本，用户回传2026-10-19 18:18:48运行92项集成全部通过（总36.64秒），第9/10专用库结构及附件修复已验证，迁移历史未另查，开发/部署仍待验收。草稿/发布按旧代码只要求有效登录和本人范围，不修改EXPERT注册登录；已认领项目附件仅接回有NAVIGATOR授权的创建人读取，PM读取已在后续批次接回并通过专用库集成，专家/考试仍待回补。成员表基础已在后续批次接入（118项专用库集成已通过），成员写流程及完整卡片尚未实现；生产计划已在后续本批接入（110项专用库集成已通过）；任职/管理主线任务和PENDING事件已在后续本批接入代码，详见[项目草稿与发布](docs/backend/PROJECT_CREATION.md)。
 
-04策略官入口：路由由现有`project-foundation.routes.ts`统一注册，`project-manager.service/schema.ts`接候选/招募，`project-task-rounds.ts`采集管理主线并在项目锁事务中结算轮次、记录ProjectEventOutbox PENDING事实。第11迁移`20261019080000_project_managers`新增ProjectManagerRecruitment/ProjectTaskRound/ProjectEventOutbox及User.creditScore，所需专用库结构已就绪，用户2026-10-20回传102项集成全部通过（总41.38秒），迁移历史未另查；248项单测已通过。本批也接回API-011的独立PM授权+当前主策略官/协作负责人读取。项目卡片聚合/成员清退、支线采集及真实投递仍待后续接入，见[策略官与任务基础](docs/PROJECT_MANAGERS.md)。
+04策略官入口：路由由现有`project-foundation.routes.ts`统一注册，`project-manager.service/schema.ts`接候选/招募，`project-task-rounds.ts`采集管理主线并在项目锁事务中结算轮次、记录ProjectEventOutbox PENDING事实。第11迁移`20261019080000_project_managers`新增ProjectManagerRecruitment/ProjectTaskRound/ProjectEventOutbox及User.creditScore，所需专用库结构已就绪，用户2026-10-20回传102项集成全部通过（总41.38秒），迁移历史未另查；248项单测已通过。本批也接回API-011的独立PM授权+当前主策略官/协作负责人读取。项目卡片聚合/成员清退、支线采集及真实投递仍待后续接入，见[策略官与任务基础](docs/backend/PROJECT_MANAGERS.md)。
 
-插队模块（2026-10-21）：`modules/users/personal-application.*`接本人申请分页；`modules/attendance/`接本人月历、公开节假日源及内存缓存、无组织本人幂等排班和组织管理直接修正；`modules/expert/expert-assignment.*`接本人已接单项目/分配详情、准入与成员履约节点读取，并提供专家项目附件资格查询。由`application.ts`装配，第15迁移`20261021010000_personal_workbench`新增排班/日考勤/修正审计/幂等回执/成员接单响应/应试事实，补准入来源外键；所需专用库结构已由用户137项集成通过验证，迁移历史未另查。请假/修正申请及撤回已由`attendance-application.*`接入，复用组织单主管审批；月历返回申请与逐日权限。第16迁移将尚无结论的日考勤/审计前状态改为可空（Agent应用专用库报P1001，尚未应用），311项单测及类型/ESLint通过；用户145项集成已全部通过（15:17:51启动，总69.67秒），137项仍为前批证据；接单/考试写流程仍由06/07/08接入。契约及迁移步骤见[个人中心与工作台后端](docs/PERSONAL_WORKBENCH.md)。本批299项单测通过，服务端类型/ESLint通过；用户2026-10-21回传14:12:47启动的137项集成全部通过（1文件，总77.59秒，测试66.39秒）；第15迁移所需专用库结构及本批业务已验证，原数据库连接阻塞解除，迁移历史未另查。开发/部署库迁移及真实OSS/日历源联调仍待验收。
+插队模块（2026-10-21）：`modules/users/personal-application.*`接本人申请分页；`modules/attendance/`接本人月历、公开节假日源及内存缓存、无组织本人幂等排班和组织管理直接修正；`modules/expert/expert-assignment.*`接本人已接单项目/分配详情、准入与成员履约节点读取，并提供专家项目附件资格查询。由`application.ts`装配，第15迁移`20261021010000_personal_workbench`新增排班/日考勤/修正审计/幂等回执/成员接单响应/应试事实，补准入来源外键；所需专用库结构已由用户137项集成通过验证，迁移历史未另查。请假/修正申请及撤回已由`attendance-application.*`接入，复用组织单主管审批；月历返回申请与逐日权限。第16迁移将尚无结论的日考勤/审计前状态改为可空（Agent应用专用库报P1001，尚未应用），311项单测及类型/ESLint通过；用户145项集成已全部通过（15:17:51启动，总69.67秒），137项仍为前批证据；接单/考试写流程仍由06/07/08接入。契约及迁移步骤见[个人中心与工作台后端](docs/backend/PERSONAL_WORKBENCH.md)。本批299项单测通过，服务端类型/ESLint通过；用户2026-10-21回传14:12:47启动的137项集成全部通过（1文件，总77.59秒，测试66.39秒）；第15迁移所需专用库结构及本批业务已验证，原数据库连接阻塞解除，迁移历史未另查。开发/部署库迁移及真实OSS/日历源联调仍待验收。
 
-12创建入口：`modules/personnel/personnel-movement-create.ts`承载变动单/TransferStep完整快照与首个组织人工待办；`personnel-movement.domain/schema.ts`校验及中文契约，现有personnel路由装配。第28迁移新增来源复合外键、开放变动部分唯一索引；内置v1个人三节点/组织五节点，不使用组织退出审批来推进。102为部分迁移，接单/考试消费、103—106、到期生效及107/07回补待续；复验见[人员变动](docs/PERSONNEL_MOVEMENTS.md)。
+12创建入口：`modules/personnel/personnel-movement-create.ts`承载变动单/TransferStep完整快照与首个组织人工待办；`personnel-movement.domain/schema.ts`校验及中文契约，现有personnel路由装配。第28迁移新增来源复合外键、开放变动部分唯一索引；内置v1个人三节点/组织五节点，不使用组织退出审批来推进。102为部分迁移，接单/考试消费、103—106、到期生效及107/07回补待续；复验见[人员变动](docs/backend/PERSONNEL_MOVEMENTS.md)。
 
-12第五批内部入口：`personnel-movement-approvers.ts`同步当前人工节点，已接项目负责人替换及主策略官交接事务；`personnel-movement-effective.ts`执行原/目标成员关系、独立准入和日期生效，同事务更新目标主线及PENDING事件。显式补偿/到期命令分别为`personnel:movement-approvers`和`personnel:movements`，未运行或部署；无新迁移。本批六项专用库集成15:45:19已全部通过；下一步直接107/07来源及个人转入资格、旧assignmentId兼容；详见[人员变动第五批](docs/PERSONNEL_MOVEMENTS.md#第五批负责人同步与生效)。
+12第五批内部入口：`personnel-movement-approvers.ts`同步当前人工节点，已接项目负责人替换及主策略官交接事务；`personnel-movement-effective.ts`执行原/目标成员关系、独立准入和日期生效，同事务更新目标主线及PENDING事件。显式补偿/到期命令分别为`personnel:movement-approvers`和`personnel:movements`，未运行或部署；无新迁移。本批六项专用库集成15:45:19已全部通过；下一步直接107/07来源及个人转入资格、旧assignmentId兼容；详见[人员变动第五批](docs/backend/PERSONNEL_MOVEMENTS.md#第五批负责人同步与生效)。
 
 Agent 工程入口（可信工具／Skill、工具过程与 W5 PostgreSQL 正在合流；Electron 尚未装配）：
 
@@ -655,23 +655,23 @@ React 页面 → services/api → packages/platform
 - 03已接入组织资料、成员列表/编辑/角色接口；`UserOrgRel`是组织权限来源，版本条件更新与角色转让在组织行锁事务内。认证资料从有效多组织关系中选OWNER优先/最早加入的组织，营业执照也按指定组织成员关系授权。`hasExpertManagementRole`当前仅实现OWNER分支，组织项目负责人待07。成员列表项目统计/筛选已在04回补代码（2026-10-21），按userOrgRelId下ACTIVE行计数，无关联0；projectId为32位JSON整数，筛选在分页前生效，当前页批量统计。278项单测通过，用户2026-10-21回传122项集成全部通过（总54.60秒），原测试库阻塞解除，无新增迁移。`20261019020000_organization_memberships`已应用专用测试库，第6个迁移20261019030000_approvals也已应用专用库；既有203项单测通过（本次未重跑）；用户已应用第7迁移20261019040000_member_imports至专用测试库，2026-10-19 16:26:59复跑74项集成全部通过（总23.77秒），03已交接04；用户随后也已在开发库应用全部7个迁移；部署库迁移和兼容验收仍待完成。
 - 退出/审批API-021—024已接入，流程/节点双版本与成员/日志同事务；主管转让不自动转派已有待办。LEFT同事务写OrganizationDeparture PENDING记录，项目清退/负责人/人员变动/事件待04/07/12/14，API-021/024保留部分迁移。到期组织离职命令为 `pnpm --filter @tyde/server organizations:departures`，部署用编译入口dist/organizations-departures.js；每日上海零点调度未配置。
 - 成员模板GET `/organizations/member-imports/template`和multipart导入POST `/organizations/member-imports/generate`已接入：SheetJS官方0.20.3支持XLS/XLSX，CSV/文本支持旧字段与中文/英文值；最多500人、全量错误HTTP400保留data。MemberImportReceipt提供24小时事务幂等，新增迁移20261019040000_member_imports已由用户应用专用测试库，74项集成复测全部通过，当前入口已交接04；开发库也已由用户迁移，部署库尚待迁移。导入/登录锁顺序为手机号升序→组织升序→关系；首次密码/SMS成功登录条件激活并版本+1，失败回滚且不发令牌，刷新/重置不激活。
-- 登录后独立创建组织时，营业执照通过上传台账一次性认领，与组织和本人 OWNER 关系创建同事务；账号注册不创建组织。`businessLicenseUrl` 返回 objectKey，未提交为 null。文件存储默认关闭；启用 OSS 时服务端读写使用 `OSS_ENDPOINT`，客户端下载使用 `OSS_PUBLIC_ENDPOINT`，对象统一设为私有且禁止覆盖。独立存储验证命令：`pnpm --filter @tyde/server storage:verify`。已认领项目附件仅接回有NAVIGATOR授权的创建人读取；PM主策略官/协作负责人读取代码已在本批接回（102项专用库集成已通过），专家及考试附件仍待回补。详情见 `docs/API.md`、`docs/AUTH_BACKEND.md` 与部署说明。
+- 登录后独立创建组织时，营业执照通过上传台账一次性认领，与组织和本人 OWNER 关系创建同事务；账号注册不创建组织。`businessLicenseUrl` 返回 objectKey，未提交为 null。文件存储默认关闭；启用 OSS 时服务端读写使用 `OSS_ENDPOINT`，客户端下载使用 `OSS_PUBLIC_ENDPOINT`，对象统一设为私有且禁止覆盖。独立存储验证命令：`pnpm --filter @tyde/server storage:verify`。已认领项目附件仅接回有NAVIGATOR授权的创建人读取；PM主策略官/协作负责人读取代码已在本批接回（102项专用库集成已通过），专家及考试附件仍待回补。详情见 `docs/backend/API.md`、`docs/backend/AUTH_BACKEND.md` 与部署说明。
 
 - 当前后端源码、shared 认证 DTO、Prisma 模型和迁移以 `origin/main@daf8431` 为基线，客户端保留本分支已提交能力。本次推送前合并仅同步源码及第 20—21 项迁移文件，未应用迁移或操作数据库。其他环境的历史集成与 HTTP 验收不代表已核对本机或部署库的第 20—21 项迁移。后续 UI 联调不自行调整后端或数据库；2026-10-23 用户确认修改 Logo 后，本次仅补其上传认领和替换释放，其余缺口交后端维护。
 
 本地提交前联调补充：2026-10-19重新运行203项单测及服务端类型/ESLint检查通过；组织注册500由开发库Organization.verifyStatus缺列引起，用户应用全部7个迁移并重启后，41项业务HTTP复测全部符合预期，故障已消除。详细证据和外部提交规则缺失遗留见根目录03任务记录；该历史批次入口为04，当前入口以根目录05链接为准。
 
-04生产计划入口：`project-production-plan.service/schema.ts`由`application.ts`装配后交现有项目路由注册。GET/POST的projectId均在query；独立PM+当前主策略官确认、招募协作负责人只读；ProjectProductionPlan/Crowd/Stage及管理主线轮次同事务，Decimal产出、上海日期和单向节点，沿旧声明不写实时事件。第12迁移`20261020000000_project_production_plans`所需专用库结构已就绪，用户2026-10-20 11:59:43回传110项集成全部通过（总46.38秒），缺表阻塞解除，迁移历史未另查；既有267项单测通过，开发/部署及兼容仍待验收；其余项目聚合/成员及支线仍待实现。见[生产计划](docs/PROJECT_PRODUCTION_PLANS.md)。
+04生产计划入口：`project-production-plan.service/schema.ts`由`application.ts`装配后交现有项目路由注册。GET/POST的projectId均在query；独立PM+当前主策略官确认、招募协作负责人只读；ProjectProductionPlan/Crowd/Stage及管理主线轮次同事务，Decimal产出、上海日期和单向节点，沿旧声明不写实时事件。第12迁移`20261020000000_project_production_plans`所需专用库结构已就绪，用户2026-10-20 11:59:43回传110项集成全部通过（总46.38秒），缺表阻塞解除，迁移历史未另查；既有267项单测通过，开发/部署及兼容仍待验收；其余项目聚合/成员及支线仍待实现。见[生产计划](docs/backend/PROJECT_PRODUCTION_PLANS.md)。
 
-04项目详情入口：`project-query.service/schema.ts`由application装配至现有项目路由，`project-detail.ts`共用草稿/详情字段转换，`productionStageData`共用阶段转换。只读已发布项目、独立管理授权+实际关系，管理范围优先，仅ACTIVE MEMBER专家返回生产数值/阶段（crowds沿旧Query实际null）。`hasManagementRole`支持事务客户端。第13迁移`20261020010000_project_members`新增成员历史/状态/组织/来源ID基础；既有274项单测通过；用户2026-10-20 18:58:41回传118项集成全部通过（总51.06秒），第13所需专用库结构及本批业务已验证，数据库阻塞解除，迁移历史未另查。无成员写入口、无自动入项；专家附件仍须接单/准入，不能复用成员判定放行。API-031/034列表读取已接后续本批代码（用户2026-10-21回传130项集成全部通过，第14所需结构已就绪、迁移历史未另查，部分迁移）；来源写流程/支线重算及03清退仍待后续，03计数/筛选已有122项集成通过，详见[项目详情](docs/PROJECT_DETAILS.md)。
+04项目详情入口：`project-query.service/schema.ts`由application装配至现有项目路由，`project-detail.ts`共用草稿/详情字段转换，`productionStageData`共用阶段转换。只读已发布项目、独立管理授权+实际关系，管理范围优先，仅ACTIVE MEMBER专家返回生产数值/阶段（crowds沿旧Query实际null）。`hasManagementRole`支持事务客户端。第13迁移`20261020010000_project_members`新增成员历史/状态/组织/来源ID基础；既有274项单测通过；用户2026-10-20 18:58:41回传118项集成全部通过（总51.06秒），第13所需专用库结构及本批业务已验证，数据库阻塞解除，迁移历史未另查。无成员写入口、无自动入项；专家附件仍须接单/准入，不能复用成员判定放行。API-031/034列表读取已接后续本批代码（用户2026-10-21回传130项集成全部通过，第14所需结构已就绪、迁移历史未另查，部分迁移）；来源写流程/支线重算及03清退仍待后续，03计数/筛选已有122项集成通过，详见[项目详情](docs/backend/PROJECT_DETAILS.md)。
 
-04项目列表入口：`project-list.service/schema.ts`由application装配至现有项目路由；主数据参数化SQL及可见项目分类/负责人批量聚合，RepeatableRead读取真实成员计数、角色支线快照、组织接单负责人和当前版本人工阅卷配置。第14迁移`20261021000000_project_cards`新增5个读取前置表，补ProjectMember接单来源及前次分配Restrict外键；配置版本表外键/写流程归05，接单/负责人写流程归07。两列表部分迁移，快照重算/修复/来源写流程与投递待后续。既有286项单测通过，用户2026-10-21 11:04:49回传130项集成全部通过（总62.15秒），第14所需专用库结构及列表基础已验证，迁移历史未另查；04基础已交接05，本次未实现05。详见[项目列表](docs/PROJECT_LISTS.md)。
+04项目列表入口：`project-list.service/schema.ts`由application装配至现有项目路由；主数据参数化SQL及可见项目分类/负责人批量聚合，RepeatableRead读取真实成员计数、角色支线快照、组织接单负责人和当前版本人工阅卷配置。第14迁移`20261021000000_project_cards`新增5个读取前置表，补ProjectMember接单来源及前次分配Restrict外键；配置版本表外键/写流程归05，接单/负责人写流程归07。两列表部分迁移，快照重算/修复/来源写流程与投递待后续。既有286项单测通过，用户2026-10-21 11:04:49回传130项集成全部通过（总62.15秒），第14所需专用库结构及列表基础已验证，迁移历史未另查；04基础已交接05，本次未实现05。详见[项目列表](docs/backend/PROJECT_LISTS.md)。
 
 合并验证（2026-10-21）：保留浏览器传输注册与04项目服务/路由装配，合并客户端适配说明和后端迁移记录；服务端类型检查、application.ts的ESLint及291项单测（23文件）通过。未重跑数据库集成，默认任务仍为05，未开始05实现。
 
-05考试入口（2026-10-21第三批）：`modules/entrance-exams/exam-query.service/schema.ts`接编辑配置/管理页/花名册，`exam-command.service.ts`接关闭；`exam-access.ts`区分当前PM写权限、PM协作只读和历史MANUAL配置的NAV只读。现有management路由由application装配；导入及发布/编辑沿原入口。第18迁移新增逐轮阅卷记录和同版本来源约束，所需专用库结构已由用户2026-10-22 09:16:49复跑162项全通过验证（总78.84秒，测试68.19秒），原缺表阻塞解除，迁移历史未另查；开发/部署仍未验证。339单测为前批证据，本次仅同步结果、未重跑或操作数据库。下次040/048—052；保持05，不交接06。详情以根05任务及[考试基础](docs/ENTRANCE_EXAM_MANAGEMENT.md)为准。
+05考试入口（2026-10-21第三批）：`modules/entrance-exams/exam-query.service/schema.ts`接编辑配置/管理页/花名册，`exam-command.service.ts`接关闭；`exam-access.ts`区分当前PM写权限、PM协作只读和历史MANUAL配置的NAV只读。现有management路由由application装配；导入及发布/编辑沿原入口。第18迁移新增逐轮阅卷记录和同版本来源约束，所需专用库结构已由用户2026-10-22 09:16:49复跑162项全通过验证（总78.84秒，测试68.19秒），原缺表阻塞解除，迁移历史未另查；开发/部署仍未验证。339单测为前批证据，本次仅同步结果、未重跑或操作数据库。下次040/048—052；保持05，不交接06。详情以根05任务及[考试基础](docs/backend/ENTRANCE_EXAM_MANAGEMENT.md)为准。
 
-11第三批入口：`modules/production/quality.service.ts`、`acceptance.service.ts`及`quality-acceptance.schema.ts`，由现有production路由装配六个入口。第27迁移增加质量历史与验收事实；本机仅本批6项复验及契约见[质量与验收](docs/PRODUCTION_QUALITY_ACCEPTANCE.md)。
+11第三批入口：`modules/production/quality.service.ts`、`acceptance.service.ts`及`quality-acceptance.schema.ts`，由现有production路由装配六个入口。第27迁移增加质量历史与验收事实；本机仅本批6项复验及契约见[质量与验收](docs/backend/PRODUCTION_QUALITY.md)。
 
 ## Agent 接入与协作
 
@@ -679,7 +679,7 @@ React 页面 → services/api → packages/platform
 
 - 工具与 Skill 由可信宿主显式装配：`apps/agent/src/pi/resources.ts` 校验固定正文、逻辑版本与 SHA-256 摘要，`createApp(config, { resources, deployment })` 接收冻结资源，PG 启用资源还需对应可信部署声明。Skill 正文预加载到实际 system prompt；默认入口不扫描本机资源、不装配演示包，也不开放文件／终端工具。
 - `apps/agent/src/pi/session.ts` 保留真实模型请求与工具调用关联及原生结果；`saveNativeState`／`beforeDispatch` 是可等待保存与最终派发门禁，拒绝后阻断后续模型／工具；W5 提供可等待原生提交与持久预算许可，本轮合流统一接入，分项联合结果与未完成场景见联合记录。停止、期限和工具局部超时分别处理，迟到结果不得恢复执行。
-- 只读工具通过 `ToolExecutionSummary`／`tool.updated` 进入快照、历史、任务和结果详情；`apps/agent-web/src/components/ToolExecutions.tsx` 展示安全摘要，不暴露原始参数、完整结果或服务端路径，不生成业务 Operation。当前 22 号源版本为 `1.2.0-w4-design`，21 号保持 `1.1.0-design`，共 103 个生成 Schema，公开 `schema_version=1`；新增可靠事件要求两端配套升级，未知事件仍失败关闭。具体演示材料仅本机保留，完整证据与后续对接见 [工具接入验收](docs/AGENT_W4_VALIDATION.md)及[交付清单](docs/AGENT_W4_DELIVERY.md)。
+- 只读工具通过 `ToolExecutionSummary`／`tool.updated` 进入快照、历史、任务和结果详情；`apps/agent-web/src/components/ToolExecutions.tsx` 展示安全摘要，不暴露原始参数、完整结果或服务端路径，不生成业务 Operation。当前 22 号源版本为 `1.2.0-w4-design`，21 号保持 `1.1.0-design`，共 103 个生成 Schema，公开 `schema_version=1`；新增可靠事件要求两端配套升级，未知事件仍失败关闭。具体演示材料仅本机保留，完整证据与后续对接见 [工具接入验收](docs/archive/AGENT_MILESTONES.md#agent-w4-validation)及[交付清单](docs/archive/AGENT_MILESTONES.md#agent-w4-delivery)。
 
 - W1／W2 的工程、契约、请求摘要、受控身份与 Pi 1.3.0 内存执行继续复用；W3 同步 21／22 号 `1.1.0-design`，接入私有会话创建／列表／概况、一致快照／历史／任务／结果、命令提交与按 key 核实、进程内冻结事件补读和 SSE。仅 `start_task`／`stop_attempt` 已开放，其他产品命令明确不支持且页面不展示可用入口。当前 24 号已将 URL／Key 明确为长期主入口，专用平台身份和路由握手为可选扩展；未改写外部设计。W5 数据库能力保留独立阶段证据，W4／W5 联合验证已获用户确认并分项记录实际证据；正式平台授权和 Electron 装配仍待后续阶段。
 - W2 默认没有内置终端／文件工具、本机资源／凭据发现、自动重试、压缩／摘要或预热；工具须显式白名单及完整参数校验，首期每轮至多一个。合法 finish 与完整 `[DONE]` 共同确认模型轮次，不能把模型 SSE 当 22 号产品事件。停止后阻断新模型／工具，迟到输出不能恢复旧执行；缺失用量与费用保持未知。
@@ -703,8 +703,8 @@ React 页面 → services/api → packages/platform
 - 业务前端任务负责 Web、Electron 和必要客户端适配；同步 main 已有后端代码不属于自行扩展业务。以后端现有 API 和 shared DTO/schema 为准；不得自行新增后端业务接口、修改 Prisma schema 或数据库迁移。用户已授权的后端例外为支撑 Electron 页面直接 HTTP 的最小来源/CORS/Cookie 适配，以及 2026-10-23 组织 Logo 的现有上传/创建/更新接口认领与替换释放；Logo 例外不新增路由、Prisma schema 或迁移，不扩展排班业务。已有接口按当前契约对接，剩余语义缺口先列清单并与后端确认，不提前把设计写成已实现契约。个人中心已授权接入现有资料、改密和组织读取接口；仅扩展 shared 客户端能力接口，不修改后端 DTO/schema。 Agent 后端任务按当前授权范围在 `apps/agent` 实现接口、执行状态和存储，涉及业务后端仍按其职责协作。
 - 业务 UI 放 `apps/web/src/modules/<业务>/`，路由接入 `app/App.tsx`；业务后端模块放 `apps/server/src/modules/<业务>/`，在 `application.ts` 装配。Agent UI 与服务分别落在 `apps/agent-web`、`apps/agent`。
 
-- Swagger UI 为 `/api/v1/docs/`，JSON/YAML 在其下的 `/json`、`/yaml`；插件必须先于业务路由注册。新增接口补齐 summary、operationId、tags、请求与响应 schema，认证请求 schema 位于 `packages/shared/src/auth.ts`，响应 schema 位于 `auth.schema.ts`；维护说明见 `docs/API.md`。
-- Swagger 字段说明是新增/修改接口的必交付项：所有请求、响应、嵌套对象、数组项及参数均需中文 `description`，枚举逐值解释，说明条件必填/默认行为/单位/格式/null，并提供真实可校验示例；未接入和占位能力如实标注。常规枚举使用 `type: string` + `enum`，避免无必要的 `anyOf`。完整规则和验收要求见 `docs/API.md` 的“Swagger 文档标准”。
+- Swagger UI 为 `/api/v1/docs/`，JSON/YAML 在其下的 `/json`、`/yaml`；插件必须先于业务路由注册。新增接口补齐 summary、operationId、tags、请求与响应 schema，认证请求 schema 位于 `packages/shared/src/auth.ts`，响应 schema 位于 `auth.schema.ts`；维护说明见 `docs/backend/API.md`。
+- Swagger 字段说明是新增/修改接口的必交付项：所有请求、响应、嵌套对象、数组项及参数均需中文 `description`，枚举逐值解释，说明条件必填/默认行为/单位/格式/null，并提供真实可校验示例；未接入和占位能力如实标注。常规枚举使用 `type: string` + `enum`，避免无必要的 `anyOf`。完整规则和验收要求见 `docs/backend/API.md` 的“Swagger 文档标准”。
 - 已有业务 API 的客户端变更同步维护 platform Web/桌面适配、Electron preload/受限 IPC 与页面调用；业务后端 DTO/schema、路由、service 和数据库变更由业务后端负责人实现。Agent 契约由 Agent 前后端共同确认，在 shared 维护唯一跨应用定义。
 - 业务 UI 统一通过平台适配层访问业务能力；Agent UI 集中通过自身客户端层访问 Agent 服务。Electron 只承担桌面能力，不复制业务页面、不内嵌业务后端或 Pi 执行进程。
 - Web 与 Electron 的业务 UI 只维护 `apps/web` 这一份组件、路由和业务逻辑；优先复用 `components/ui/`，不再引入 Ant Design 或另一套业务路由。按钮尺寸通过公共 `size` 变体管理。独立 Agent UI 在 `apps/agent-web` 维护和构建，隔离样式。
@@ -770,11 +770,11 @@ Git 的 `pre-commit` 先通过 `scripts/check-commit-policy.mjs` 检查整个暂
 - Web / 后端产物在 `artifacts/`，桌面安装包在 `release/`；这些目录及 `dist/`、`out/`、`.local/`、`node_modules/` 不是业务源码入口。
 - 打包阶段通过 `scripts/lib/package-artifacts.mjs` 按平台/类型清理旧产物，保留其他交付类型和测试报告；桌面打包成功后自动生成校验与交付清单。不要将清理改为整体删除 `release/` 或 `artifacts/`。
 
-2026-10-21最新验收安排：暂不开始05，先完成插队13项功能测试。311项单测已于15:14:38全量复验通过；用户15:17:51启动的145项数据库集成已全部通过（总69.67秒），第16迁移所需专用库结构已验证。待办表单序列化失败已修复，后续专用库检查明确缺第16迁移。执行步骤与逐项功能验收见[工作台说明](docs/PERSONAL_WORKBENCH.md#全功能验收顺序)。
+2026-10-21最新验收安排：暂不开始05，先完成插队13项功能测试。311项单测已于15:14:38全量复验通过；用户15:17:51启动的145项数据库集成已全部通过（总69.67秒），第16迁移所需专用库结构已验证。待办表单序列化失败已修复，后续专用库检查明确缺第16迁移。执行步骤与逐项功能验收见[工作台说明](docs/backend/PERSONAL_WORKBENCH.md#历史迁移与验收证据)。
 
 - 最新验证更新：用户2026-10-21回传15:17:51启动的145项集成全部通过（1文件，总69.67秒，测试60.48秒）；第16迁移所需专用测试库结构及新增8项申请/审批/撤回数据库验证已通过，迁移历史未另查。开发/部署库与真实HTTP、OSS、节假日源仍待验收；暂不开始05。 本次仅同步用户结果，未重跑测试或操作数据库。
 
-- 2026-10-21真实HTTP续验：用户启动后端，health/ready 200。已完成48项记录检查，47项符合预期（资料/脱敏/改密全会话撤销、个人排班及幂等、真实OSS头像生命周期/展示、组织与申请权限等），真实节假日查询503尚未验收。Agent不能直连开发库，已准备仅本批账号的排班/项目接单夹具脚本，待用户本机执行后续验申请/审批/撤回/直接变更及非空项目详情；第16开发库迁移历史尚未核对。详细结果见tyde/docs/PERSONAL_WORKBENCH_ACCEPTANCE.md，暂不开始05。
+- 2026-10-21真实HTTP续验：用户启动后端，health/ready 200。已完成48项记录检查，47项符合预期（资料/脱敏/改密全会话撤销、个人排班及幂等、真实OSS头像生命周期/展示、组织与申请权限等），真实节假日查询503尚未验收。Agent不能直连开发库，已准备仅本批账号的排班/项目接单夹具脚本，待用户本机执行后续验申请/审批/撤回/直接变更及非空项目详情；第16开发库迁移历史尚未核对。详细结果见[历史验收](docs/archive/ACCEPTANCE_HISTORY.md#personal-workbench-acceptance)，暂不开始05。
 
 - 2026-10-21最新真实验收：用户prepare-data.mjs执行成功，同事务准备5天排班及1个独立验收项目/组织接单/成员响应，脚本已核对开发库第16迁移完成。累计104项HTTP/OSS检查，103项符合预期；修正提交/主管批准、未来请假批准(autoStatus=null)、直接变更/旧版本409、撤回/重提/拒绝/过期快照、并发撤回与审批一方200另一方409、退出幂等与批准PENDING_LEAVE、本人申请分页/时间/状态/权限、非空本人项目列表/详情/keyword均通过。唯一未通过为真实节假日源503，用户本机Node fetch诊断明确10秒超时，待运行check-calendar.mjs比较源连通性。测试账号/组织数据保留，未改已有用户；暂不交接或开始05。
 
@@ -784,21 +784,21 @@ Git 的 `pre-commit` 先通过 `scripts/check-commit-policy.mjs` 检查整个暂
 
 2026-10-21最新05集成更新：用户2026-10-21 17:10:14回传148/149通过，唯一失败为RESTRICT删除错误类型断言；Agent改为核对具体应试版本外键并完整比对版本、试卷、应试记录未变。17:13:41复跑149项集成全部通过（1文件，总74.16秒，测试71.29秒），原缺表及测试断言阻塞均解除。第17迁移所需专用库结构已验证，迁移历史未另查；Agent未应用数据库迁移，开发/部署库仍未验证。该记录更新此前“第17迁移未应用”的历史状态。详细状态以根05任务记录为准，继续05，不交接06。
 
-12第三批入口：`modules/personnel/personnel-transfer.ts`负责固定跨项目锁、真实等待结果消费/人工节点处理/撤回和恢复；`personnel-transfer-exam.ts`负责独立应试资格及提交后消费/补偿，由067及068—071和阅卷入口调用。维护命令`personnel:transfer-results`仅补偿最终考试事实，未运行或部署。105已实现待验收，102/106仍部分迁移，103/104、当前待办负责人同步、到期生效及107/07来源待接；第29迁移及本批六项专用库复验见[人员变动](docs/PERSONNEL_MOVEMENTS.md#第三批验证与续做)。
+12第三批入口：`modules/personnel/personnel-transfer.ts`负责固定跨项目锁、真实等待结果消费/人工节点处理/撤回和恢复；`personnel-transfer-exam.ts`负责独立应试资格及提交后消费/补偿，由067及068—071和阅卷入口调用。维护命令`personnel:transfer-results`仅补偿最终考试事实，未运行或部署。105已实现待验收，102/106仍部分迁移，103/104、当前待办负责人同步、到期生效及107/07来源待接；第29迁移及本批六项专用库复验见[人员变动](docs/backend/PERSONNEL_MOVEMENTS.md#第三批验证与续做)。
 
-12第四批读取入口：`modules/personnel/personnel-movement-query.ts`承担103/104读取快照、数据库筛选/分页、审批最后动作与实时allowedActions；`personnel-movement-query.schema.ts`提供中文Swagger与完整示例，由现有personnel路由装配。读取不会写节点、轮次、成员或outbox；104入参仍为projectId/memberId，非movementId。新增3项读取集成已由用户14:42:41全部通过，不重复本批；后续直接负责人同步/生效，记录见[人员变动](docs/PERSONNEL_MOVEMENTS.md#第四批读取与复验)。
+12第四批读取入口：`modules/personnel/personnel-movement-query.ts`承担103/104读取快照、数据库筛选/分页、审批最后动作与实时allowedActions；`personnel-movement-query.schema.ts`提供中文Swagger与完整示例，由现有personnel路由装配。读取不会写节点、轮次、成员或outbox；104入参仍为projectId/memberId，非movementId。新增3项读取集成已由用户14:42:41全部通过，不重复本批；后续直接负责人同步/生效，记录见[人员变动](docs/backend/PERSONNEL_MOVEMENTS.md#第四批读取与复验)。
 
-13第一批入口：`modules/projects/project-board.service.ts`实现API-108只读基础详情及数据库权限过滤，`project-board.schema.ts`提供完整中文Swagger，现有project-foundation路由装配。109已接入统计服务project-workbench-statistics.ts，复用各域真实采集器，用户18:38:28新增4项集成全部通过，直接续做110—114。108三项集成及本机Bearer HTTP已通过，旧SQL口径差异及证据见[项目看板](docs/PROJECT_WORKBENCH.md)。
+13第一批入口：`modules/projects/project-board.service.ts`实现API-108只读基础详情及数据库权限过滤，`project-board.schema.ts`提供完整中文Swagger，现有project-foundation路由装配。109已接入统计服务project-workbench-statistics.ts，复用各域真实采集器，用户18:38:28新增4项集成全部通过，直接续做110—114。108三项集成及本机Bearer HTTP已通过，旧SQL口径差异及证据见[项目看板](docs/backend/PROJECT_WORKBENCH.md)。
 
-13第四批入口：`modules/projects/project-board-subtasks.ts`负责111具体项目权限、组织范围、真实日报量及人数批量聚合和上海业务日期风险；`ProjectBoardService.subtasks`包装只读RepeatableRead事务。完整中文Swagger在`project-board.schema.ts`，原project-foundation路由装配。601单测及类型/ESLint/后端build通过，三项集成仅初始化连接失败，先本机仅定向workbench subtasks；通过后112—114，不重迁移29。见[项目看板](docs/PROJECT_WORKBENCH.md)。
+13第四批入口：`modules/projects/project-board-subtasks.ts`负责111具体项目权限、组织范围、真实日报量及人数批量聚合和上海业务日期风险；`ProjectBoardService.subtasks`包装只读RepeatableRead事务。完整中文Swagger在`project-board.schema.ts`，原project-foundation路由装配。601单测及类型/ESLint/后端build通过，三项集成仅初始化连接失败，先本机仅定向workbench subtasks；通过后112—114，不重迁移29。见[项目看板](docs/backend/PROJECT_WORKBENCH.md)。
 
 13第四批验收更新：111三项集成已由用户分批全部通过（10:18:12两项、10:21:35剩余一项），不再执行本批复验命令。直接112风险、113趋势及114组织概览；111真实HTTP/部署/完整兼容状态保留，业务Agent继续mock。
 
-13第六批入口：`modules/projects/project-board-trends.ts`负责113日期校验、实际成员日聚合、最新质量与CPD窗口，复用111实时项目/组织权限；`ProjectBoardService.trends`采用只读RepeatableRead，由project-foundation路由和project-board.schema中文Swagger装配。613单测及类型/ESLint/后端build通过；workbench trends三项集成已由用户11:07:13全部通过，下次直接114。不重迁移29，不重复108—112及12/11。见[项目看板](docs/PROJECT_WORKBENCH.md)。
+13第六批入口：`modules/projects/project-board-trends.ts`负责113日期校验、实际成员日聚合、最新质量与CPD窗口，复用111实时项目/组织权限；`ProjectBoardService.trends`采用只读RepeatableRead，由project-foundation路由和project-board.schema中文Swagger装配。613单测及类型/ESLint/后端build通过；workbench trends三项集成已由用户11:07:13全部通过，下次直接114。不重迁移29，不重复108—112及12/11。见[项目看板](docs/backend/PROJECT_WORKBENCH.md)。
 
-13第七批入口：`OrganizationService.overview`复用实时组织主管/管理员权限，五项真实聚合采用同一RepeatableRead快照；organization.routes.ts及organization.schema.ts装配114与完整中文Swagger。无schema/迁移/依赖变更；先本机专用_test库仅定向`organization overview`三项，不重迁移29、不重复108—113及12/11。保持13，不开始14。详见[项目看板](docs/PROJECT_WORKBENCH.md#组织概览第七批2026-10-27)。
+13第七批入口：`OrganizationService.overview`复用实时组织主管/管理员权限，五项真实聚合采用同一RepeatableRead快照；organization.routes.ts及organization.schema.ts装配114与完整中文Swagger。无schema/迁移/依赖变更；先本机专用_test库仅定向`organization overview`三项，不重迁移29、不重复108—113及12/11。保持13，不开始14。详见[项目看板](docs/backend/PROJECT_WORKBENCH.md#组织概览)。
 
-13第八批入口：`modules/projects/project-management-card-snapshot.ts`统一十种NAV/PM管理支线竞争，真实候选完整读取后按优先级/业务时间排序；`syncRecruitmentRetrySnapshot`和`refreshGradingSnapshots`已接入，同事务保留原动作轮次与outbox。EXPERT视角、其他写事件与跨域新来源轮次/卡片受众待回补。620单测/45定向、类型/静态/后端build通过；新增三项集成已由用户11:43:58全部通过，不再复验；下次直接其他事件/EXPERT视角及轮次受众回补。保持13，不重迁移29、不重复108—114/12/11，详见[项目看板](docs/PROJECT_WORKBENCH.md#管理卡片统一仲裁第八批2026-10-27)。
+13第八批入口：`modules/projects/project-management-card-snapshot.ts`统一十种NAV/PM管理支线竞争，真实候选完整读取后按优先级/业务时间排序；`syncRecruitmentRetrySnapshot`和`refreshGradingSnapshots`已接入，同事务保留原动作轮次与outbox。EXPERT视角、其他写事件与跨域新来源轮次/卡片受众待回补。620单测/45定向、类型/静态/后端build通过；新增三项集成已由用户11:43:58全部通过，不再复验；下次直接其他事件/EXPERT视角及轮次受众回补。保持13，不重迁移29、不重复108—114/12/11，详见[项目看板](docs/backend/PROJECT_WORKBENCH.md#内部卡片与独立轮次)。
 
 13第九批入口：入项`syncEntrySnapshots`、报量`syncOutputSnapshots`保留原EXPERT分域写法并统一刷新NAV/PM；`ProductionService.create`与验收publish直接调用`refreshManagementCardSnapshots`。仲裁返回真实卡片变化的`cardChangedRecipients`，上述非静默outbox追加该字段，核准保留静默。622单测/类型/ESLint/后端包build通过；本批`management card write events`三项集成停在初始化连接，先本机专用_test库仅复验本批，不重迁移29或重复已过批次。保持13，EXPERT/审批及负责人终态事件/新来源轮次及其余受众待续做。
 

@@ -55,7 +55,7 @@ pnpm test:agent-db
 
 `src/storage/resource-publication.ts` 提供可信内部发布入口，必须显式提供制品字节／来源／可取回性 verifier；它不开放 HTTP、不加载工具、不扫描或下载文件。普通 HTTP runtime 账号仍不能写 S/F/G，真实 W5 聊天仍使用空工具和零成员。
 
-资源摘要 `resource-manifest-v1` 由发布器及 DB 共用 `resource_manifest_normalize/digest`：按 load_order/member_key(C) 排列完整 G 语义与 F 稳定身份，排除记录 ID／创建时间，并把归档 bigint 大小转为十进制字符串，再取 PG18 JSONB 规范文本 UTF-8 的 SHA-256。它与 snapshot／命令 JCS 独立；空 `[]` 摘要保持兼容。完整规范、来源差异和测试证据见 [D1](../../../docs/AGENT_W5_D1.md)。
+资源摘要 `resource-manifest-v1` 由发布器及 DB 共用 `resource_manifest_normalize/digest`：按 load_order/member_key(C) 排列完整 G 语义与 F 稳定身份，排除记录 ID／创建时间，并把归档 bigint 大小转为十进制字符串，再取 PG18 JSONB 规范文本 UTF-8 的 SHA-256。它与 snapshot／命令 JCS 独立；空 `[]` 摘要保持兼容。完整规范、来源差异和测试证据见 [D1](../../../docs/archive/AGENT_MILESTONES.md#agent-w5-d1)。
 
 F.manifest_schema_version=1 文件清单使用 `files` 数组：每项包含 path、size_bytes、sha256、mode、kind='file'，可带 exports。G 入口须在清单中；skill 入口是 SKILL.md。工具实现只能绑定 extension/business_adapter 成员的声明 export 或固定 runtime export；成员的 requires_members/tools/files 依赖全部闭合。显式隔离 test fixture 需要双方完整固定身份和安全 tests/ 路径。
 

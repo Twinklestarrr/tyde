@@ -30,4 +30,4 @@ node scripts/generate-agent-contracts.mjs --check
 
 W5 独立阶段未修改其基线的两份公开命令／读取源和生成产物；本轮合流保留 W4 的 22 号扩展及全部同源生成文件，持久化由 Agent 自有运行时实现，不把设计中未开放的 continue/retry/provide_input 当成已交付。新增认证只读部署信息 `GET /api/agent/v1/runtime` 由 Agent 本地 Swagger 定义 `{storage_mode:"postgres"|"memory"}` 及401/503错误；它不参与 Pi 上下文、产品事件或执行授权。W4 接入仍使用同一共享源，合流时通过现有生成器维护，禁止手改 generated 文件。
 
-W4／W5 合流不另建持久化专用的公开工具 DTO。PostgreSQL 运行时应按同一 `ToolExecutionSummary` 冻结工具投影，并与原生版本／可靠 `tool.updated` 保持提交关联。冲突处理和接口接入状态见 [合流记录](../../../../../docs/AGENT_W4_W5_INTEGRATION.md)；既有分支测试不等于合并后验证，当前等待用户确认后测试。
+W4／W5 合流沿用同一 `ToolExecutionSummary`；PostgreSQL 运行时冻结工具投影，并与原生版本／可靠 `tool.updated` 保持提交关联。合并后的工程、专用数据库与部分真实页面场景已有分项验证，历史范围和限制见 [合流记录](../../../../../docs/archive/AGENT_MILESTONES.md#agent-w4-w5-integration)；这些证据不表示公开继续／重试／补充、正式平台授权或 Electron 已交付。
