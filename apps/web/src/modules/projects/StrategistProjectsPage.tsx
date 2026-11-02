@@ -108,10 +108,18 @@ export function StrategistProjectsPage({ user }: { user: AuthUser }) {
                     to="/strategist/projects/$projectId"
                     params={{ projectId: String(project.id) }}
                     search={
-                      project.currentNodeCode === 'ENTRANCE_EXAM' ? { tab: 'ENTRANCE_EXAM' } : {}
+                      project.currentNodeCode === 'ENTRANCE_EXAM'
+                        ? { tab: 'ENTRANCE_EXAM' }
+                        : project.currentNodeCode === 'STANDARD_TRAINING'
+                          ? { tab: 'STANDARD_TRAINING' }
+                          : {}
                     }
                   >
-                    {project.currentNodeCode === 'ENTRANCE_EXAM' ? '准入考试' : '生产计划'}
+                    {project.currentNodeCode === 'ENTRANCE_EXAM'
+                      ? '准入考试'
+                      : project.currentNodeCode === 'STANDARD_TRAINING'
+                        ? '标准与培训'
+                        : '生产计划'}
                     <ArrowRight className="size-4" aria-hidden />
                   </Link>
                 </Button>

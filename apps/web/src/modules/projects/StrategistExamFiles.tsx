@@ -15,7 +15,7 @@ import { api } from '@/services/api';
 import { examDraftKey, type ExamDraftFile } from './entrance-exam-form';
 import { saveExamBlob } from './EntranceExamFiles';
 
-/** 每个附件区维护自己的上传失败；凭证只留在当前考试表单，不自动重放。 */
+/** 每个附件区维护自己的上传失败；凭证只留在当前表单，不自动重放。 */
 export function StrategistExamFiles({
   label,
   files,
@@ -23,6 +23,7 @@ export function StrategistExamFiles({
   disabled,
   user,
   onChange,
+  purpose = 'exam',
 }: {
   label: string;
   files: ExamDraftFile[];
@@ -30,6 +31,7 @@ export function StrategistExamFiles({
   disabled: boolean;
   user: AuthUser;
   onChange: (update: (current: ExamDraftFile[]) => ExamDraftFile[]) => void;
+  purpose?: 'project' | 'exam';
 }) {
   const cache = useQueryClient();
   const mounted = useRef(false);
@@ -56,7 +58,10 @@ export function StrategistExamFiles({
       ),
     );
     try {
-      const result = await api.uploadEntranceExamAttachment(item.file);
+      const result =
+        purpose === 'project'
+          ? await api.uploadProjectAttachment(item.file)
+          : await api.uploadEntranceExamAttachment(item.file);
       if (current())
         onChange((previous) =>
           previous.map((file) =>
@@ -122,7 +127,10 @@ export function StrategistExamFiles({
     setDownloading(item.key);
     setError(null);
     try {
-      const blob = await api.readEntranceExamAttachment(item.reference.objectKey);
+      const blob =
+        purpose === 'project'
+          ? await api.readProjectAttachment(item.reference.objectKey)
+          : await api.readEntranceExamAttachment(item.reference.objectKey);
       if (!current()) return;
       saveExamBlob(blob, item.name);
     } catch (failure) {

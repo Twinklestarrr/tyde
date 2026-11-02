@@ -17,6 +17,7 @@ export default defineConfig({
     'production-plan.spec.ts',
     'expert-actions.spec.ts',
     'entrance-exams.spec.ts',
+    'standard-training.spec.ts',
   ],
   workers: 1,
   timeout: 30_000,

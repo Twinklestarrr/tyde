@@ -18,6 +18,7 @@ export * from './auth.js';
 export * from './organizations.js';
 export * from './workbench.js';
 export * from './projects.js';
+export * from './project-materials.js';
 export * from './expert-tasks.js';
 export * from './entrance-exams.js';
 import type {
@@ -27,6 +28,7 @@ import type {
 } from './organizations.js';
 import type { WorkbenchApi } from './workbench.js';
 import type { ProjectApi } from './projects.js';
+import type { ProjectStandardMaterialsApi } from './project-materials.js';
 import type { ExpertTasksApi } from './expert-tasks.js';
 import type { EntranceExamApi } from './entrance-exams.js';
 
@@ -100,7 +102,13 @@ export interface ImageUploadResult {
 export type AvatarUploadResult = ImageUploadResult;
 export type OrganizationLogoUploadResult = ImageUploadResult;
 export interface AuthApi
-  extends OrganizationApi, WorkbenchApi, ProjectApi, ExpertTasksApi, EntranceExamApi {
+  extends
+    OrganizationApi,
+    WorkbenchApi,
+    ProjectApi,
+    ProjectStandardMaterialsApi,
+    ExpertTasksApi,
+    EntranceExamApi {
   health(): Promise<{ status: string }>;
   sendCode(input: SmsSendInput): Promise<string>;
   login(input: LoginInput): Promise<void>;

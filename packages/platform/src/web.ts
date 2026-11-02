@@ -36,6 +36,8 @@ import {
   type StrategistProjectCard,
   type ProjectProductionPlan,
   type ProjectProductionPlanInput,
+  type ProjectStandardMaterials,
+  type ProjectStandardMaterialsInput,
   type ProjectCategory,
   type ProjectRequester,
   type ProjectDraft,
@@ -654,18 +656,20 @@ export function createHttpAuth(
       !Array.isArray(value.categoryLevel3Names) ||
       !value.categoryLevel3Names.every((name) => typeof name === 'string') ||
       !Array.isArray(value.attachments) ||
-      !value.attachments.every(
-        (item) =>
-          record(item) &&
-          integer(item.id, 1) &&
-          strings(item, ['fileName', 'objectKey', 'extension', 'contentType', 'fileHash']) &&
-          integers(item, ['fileSize', 'sortNo']) &&
-          inEnum(item.attachmentType, ['STANDARD_REFERENCE', 'CASE', 'OTHER']) &&
-          item.status === 'ACTIVE',
-      )
+      !value.attachments.every(projectAttachment)
     )
       invalidResponse();
     return value as unknown as WorkbenchProjectDetail | ProjectDraft;
+  }
+  function projectAttachment(value: unknown): boolean {
+    return (
+      record(value) &&
+      integer(value.id, 1) &&
+      strings(value, ['fileName', 'objectKey', 'extension', 'contentType', 'fileHash']) &&
+      integers(value, ['fileSize', 'sortNo']) &&
+      inEnum(value.attachmentType, ['STANDARD_REFERENCE', 'CASE', 'OTHER']) &&
+      value.status === 'ACTIVE'
+    );
   }
   function navigatorProject(value: unknown): NavigatorProjectCard {
     if (
@@ -949,6 +953,54 @@ export function createHttpAuth(
     )
       invalidResponse();
     return value as unknown as ProjectProductionPlan;
+  }
+  function projectStandardMaterials(value: unknown, projectId: number): ProjectStandardMaterials {
+    if (
+      !record(value) ||
+      value.projectId !== projectId ||
+      !strings(value, ['standardContent', 'standardLink', 'currentNodeCode'], true) ||
+      (typeof value.standardLink === 'string' && value.standardLink.length > 2000) ||
+      !Array.isArray(value.attachments) ||
+      !value.attachments.every(projectAttachment) ||
+      typeof value.stateTransitioned !== 'boolean' ||
+      typeof value.canConfirmRead !== 'boolean' ||
+      !(value.confirmedReadAt === null || attendanceTime(value.confirmedReadAt)) ||
+      typeof value.readConfirmationTransitioned !== 'boolean' ||
+      !attendanceVersion(value.versionNo)
+    )
+      invalidResponse();
+    return value as unknown as ProjectStandardMaterials;
+  }
+  function validateProjectMaterialsInput(value: ProjectStandardMaterialsInput) {
+    if (
+      !record(value) ||
+      !onlyKeys(value, ['projectId', 'standardContent', 'standardLink', 'attachments']) ||
+      !projectPlanId(value.projectId) ||
+      (value.standardContent != null && typeof value.standardContent !== 'string') ||
+      (value.standardLink != null &&
+        (typeof value.standardLink !== 'string' || value.standardLink.length > 2000)) ||
+      (!value.standardContent?.trim() && !value.standardLink?.trim()) ||
+      (value.attachments != null &&
+        (!Array.isArray(value.attachments) ||
+          value.attachments.length > 20 ||
+          !value.attachments.every(
+            (item) =>
+              record(item) &&
+              onlyKeys(item, ['id', 'attachmentType', 'objectKey', 'uploadToken', 'sortNo']) &&
+              (item.id == null || projectPlanId(item.id)) &&
+              (item.attachmentType == null ||
+                inEnum(item.attachmentType, ['STANDARD_REFERENCE', 'CASE', 'OTHER'])) &&
+              (item.objectKey == null ||
+                (typeof item.objectKey === 'string' && item.objectKey.length <= 500)) &&
+              (item.uploadToken == null ||
+                (typeof item.uploadToken === 'string' && item.uploadToken.length <= 128)) &&
+              (item.sortNo == null || attendanceVersion(item.sortNo)),
+          )))
+    )
+      throw new ApiError(400, {
+        code: 'VALIDATION_ERROR',
+        message: '请填写标准正文或链接，链接最多2000字符，附件最多20个',
+      });
   }
   function projectCategory(value: unknown): ProjectCategory {
     if (
@@ -2705,6 +2757,26 @@ export function createHttpAuth(
       return productionPlan(
         await request(`/projects/production-plan?projectId=${projectId}`, undefined, 'GET', true),
         projectId,
+      );
+    },
+    getProjectStandardMaterials: async (projectId) => {
+      if (!projectPlanId(projectId))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+      return projectStandardMaterials(
+        await request(
+          `/projects/standard-materials/detail?projectId=${projectId}`,
+          undefined,
+          'GET',
+          true,
+        ),
+        projectId,
+      );
+    },
+    updateProjectStandardMaterials: async (input) => {
+      validateProjectMaterialsInput(input);
+      return projectStandardMaterials(
+        await request('/projects/standard-materials/update', input, 'POST', true),
+        input.projectId,
       );
     },
     confirmProjectProductionPlan: async (projectId, input) => {

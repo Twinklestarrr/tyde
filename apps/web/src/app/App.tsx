@@ -279,8 +279,12 @@ const strategistProjectRoute = createRoute({
   path: '/strategist/projects/$projectId',
   validateSearch: (
     search: Record<string, unknown>,
-  ): { tab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM' } =>
-    search.tab === 'ENTRANCE_EXAM' || search.tab === 'PRODUCTION_PLAN' ? { tab: search.tab } : {},
+  ): { tab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM' | 'STANDARD_TRAINING' } =>
+    search.tab === 'ENTRANCE_EXAM' ||
+    search.tab === 'PRODUCTION_PLAN' ||
+    search.tab === 'STANDARD_TRAINING'
+      ? { tab: search.tab }
+      : {},
   component: StrategistProjectRoute,
   errorComponent: () => <PageRecovery />,
 });

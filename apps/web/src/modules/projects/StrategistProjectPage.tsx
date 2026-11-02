@@ -12,6 +12,7 @@ import { ProjectDetailsDialog } from './ProjectDetailsDialog';
 import { ProductionPlanPanel, PRODUCTION_PLAN_LEAVE_REQUEST } from './ProductionPlanPanel';
 import { StrategistExamPanel } from './StrategistExamPanel';
 import { ENTRANCE_EXAM_LEAVE_REQUEST } from './EntranceExamDialog';
+import { StandardTrainingPanel, STANDARD_TRAINING_LEAVE_REQUEST } from './StandardTrainingPanel';
 
 const tabs = [
   'PRODUCTION_PLAN',
@@ -29,7 +30,7 @@ export function StrategistProjectPage({
 }: {
   user: AuthUser;
   projectId: number;
-  initialTab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM';
+  initialTab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM' | 'STANDARD_TRAINING';
 }) {
   const client = useQueryClient();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -102,6 +103,14 @@ export function StrategistProjectPage({
                   )
                 )
                   return;
+                if (
+                  tab === 'STANDARD_TRAINING' &&
+                  next !== tab &&
+                  !window.dispatchEvent(
+                    new Event(STANDARD_TRAINING_LEAVE_REQUEST, { cancelable: true }),
+                  )
+                )
+                  return;
                 setTab(next);
               }}
             >
@@ -157,7 +166,19 @@ export function StrategistProjectPage({
                   }}
                 />
               </TabsContent>
-              {tabs.slice(2).map((code) => (
+              <TabsContent value="STANDARD_TRAINING">
+                <StandardTrainingPanel
+                  user={user}
+                  projectId={projectId}
+                  onChanged={async () => {
+                    void client.invalidateQueries({
+                      queryKey: ['strategist-projects', user.id, 'PM'],
+                    });
+                    await detail.refetch({ throwOnError: true });
+                  }}
+                />
+              </TabsContent>
+              {tabs.slice(3).map((code) => (
                 <TabsContent
                   key={code}
                   value={code}
