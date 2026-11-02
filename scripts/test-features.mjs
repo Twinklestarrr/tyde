@@ -7,10 +7,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const systemMode = process.argv.length === 3 && process.argv[2] === '--system';
+const suite = systemMode ? 'system-tests' : 'feature-tests';
 const startedAt = new Date().toISOString();
 const directory = resolve(
   root,
-  'artifacts/feature-tests',
+  'artifacts',
+  suite,
   `${startedAt.replaceAll(':', '-')}-${process.pid}`,
 );
 const ports = [5176, 5177];
@@ -121,7 +124,14 @@ for (const signal of ['SIGINT', 'SIGTERM'])
   });
 
 await mkdir(directory, { recursive: true });
+const systemSteps = [
+  ['typecheck', '全仓类型检查（仅生成客户端，不迁移数据库）', ['typecheck']],
+  ['lint', '全仓 ESLint', ['lint']],
+  ['format', '全仓格式检查', ['format:check']],
+  ['release-build', 'Vercel 发布构建（仅本地构建，不部署）', ['build:vercel']],
+];
 const steps = [
+  ...(systemMode ? systemSteps : []),
   ['core', '核心与客户端接口契约', ['test:core']],
   [
     'server-unit',
@@ -167,12 +177,13 @@ const notExecuted = [
   '真实业务后端 HTTP/OSS 联调',
   '真实模型与业务 Agent 联调',
   '部署与发布',
+  ...(systemMode ? ['Shadow Python 专项测试', '安装包与真实设备验收'] : []),
 ];
 let failure;
 let timer;
 try {
-  if (process.argv.length > 2)
-    throw new Error('用法：pnpm test:features（无需参数，不连接或迁移数据库）。');
+  if (process.argv.length > 2 && !systemMode)
+    throw new Error('用法：pnpm test:features 或 pnpm test:system（不连接或迁移数据库）。');
   await freePorts();
   processes();
   // 单独进程树之外的 PostgreSQL、开发页面和用户 Electron 均不属于清理范围。
@@ -260,7 +271,8 @@ try {
         }
       }
     }
-    if (row.status !== 'passed') break;
+    // 系统质量检查相互独立，失败仍收集其他结果；功能阶段保持依赖顺序与失败即停。
+    if (row.status !== 'passed' && !(systemMode && systemSteps.some(([key]) => key === id))) break;
   }
 } catch (error) {
   failure = error.message;
@@ -289,6 +301,7 @@ try {
         ? 'interrupted'
         : 'failed';
   const report = {
+    suite,
     startedAt,
     finishedAt: new Date().toISOString(),
     result,
@@ -303,10 +316,10 @@ try {
   await writeFile(resolve(directory, 'summary.json'), JSON.stringify(report, null, 2) + '\n');
   await writeFile(
     resolve(directory, 'report.md'),
-    `# 已接入功能自动化回归\n\n结果：${result}\n\n运行隔离接口、业务与 Agent 单元测试、构建及 Web/Electron 页面，不操作数据库、不调用真实模型或业务 Agent。Agent Web 验证控制器与组件，不代表真实浏览器联调。\n\n| 检查 | 结果 | 耗时 |\n| --- | --- | --- |\n${checks.map((row) => `| ${row.label} | ${row.status} | ${(row.durationMs / 1000).toFixed(1)}s |`).join('\n')}\n\n${frontend ? `页面：${frontend.expected} 通过，${frontend.unexpected} 失败，${frontend.skipped} 跳过，${frontend.flaky} 重试后通过。\n\n` : ''}${failure ? `错误：${failure}\n\n` : ''}未运行阶段：${report.notRun.join('、') || '无'}。\n\n本命令不执行：${notExecuted.join('、')}。这些能力不计入本次通过结果。详细日志和页面截图、trace 位于本目录。\n`,
+    `# ${systemMode ? '系统自动化检查' : '已接入功能自动化回归'}\n\n结果：${result}\n\n${systemMode ? '全仓类型、静态、格式与发布构建逐项检查，失败后继续收集其他独立结果；功能阶段按依赖顺序执行，失败即停。\n\n' : ''}运行隔离接口、业务与 Agent 单元测试、构建及 Web/Electron 页面，不操作数据库、不调用真实模型或业务 Agent。Agent Web 验证控制器与组件，不代表真实浏览器联调。\n\n| 检查 | 结果 | 耗时 |\n| --- | --- | --- |\n${checks.map((row) => `| ${row.label} | ${row.status} | ${(row.durationMs / 1000).toFixed(1)}s |`).join('\n')}\n\n${frontend ? `页面：${frontend.expected} 通过，${frontend.unexpected} 失败，${frontend.skipped} 跳过，${frontend.flaky} 重试后通过。\n\n` : ''}${failure ? `错误：${failure}\n\n` : ''}未运行阶段：${report.notRun.join('、') || '无'}。\n\n本命令不执行：${notExecuted.join('、')}。这些能力不计入本次通过结果。详细日志和页面截图、trace 位于本目录。\n`,
   );
   await writeFile(
-    resolve(root, 'artifacts/feature-tests/latest.json'),
+    resolve(root, 'artifacts', suite, 'latest.json'),
     JSON.stringify(
       {
         result,
