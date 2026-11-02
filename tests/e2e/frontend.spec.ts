@@ -360,9 +360,24 @@ for (const [mode, origin] of [
     page,
   }) => {
     const { requests } = await webBackend(page);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     await openAuth(page, origin);
+    const background = await page.locator('.auth-atmosphere').elementHandle();
+    const card = await page.getByRole('main').elementHandle();
+    const motion = await page
+      .locator('.auth-aurora')
+      .evaluateHandle((element) => element.getAnimations()[0]!);
+    const startedAt = await motion.evaluate((animation) => Number(animation.currentTime));
     await smsLogin(page);
     await expect(page.getByRole('heading', { name: '完善个人资料', exact: true })).toBeVisible();
+    expect(await background!.evaluate((element) => element.isConnected)).toBe(true);
+    expect(await card!.evaluate((element) => element.isConnected)).toBe(true);
+    await expect(page.locator('.auth-atmosphere')).toHaveCount(1);
+    expect(
+      await page
+        .getByRole('main')
+        .evaluate((element) => getComputedStyle(element, '::before').animationName),
+    ).toBe('auth-border-orbit');
     await expect(page.getByRole('radio')).toHaveCount(0);
     await expect(page.getByRole('checkbox')).toHaveCount(0);
     await expect(page.getByLabel(/^手机|^组织名称/)).toHaveCount(0);
@@ -379,6 +394,12 @@ for (const [mode, origin] of [
     await expect(page.getByRole('status', { name: '操作提示' })).toHaveText(
       '注册成功，请使用密码登录。',
     );
+    expect(await background!.evaluate((element) => element.isConnected)).toBe(true);
+    expect(await card!.evaluate((element) => element.isConnected)).toBe(true);
+    expect(await motion.evaluate((animation) => animation.playState)).toBe('running');
+    await expect
+      .poll(() => motion.evaluate((animation) => Number(animation.currentTime)))
+      .toBeGreaterThan(startedAt);
     await expect(page.getByLabel(/^手机号/)).toHaveValue(phone);
     expect(requests.find(({ path }) => path.endsWith('/auth/register'))?.body).toEqual({
       accountType: 'INDIVIDUAL',
@@ -634,6 +655,12 @@ test('个人资料在1280与375视口保留字段、键盘操作和完整单页�
     await page.keyboard.press('Enter');
     await smsLogin(page);
     await expect(page).toHaveURL(/#\/register$/);
+    expect(
+      await page.locator('.auth-atmosphere').evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { width: bounds.width, height: bounds.height };
+      }),
+    ).toEqual({ width, height: width === 1280 ? 720 : 812 });
     await page.getByRole('button', { name: '提交', exact: true }).click();
     await expect(page.getByText('请输入密码', { exact: true })).toBeVisible();
     await expect(page.getByText('请输入姓名', { exact: true })).toBeVisible();

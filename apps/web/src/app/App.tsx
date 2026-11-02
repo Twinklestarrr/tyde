@@ -42,10 +42,11 @@ function RootLayout() {
   return <Outlet />;
 }
 
-function AuthPageLayout({
-  children,
-  registration = false,
-}: PropsWithChildren<{ registration?: boolean }>) {
+/** 认证区共享背景与卡片，只在 Outlet 中切换登录和完善资料表单。 */
+function AuthPageLayout() {
+  const registration = useRouterState({
+    select: (state) => state.matches.some((match) => match.routeId === registrationRoute.id),
+  });
   return (
     <AuthLayout registration={registration}>
       <div className="flex min-w-0 flex-col">
@@ -69,7 +70,7 @@ function AuthPageLayout({
             </Link>
           )}
         </header>
-        {children}
+        <Outlet />
       </div>
     </AuthLayout>
   );
@@ -314,23 +315,20 @@ const organizationCreateRoute = createRoute({
   component: CurrentOrganizationCreatePage,
   errorComponent: () => <PageRecovery />,
 });
-const loginRoute = createRoute({
+const authenticationRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'authentication',
+  component: AuthPageLayout,
+});
+const loginRoute = createRoute({
+  getParentRoute: () => authenticationRoute,
   path: '/auth',
-  component: () => (
-    <AuthPageLayout>
-      <LoginPage />
-    </AuthPageLayout>
-  ),
+  component: LoginPage,
 });
 const registrationRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => authenticationRoute,
   path: '/register',
-  component: () => (
-    <AuthPageLayout registration>
-      <RegisterPage />
-    </AuthPageLayout>
-  ),
+  component: RegisterPage,
 });
 const router = createRouter({
   routeTree: rootRoute.addChildren([
@@ -345,8 +343,7 @@ const router = createRouter({
       organizationRoute,
       organizationCreateRoute,
     ]),
-    loginRoute,
-    registrationRoute,
+    authenticationRoute.addChildren([loginRoute, registrationRoute]),
   ]),
   history: createHashHistory(),
 });
