@@ -661,6 +661,44 @@ for (const [mode, desktop] of [
   });
 }
 
+for (const [mode, desktop] of [
+  ['Web', false],
+  ['Electron 运行配置', true],
+] as const) {
+  test(`${mode} 三级类型点击文字和整行可选中或取消，搜索与键盘交互保留`, async ({ page }) => {
+    const { state, calls } = await backend(page, desktop);
+    state.draft = draftFixture();
+    await page.goto(`${origin}/#/projects/create`);
+    const trigger = page.getByRole('combobox', { name: /^三级项目类型/ });
+    await trigger.click();
+    const dialog = page.getByRole('dialog', { name: '选择三级项目类型', exact: true });
+    const search = dialog.getByRole('textbox', { name: '搜索三级项目类型', exact: true });
+    const checkbox = dialog.getByRole('checkbox', { name: '内容分类', exact: true });
+    await expect(search).toBeFocused();
+    await expect(checkbox).toBeChecked();
+    await dialog.getByText('内容分类', { exact: true }).click();
+    await expect(checkbox).not.toBeChecked();
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('button', { name: '移除 内容分类', exact: true })).toHaveCount(0);
+    await search.fill('内容');
+    await dialog.getByText('内容分类', { exact: true }).click();
+    await expect(checkbox).toBeChecked();
+    await expect(page.getByRole('button', { name: '移除 内容分类', exact: true })).toBeVisible();
+    await search.focus();
+    await checkbox.locator('..').click({ position: { x: 4, y: 22 } });
+    await expect(checkbox).not.toBeChecked();
+    await search.focus();
+    await search.press('ArrowDown');
+    await expect(checkbox).toBeFocused();
+    await checkbox.press('Space');
+    await expect(checkbox).toBeChecked();
+    await page.keyboard.press('Escape');
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(calls('projects/create')).toHaveLength(0);
+  });
+}
+
 test('三级项目类型下拉支持搜索连续多选、移除清空、20项上限及手机草稿恢复', async ({ page }) => {
   const { state, calls } = await backend(page);
   const extraCategories: ProjectCategory[] = Array.from({ length: 20 }, (_, index) => ({

@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expectPickerOnBodyClick } from './native-picker';
 import { mkdir } from 'node:fs/promises';
 import type {
   AuthUser,
@@ -776,6 +777,7 @@ for (const [mode, desktop] of [
     if (!desktop) await screenshot(page, 'management');
     const editor = await createEditor(page, panel);
     await fillEditor(editor);
+    await expectPickerOnBodyClick(editor.getByLabel(/^截止时间（上海时间）\s*\*$/));
     await editor.getByRole('button', { name: '添加试卷', exact: true }).click();
     await editor
       .getByRole('textbox', { name: '试卷2题目1题干', exact: true })

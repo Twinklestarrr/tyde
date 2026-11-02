@@ -159,7 +159,8 @@ export function ProjectCategoryMultiSelect({
               {visible.map((option) => (
                 <label
                   key={option.id}
-                  className="flex min-h-[44px] cursor-pointer items-center gap-[10px] rounded-md px-[8px] text-[13px] hover:bg-accent has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
+                  tabIndex={-1}
+                  className="flex min-h-[44px] cursor-pointer items-center gap-[10px] rounded-md px-[8px] text-[13px] hover:bg-accent has-[:checked]:bg-accent has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50"
                 >
                   <input
                     type="checkbox"

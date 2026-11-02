@@ -4,6 +4,7 @@ import type {
   WorkbenchAttendanceDay,
   WorkbenchAttendanceMonth,
 } from '../../packages/shared/src/index';
+import { expectPickerOnBodyClick } from './native-picker';
 
 const origin = 'http://127.0.0.1:5176';
 const orgId = '00000000-0000-4000-8000-000000000002';
@@ -252,6 +253,7 @@ for (const desktop of [false, true])
   }) => {
     const { state, requests } = await backend(page, null, desktop);
     await openAttendance(page);
+    await expectPickerOnBodyClick(page.getByLabel('考勤月份', { exact: true }));
     const attendance = page.getByRole('region', { name: '我的排班考勤', exact: true });
     await expect(attendance.getByText('个人排班', { exact: true })).toBeVisible();
     await expect(
@@ -263,7 +265,13 @@ for (const desktop of [false, true])
     await attendance.getByRole('button', { name: '为自己排班', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '为自己排班', exact: true });
     await dialog.getByLabel('排班结束日期').fill('2026-10-02');
+    await expectPickerOnBodyClick(dialog.getByLabel('排班开始日期', { exact: true }));
+    await expectPickerOnBodyClick(dialog.getByLabel('排班结束日期', { exact: true }));
+    await expectPickerOnBodyClick(dialog.getByLabel('默认上班时间', { exact: true }));
+    await expectPickerOnBodyClick(dialog.getByLabel('默认下班时间', { exact: true }));
     await dialog.getByRole('button', { name: '生成排班日期' }).click();
+    await expectPickerOnBodyClick(dialog.getByLabel('2026-10-01 上班时间', { exact: true }));
+    await expectPickerOnBodyClick(dialog.getByLabel('2026-10-01 下班时间', { exact: true }));
     await dialog.getByLabel('2026-10-02 日类型').selectOption('REST');
     await dialog.getByRole('button', { name: '保存排班' }).click();
     await expect(dialog.getByText('考勤写入暂不可用', { exact: true })).toBeVisible();
@@ -313,6 +321,8 @@ test('组织成员按日权限请假，使用null日版本并按真实流程版�
   const dialog = page.getByRole('dialog', { name: '排班考勤详情', exact: true });
   await expect(dialog.getByRole('button', { name: '直接修正考勤', exact: true })).toHaveCount(0);
   await dialog.getByRole('button', { name: '申请请假', exact: true }).click();
+  await expectPickerOnBodyClick(dialog.getByLabel('请假开始时间'));
+  await expectPickerOnBodyClick(dialog.getByLabel('请假结束时间'));
   await dialog.getByLabel('请假开始时间').fill('10:00');
   await dialog.getByLabel('请假结束时间').fill('12:00');
   await dialog.getByLabel('请假事由').fill('个人事务');
