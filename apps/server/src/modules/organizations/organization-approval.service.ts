@@ -289,7 +289,13 @@ export class OrganizationApprovalService {
         const where: Prisma.ApprovalNodeWhereInput = {
           flow: {
             applicantOrgId: query.orgId,
-            AND: [{ businessType: { in: ['ORG_MEMBER_EXIT', 'ATTENDANCE_LEAVE', 'ATTENDANCE_CORRECTION'] } }],
+            AND: [
+              {
+                businessType: {
+                  in: ['ORG_MEMBER_EXIT', 'ATTENDANCE_LEAVE', 'ATTENDANCE_CORRECTION'],
+                },
+              },
+            ],
             ...(query.businessType?.trim() ? { businessType: query.businessType.trim() } : {}),
             ...(pending ? { status: 'PENDING' } : {}),
           },
