@@ -21,6 +21,10 @@ import { ErrorNotice } from '@/components/ErrorNotice';
 import { PageRecovery } from '@/components/PageRecovery';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Card, CardTitle } from '@/components/ui/card';
+import { Dialog } from '@/components/ui/dialog';
+import { LoadingState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/ui/page';
 import { FormField } from '@/components/ui/shared/FormField';
 import { FileUploadField } from '@/components/ui/shared/FileUploadField';
 import { api } from '@/services/api';
@@ -113,9 +117,9 @@ export function ProjectCreatePage({ user }: { user: AuthUser }) {
     requester.isFetching
   )
     return (
-      <p className="rounded-[12px] border bg-card p-[24px] text-[14px]" role="status">
-        正在读取项目草稿…
-      </p>
+      <Card>
+        <LoadingState>正在读取项目草稿…</LoadingState>
+      </Card>
     );
   return (
     <ProjectCreateForm
@@ -445,250 +449,258 @@ function ProjectCreateForm({
 
   return (
     <div className="mx-auto max-w-[920px] space-y-[20px]">
-      <header className="flex flex-wrap items-start justify-between gap-[16px]">
-        <div>
-          <p className="mb-[6px] text-[12px] font-medium text-[var(--color-primary-strong)]">
-            领航员 · 项目创建
-          </p>
-          <h1 className="text-[26px] font-semibold tracking-tight">创建项目</h1>
-          <p className="mt-[8px] text-[13px] leading-[21px] text-muted-foreground">
-            分三步完善项目，随时保存草稿。发布后进入招募策略官环节。
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="account"
-          disabled={busy || uploading}
-          onClick={() => void navigate({ to: '/projects' })}
-        >
-          <ArrowLeft className="size-4" aria-hidden />
-          返回项目列表
-        </Button>
-      </header>
-      {published ? (
-        <section className="space-y-[16px] rounded-[12px] border bg-card p-[24px]">
-          <Check className="size-8 text-[var(--color-success)]" aria-hidden />
-          <h2 className="text-[20px] font-semibold">项目已发布</h2>
-          <p className="text-[14px]">{notice || '项目已进入招募策略官环节。'}</p>
+      <PageHeader
+        title="创建项目"
+        description="分三步完善项目，随时保存草稿。发布后进入招募策略官环节。"
+        actions={
           <Button
+            variant="outline"
             size="account"
-            onClick={() =>
-              void navigate({ to: '/projects', search: { created: published.id }, replace: true })
-            }
+            disabled={busy || uploading}
+            onClick={() => void navigate({ to: '/projects' })}
           >
-            查看项目
+            <ArrowLeft className="size-4" aria-hidden />
+            返回项目列表
           </Button>
-        </section>
-      ) : (
-        <section className="rounded-[12px] border bg-card p-[20px] sm:p-[28px]">
-          <ol
-            aria-label="创建项目步骤"
-            className="mb-[28px] grid grid-cols-3 gap-[8px] border-b pb-[22px]"
-          >
-            {projectCreateSteps.map((label, index) => (
-              <li
-                key={label}
-                aria-current={step === index ? 'step' : undefined}
-                className={`flex min-w-0 items-center gap-[8px] text-[13px] ${step === index ? 'font-semibold text-[var(--color-primary-strong)]' : 'text-muted-foreground'}`}
-              >
-                <span
-                  className={`grid size-[28px] shrink-0 place-items-center rounded-full ${step === index ? 'bg-[var(--color-primary-soft)]' : 'bg-muted'}`}
-                >
-                  {index + 1}
-                </span>
-                <span>{label}</span>
-              </li>
-            ))}
-          </ol>
-          {draft && (
-            <p className="mb-[20px] text-[12px] text-muted-foreground">
-              已恢复草稿 · 最近保存 {draft.updatedAt}
-            </p>
-          )}
-          {notice && (
-            <p role="status" className="mb-[16px] text-[13px] text-[var(--color-primary-strong)]">
-              {notice}
-            </p>
-          )}
-          <form
-            noValidate
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (step < 2) {
-                if (validate(true, step)) setStep(step + 1);
-              } else if (validate(true)) {
-                if (attachments.some((item) => item.status !== 'ready'))
-                  setFileError(new Error('请等待附件上传完成，或移除、重试失败的附件。'));
-                else setConfirming(true);
+        }
+      >
+        <p className="text-[12px] font-medium text-[var(--color-primary-strong)]">
+          领航员 · 项目创建
+        </p>
+      </PageHeader>
+      {published ? (
+        <Card asChild>
+          <section className="space-y-4 p-5 sm:p-6">
+            <Check className="size-8 text-[var(--color-success)]" aria-hidden />
+            <CardTitle>项目已发布</CardTitle>
+            <p className="text-[13px] leading-5">{notice || '项目已进入招募策略官环节。'}</p>
+            <Button
+              size="account"
+              onClick={() =>
+                void navigate({ to: '/projects', search: { created: published.id }, replace: true })
               }
-            }}
-          >
-            <fieldset disabled={locked} className="space-y-[22px]">
-              <legend className="mb-[22px] text-[18px] font-semibold">
-                {projectCreateSteps[step]}
-              </legend>
-              <ProjectCreateFields
-                form={form}
-                step={step}
-                categories={categories}
-                categoriesLoading={categoriesLoading}
-                categoriesError={categoriesError}
-                onReloadCategories={onReloadCategories}
-                requesterName={requesterName}
-                creatorName={user.nickname ? `${user.nickname}（${user.realName}）` : user.realName}
-              />
-              {step === 2 && (
-                <FormField
-                  controlId="project-create-files"
-                  label="项目附件（选填）"
-                  description="支持常见文档、图片、压缩包和视频，每个文件不超过 50 MiB。附件仅对有权限的用户开放。"
+            >
+              查看项目
+            </Button>
+          </section>
+        </Card>
+      ) : (
+        <Card asChild>
+          <section className="p-5 sm:p-6">
+            <ol
+              aria-label="创建项目步骤"
+              className="mb-[28px] grid grid-cols-3 gap-[8px] border-b pb-[22px]"
+            >
+              {projectCreateSteps.map((label, index) => (
+                <li
+                  key={label}
+                  aria-current={step === index ? 'step' : undefined}
+                  className={`flex min-w-0 items-center gap-[8px] text-[13px] ${step === index ? 'font-semibold text-[var(--color-primary-strong)]' : 'text-muted-foreground'}`}
                 >
-                  <FileUploadField
-                    id="project-create-files"
-                    aria-label="选择项目附件"
-                    accept={PROJECT_ATTACHMENT_ACCEPT}
-                    multiple
-                    disabled={locked}
-                    onFilesSelected={chooseFiles}
-                    contentClassName="rounded-[12px] border border-dashed bg-muted p-[20px]"
+                  <span
+                    className={`grid size-[28px] shrink-0 place-items-center rounded-full ${step === index ? 'bg-[var(--color-primary-soft)]' : 'bg-muted'}`}
                   >
-                    <span className="flex items-center gap-[10px] text-[13px]">
-                      <Upload className="size-5 text-muted-foreground" aria-hidden />
-                      点击选择或拖入附件
-                    </span>
-                  </FileUploadField>
-                  {attachments.length > 0 && (
-                    <ul className="mt-[12px] divide-y rounded-[10px] border">
-                      {attachments.map((item) => (
-                        <li
-                          key={item.key}
-                          className="flex flex-wrap items-center gap-[8px] p-[12px]"
-                        >
-                          <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                          <div className="min-w-0 flex-1">
-                            <p className="break-all text-[13px]">{item.fileName}</p>
-                            <p className="mt-[4px] text-[12px] text-muted-foreground">
-                              {(item.size / 1024 / 1024).toFixed(2)} MiB ·{' '}
-                              {item.status === 'uploading'
-                                ? '上传中…'
-                                : item.status === 'failed'
-                                  ? '上传失败'
-                                  : item.id
-                                    ? '已保存'
-                                    : '上传完成，待保存'}
-                            </p>
-                            {item.message && (
-                              <p role="alert" className="mt-1 text-[12px] text-destructive">
-                                {item.message}
+                    {index + 1}
+                  </span>
+                  <span>{label}</span>
+                </li>
+              ))}
+            </ol>
+            {draft && (
+              <p className="mb-[20px] text-[12px] text-muted-foreground">
+                已恢复草稿 · 最近保存 {draft.updatedAt}
+              </p>
+            )}
+            {notice && (
+              <p role="status" className="mb-[16px] text-[13px] text-[var(--color-primary-strong)]">
+                {notice}
+              </p>
+            )}
+            <form
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (step < 2) {
+                  if (validate(true, step)) setStep(step + 1);
+                } else if (validate(true)) {
+                  if (attachments.some((item) => item.status !== 'ready'))
+                    setFileError(new Error('请等待附件上传完成，或移除、重试失败的附件。'));
+                  else setConfirming(true);
+                }
+              }}
+            >
+              <fieldset disabled={locked} className="space-y-[22px]">
+                <legend className="mb-5 text-[16px] leading-6 font-semibold">
+                  {projectCreateSteps[step]}
+                </legend>
+                <ProjectCreateFields
+                  form={form}
+                  step={step}
+                  categories={categories}
+                  categoriesLoading={categoriesLoading}
+                  categoriesError={categoriesError}
+                  onReloadCategories={onReloadCategories}
+                  requesterName={requesterName}
+                  creatorName={
+                    user.nickname ? `${user.nickname}（${user.realName}）` : user.realName
+                  }
+                />
+                {step === 2 && (
+                  <FormField
+                    controlId="project-create-files"
+                    label="项目附件（选填）"
+                    description="支持常见文档、图片、压缩包和视频，每个文件不超过 50 MiB。附件仅对有权限的用户开放。"
+                  >
+                    <FileUploadField
+                      id="project-create-files"
+                      aria-label="选择项目附件"
+                      accept={PROJECT_ATTACHMENT_ACCEPT}
+                      multiple
+                      disabled={locked}
+                      onFilesSelected={chooseFiles}
+                      contentClassName="rounded-[12px] border border-dashed bg-muted p-[20px]"
+                    >
+                      <span className="flex items-center gap-[10px] text-[13px]">
+                        <Upload className="size-5 text-muted-foreground" aria-hidden />
+                        点击选择或拖入附件
+                      </span>
+                    </FileUploadField>
+                    {attachments.length > 0 && (
+                      <ul className="mt-[12px] divide-y rounded-[10px] border">
+                        {attachments.map((item) => (
+                          <li
+                            key={item.key}
+                            className="flex flex-wrap items-center gap-[8px] p-[12px]"
+                          >
+                            <FileText
+                              className="size-4 shrink-0 text-muted-foreground"
+                              aria-hidden
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="break-all text-[13px]">{item.fileName}</p>
+                              <p className="mt-[4px] text-[12px] text-muted-foreground">
+                                {(item.size / 1024 / 1024).toFixed(2)} MiB ·{' '}
+                                {item.status === 'uploading'
+                                  ? '上传中…'
+                                  : item.status === 'failed'
+                                    ? '上传失败'
+                                    : item.id
+                                      ? '已保存'
+                                      : '上传完成，待保存'}
                               </p>
+                              {item.message && (
+                                <p role="alert" className="mt-1 text-[12px] text-destructive">
+                                  {item.message}
+                                </p>
+                              )}
+                            </div>
+                            {item.status === 'failed' && (
+                              <Button
+                                size="mobileTouch"
+                                variant="outline"
+                                disabled={locked}
+                                onClick={() => void uploadAttachment(item)}
+                              >
+                                重试上传
+                              </Button>
                             )}
-                          </div>
-                          {item.status === 'failed' && (
-                            <Button
-                              size="mobileTouch"
-                              variant="outline"
-                              disabled={locked}
-                              onClick={() => void uploadAttachment(item)}
-                            >
-                              重试上传
-                            </Button>
-                          )}
-                          {item.id && (
+                            {item.id && (
+                              <Button
+                                size="iconTouch"
+                                variant="ghost"
+                                aria-label={`下载 ${item.fileName}`}
+                                loading={downloading === item.key}
+                                disabled={downloading !== null}
+                                onClick={() => void download(item)}
+                              >
+                                <Download className="size-4" aria-hidden />
+                              </Button>
+                            )}
                             <Button
                               size="iconTouch"
                               variant="ghost"
-                              aria-label={`下载 ${item.fileName}`}
-                              loading={downloading === item.key}
-                              disabled={downloading !== null}
-                              onClick={() => void download(item)}
+                              aria-label={`移除 ${item.fileName}`}
+                              disabled={locked}
+                              onClick={() => {
+                                setAttachments((current) =>
+                                  current.filter((entry) => entry.key !== item.key),
+                                );
+                                setAttachmentsDirty(true);
+                              }}
                             >
-                              <Download className="size-4" aria-hidden />
+                              <X className="size-4" aria-hidden />
                             </Button>
-                          )}
-                          <Button
-                            size="iconTouch"
-                            variant="ghost"
-                            aria-label={`移除 ${item.fileName}`}
-                            disabled={locked}
-                            onClick={() => {
-                              setAttachments((current) =>
-                                current.filter((entry) => entry.key !== item.key),
-                              );
-                              setAttachmentsDirty(true);
-                            }}
-                          >
-                            <X className="size-4" aria-hidden />
-                          </Button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </FormField>
-              )}
-            </fieldset>
-            <div className="mt-[20px] space-y-[12px]">
-              <ErrorNotice error={fileError} />
-              <ErrorNotice error={error} />
-              {recovery && (
-                <Alert>
-                  <div className="space-y-[12px]">
-                    <p>
-                      {recovery === 'saved'
-                        ? '草稿已保存，但暂时无法读取最新内容。请重新读取后继续。'
-                        : recovery === 'conflict'
-                          ? '内容已发生变化，请重新读取草稿后再保存。'
-                          : '提交结果暂未确认，请先重新读取草稿或返回项目列表核对。'}
-                    </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </FormField>
+                )}
+              </fieldset>
+              <div className="mt-[20px] space-y-[12px]">
+                <ErrorNotice error={fileError} />
+                <ErrorNotice error={error} />
+                {recovery && (
+                  <Alert>
+                    <div className="space-y-[12px]">
+                      <p>
+                        {recovery === 'saved'
+                          ? '草稿已保存，但暂时无法读取最新内容。请重新读取后继续。'
+                          : recovery === 'conflict'
+                            ? '内容已发生变化，请重新读取草稿后再保存。'
+                            : '提交结果暂未确认，请先重新读取草稿或返回项目列表核对。'}
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="account"
+                        loading={reloading}
+                        onClick={() => void readDraft()}
+                      >
+                        重新读取草稿
+                      </Button>
+                    </div>
+                  </Alert>
+                )}
+                <ErrorNotice error={readError} />
+              </div>
+              <div className="mt-[28px] flex flex-wrap justify-between gap-[12px] border-t pt-[20px]">
+                <div>
+                  {step > 0 && (
                     <Button
                       variant="outline"
                       size="account"
-                      loading={reloading}
-                      onClick={() => void readDraft()}
+                      disabled={busy}
+                      onClick={() => setStep(step - 1)}
                     >
-                      重新读取草稿
+                      上一步
                     </Button>
-                  </div>
-                </Alert>
-              )}
-              <ErrorNotice error={readError} />
-            </div>
-            <div className="mt-[28px] flex flex-wrap justify-between gap-[12px] border-t pt-[20px]">
-              <div>
-                {step > 0 && (
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-[10px]">
                   <Button
                     variant="outline"
                     size="account"
-                    disabled={busy}
-                    onClick={() => setStep(step - 1)}
+                    disabled={locked || uploading}
+                    loading={save.isPending && save.variables?.operation === 'SAVE_DRAFT'}
+                    onClick={() => void write('SAVE_DRAFT')}
                   >
-                    上一步
+                    保存草稿
                   </Button>
-                )}
+                  {step < 2 ? (
+                    <Button type="submit" size="account" disabled={locked}>
+                      下一步
+                    </Button>
+                  ) : (
+                    <Button type="submit" size="account" disabled={locked || uploading}>
+                      <Plus className="size-4" aria-hidden />
+                      发布项目
+                    </Button>
+                  )}
+                </div>
               </div>
-              <div className="flex flex-wrap gap-[10px]">
-                <Button
-                  variant="outline"
-                  size="account"
-                  disabled={locked || uploading}
-                  loading={save.isPending && save.variables?.operation === 'SAVE_DRAFT'}
-                  onClick={() => void write('SAVE_DRAFT')}
-                >
-                  保存草稿
-                </Button>
-                {step < 2 ? (
-                  <Button type="submit" size="account" disabled={locked}>
-                    下一步
-                  </Button>
-                ) : (
-                  <Button type="submit" size="account" disabled={locked || uploading}>
-                    <Plus className="size-4" aria-hidden />
-                    发布项目
-                  </Button>
-                )}
-              </div>
-            </div>
-          </form>
-        </section>
+            </form>
+          </section>
+        </Card>
       )}
       {confirming && (
         <ProjectPublishConfirmation
@@ -711,40 +723,31 @@ function ProjectPublishConfirmation({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const node = dialog.current;
-    node?.showModal();
-    return () => node?.close();
-  }, []);
   return (
-    <dialog
-      ref={dialog}
-      aria-labelledby="project-publish-title"
+    <Dialog
+      title="确认发布项目"
+      aria-label="确认发布项目"
       aria-describedby="project-publish-description"
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!busy) onCancel();
-      }}
-      className="fixed inset-0 m-auto w-[calc(100%-32px)] max-w-[480px] rounded-[12px] border bg-card p-[24px] text-foreground shadow-xl backdrop:bg-black/40"
+      size="sm"
+      busy={busy}
+      onClose={onCancel}
+      footer={
+        <>
+          <Button variant="outline" size="account" disabled={busy} onClick={onCancel}>
+            继续填写
+          </Button>
+          <Button size="account" loading={busy} onClick={onConfirm}>
+            确认发布
+          </Button>
+        </>
+      }
     >
-      <h2 id="project-publish-title" className="text-[18px] font-semibold">
-        确认发布项目
-      </h2>
       <p
         id="project-publish-description"
-        className="mt-[12px] text-[14px] leading-[22px] text-muted-foreground"
+        className="text-[13px] leading-[22px] text-muted-foreground"
       >
         发布后进入招募策略官环节，当前项目资料将作为后续协作依据。确认发布？
       </p>
-      <div className="mt-[24px] flex justify-end gap-[10px]">
-        <Button variant="outline" size="account" disabled={busy} onClick={onCancel}>
-          继续填写
-        </Button>
-        <Button size="account" loading={busy} onClick={onConfirm}>
-          确认发布
-        </Button>
-      </div>
-    </dialog>
+    </Dialog>
   );
 }

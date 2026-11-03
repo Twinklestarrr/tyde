@@ -124,9 +124,6 @@ async function recruitManager(
     currentNodeCode: 'PRODUCTION_PLAN',
     manager: { userId: account.id },
   });
-  await expect(panel.getByRole('region', { name: '当前策略官', exact: true })).toContainText(
-    account.nickname,
-  );
 }
 
 async function navigatorFlow(page: Page, origin: string, f: RealWorkbenchFixture, mode: string) {
@@ -172,11 +169,18 @@ async function navigatorFlow(page: Page, origin: string, f: RealWorkbenchFixture
   expect(afterInitial.currentNodeCode).toBe('PRODUCTION_PLAN');
   const pending = await f.api<RealProject[]>('/projects/list', f.navigator);
   expect(pending.some(({ id }) => id === f.main.id)).toBe(false);
+  await expect(page).toHaveURL(/#\/projects$/);
+  await expect(page.getByRole('article').filter({ hasText: f.main.projectName })).toHaveCount(0);
+  await page.goto(`${origin}/#/projects/${f.main.id}`);
+  await expect(panel.getByRole('region', { name: '当前策略官', exact: true })).toContainText(
+    f.firstManager.nickname,
+  );
   await panel.getByRole('button', { name: '更换策略官', exact: true }).click();
   await panel.getByRole('button', { name: '取消更换', exact: true }).click();
   await expect(panel.getByRole('button', { name: '更换策略官', exact: true })).toBeVisible();
   await panel.getByRole('button', { name: '更换策略官', exact: true }).click();
   await recruitManager(page, panel, f.manager, true);
+  await expect(page).toHaveURL(/#\/projects$/);
   await screenshot(page, mode, 'navigator-replaced');
   expect((await f.api<RealProject>(`/projects/${f.main.id}`, f.navigator)).currentNodeCode).toBe(
     'PRODUCTION_PLAN',
@@ -187,8 +191,8 @@ async function navigatorFlow(page: Page, origin: string, f: RealWorkbenchFixture
   );
   expect(managers.find(({ status }) => status === 'CURRENT')?.userId).toBe(f.manager.id);
   expect(await f.api<RealProject[]>('/projects/manager/list', f.firstManager)).toEqual([]);
-  await page.getByRole('link', { name: '返回我的项目', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/#\/projects$/);
+  await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
   await expect(page.getByRole('article').filter({ hasText: f.main.projectName })).toHaveCount(0);
 }
 
@@ -258,6 +262,13 @@ async function strategistFlow(page: Page, origin: string, f: RealWorkbenchFixtur
     needWrittenExam: false,
     totalExpectedOutput: 410,
   });
+  const tabs = page.getByRole('tablist', { name: '策略官项目模块', exact: true });
+  await expect(tabs.getByRole('tab', { name: '标准与培训', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('region', { name: '标准与培训', exact: true })).toBeVisible();
+  await tabs.getByRole('tab', { name: '生产计划', exact: true }).click();
   await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
   await expect(submit).toHaveCount(0);
   await expect(page.getByText('当前阶段：标准与培训', { exact: true })).toBeVisible();
@@ -269,19 +280,22 @@ async function strategistFlow(page: Page, origin: string, f: RealWorkbenchFixtur
     '10.25',
   );
   await expect(panel.getByRole('spinbutton', { name: '作业 CPD', exact: true })).toBeDisabled();
-  const tabs = page.getByRole('tablist', { name: '策略官项目模块', exact: true });
   await tabs.getByRole('tab', { name: '准入考试', exact: true }).click();
   await expect(page.getByRole('region', { name: '准入考试', exact: true })).toContainText(
     '生产计划未配置准入考试',
   );
-  for (const name of ['标准与培训', '招募执行专家', '人员管理', '生产任务']) {
+  await tabs.getByRole('tab', { name: '标准与培训', exact: true }).click();
+  await expect(page.getByRole('region', { name: '标准与培训', exact: true })).toContainText(
+    '逐条核对并记录结果',
+  );
+  for (const name of ['招募执行专家', '人员管理', '生产任务']) {
     await tabs.getByRole('tab', { name, exact: true }).click();
     await expect(page.getByRole('tabpanel', { name, exact: true })).toContainText('入口暂未开放');
   }
   await tabs.getByRole('tab', { name: '生产计划', exact: true }).click();
   await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
   await page.getByRole('link', { name: '返回我的项目', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
 }
 
 async function expertDetails(page: Page, project: RealProject) {
@@ -290,24 +304,39 @@ async function expertDetails(page: Page, project: RealProject) {
     card.getByRole('button', { name: '查看项目', exact: true }).click(),
   );
   expect((await read.json()).data.projectDetail).toMatchObject({ id: project.id });
+  await page.getByRole('button', { name: '项目资料', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '项目详情', exact: true });
   await expect(dialog).toContainText(project.projectName);
   await expect(dialog).toContainText('标准配置');
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '返回项目卡片', exact: true }).click();
 }
 
 async function expertDecision(page: Page, project: RealProject, reject: boolean) {
   const card = page.getByRole('article').filter({ hasText: project.projectName });
-  await card.getByRole('button', { name: reject ? '拒绝' : '接单', exact: true }).click();
+  await card.getByRole('button', { name: '查看项目', exact: true }).click();
+  const current = page.getByRole('article', { name: '当前项目待办', exact: true });
+  await current.getByRole('button', { name: reject ? '拒绝' : '接单', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: reject ? '拒绝项目' : '确认接单', exact: true });
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
-  await card.getByRole('button', { name: reject ? '拒绝' : '接单', exact: true }).click();
+  await current.getByRole('button', { name: reject ? '拒绝' : '接单', exact: true }).click();
   if (reject)
     await dialog.getByLabel('拒绝原因', { exact: true }).fill('本轮真实联调验证拒绝与回读');
+  const refreshed = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/v1/expert-assignments/my-tasks' &&
+      response.request().method() === 'POST',
+  );
   const response = await requestFrom(page, '/expert-assignments/respond', 'POST', () =>
     dialog.getByRole('button', { name: reject ? '确认拒绝' : '确认接单', exact: true }).click(),
   );
   expect((await response.json()).data.status).toBe(reject ? 'REJECTED' : 'ACCEPTED');
+  const listResponse = await refreshed;
+  expect(listResponse.status()).toBe(200);
+  const listed = (await listResponse.json()).data as { basicInfo: { projectId: number } }[];
+  if (listed.some(({ basicInfo }) => basicInfo.projectId === project.id))
+    await page.getByRole('button', { name: '返回项目卡片', exact: true }).click();
+  await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
 }
 
 for (const [mode, desktop] of [
@@ -447,11 +476,13 @@ for (const [mode, desktop] of [
         const card = page.getByRole('article').filter({ hasText: organizationProject.projectName });
         await expect(card).toContainText('组织主管');
         await expertDetails(page, organizationProject);
+        await card.getByRole('button', { name: '查看项目', exact: true }).click();
+        const current = page.getByRole('article', { name: '当前项目待办', exact: true });
         const candidates = await requestFrom(
           page,
           '/expert-assignments/project-owner-candidates',
           'GET',
-          () => card.getByRole('button', { name: '接单', exact: true }).click(),
+          () => current.getByRole('button', { name: '接单', exact: true }).click(),
         );
         expect((await candidates.json()).data).toEqual(
           expect.arrayContaining([
@@ -482,7 +513,11 @@ for (const [mode, desktop] of [
         const member = page
           .getByRole('article')
           .filter({ hasText: organizationProject.projectName });
-        await member.getByRole('button', { name: '接单', exact: true }).click();
+        await member.getByRole('button', { name: '查看项目', exact: true }).click();
+        await page
+          .getByRole('article', { name: '当前项目待办', exact: true })
+          .getByRole('button', { name: '接单', exact: true })
+          .click();
         const result = await requestFrom(page, '/expert-assignments/respond', 'POST', () =>
           page
             .getByRole('dialog', { name: '确认接单', exact: true })

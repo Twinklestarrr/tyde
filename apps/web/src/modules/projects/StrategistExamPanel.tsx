@@ -14,6 +14,8 @@ import { api } from '@/services/api';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { WORKSPACE_ROLE_SWITCH_REQUEST } from '@/layouts/WorkspaceView';
 import { Button } from '@/components/ui/button';
+import { Card, CardTitle } from '@/components/ui/card';
+import { EmptyState, LoadingState } from '@/components/ui/empty-state';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ErrorNotice } from '@/components/ErrorNotice';
@@ -148,11 +150,19 @@ export function StrategistExamPanel({
   }
 
   /** 显式回读才解除不确定写结果；回读失败不恢复旧提交按钮。 */
-  async function refresh(restoreEditor = false, propagateFailure = false) {
-    if (reading || writing.current) return;
+  async function refresh(restoreEditor = false, propagateFailure = false, written = false) {
+    if (reading || writing.current || !sameSession()) return;
+    const previousLock = cache.getQueryData<WriteLock | null>(lockKey) ?? null;
+    const confirmed = written || previousLock?.status === 'success';
     setReading(true);
     setReadError(null);
     try {
+      if (confirmed) {
+        // 已知写入成功先核对项目卡片，不依赖考试管理回读是否可用。
+        setLock(null);
+        await onChanged();
+        if (!sameSession()) return;
+      }
       const [list, permission] = await Promise.allSettled([
         management.refetch({ throwOnError: true }),
         reviewers.refetch({ throwOnError: true }),
@@ -199,13 +209,19 @@ export function StrategistExamPanel({
           queryKey: ['entrance-exam-admissions', user.id, 'PM', projectId],
         }),
         cache.invalidateQueries({ queryKey: ['entrance-exam-roster', user.id, 'PM'] }),
-        onChanged(),
       ]);
       if (!sameSession()) return;
-      setLock(null);
+      if (!confirmed) {
+        setLock(null);
+        await onChanged();
+        if (!sameSession()) return;
+      }
       setError(null);
     } catch (failure) {
-      if (sameSession()) setReadError(failure);
+      if (sameSession()) {
+        setLock(previousLock);
+        setReadError(failure);
+      }
       if (propagateFailure) throw failure;
     } finally {
       if (mounted.current) setReading(false);
@@ -240,7 +256,7 @@ export function StrategistExamPanel({
         ? '考试已发布，已确认结果不会重复提交。'
         : '考试新版本已保存，已入场考生保留原版本。',
     );
-    await refresh();
+    await refresh(false, false, true);
   }
 
   async function confirmClose() {
@@ -266,7 +282,7 @@ export function StrategistExamPanel({
     setLock({ ...action, status: 'success' });
     setClosing(null);
     setNotice('考试已关闭，已入场考生与历史成绩仍保留。');
-    await refresh();
+    await refresh(false, false, true);
   }
 
   async function openConfig(exam: EntranceExamCard, edit: boolean) {
@@ -297,13 +313,15 @@ export function StrategistExamPanel({
 
   if (!isPm) return null;
   return (
-    <section aria-label="准入考试" className="space-y-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">准入考试</h2>
-          <p className="mt-1 text-[13px] leading-6 text-muted-foreground">
-            组织考试、查看准入情况并完成判卷。关闭考试保留历史名单与成绩。
-          </p>
+    <section aria-label="准入考试" className="space-y-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <CardTitle>准入考试</CardTitle>
+          {management.data && (
+            <p className="text-[13px] text-muted-foreground">
+              进行中 {management.data.activeExamCount} / {management.data.maxActiveExamCount} 场
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -371,22 +389,23 @@ export function StrategistExamPanel({
         </div>
       )}
       {management.isPending ? (
-        <p role="status">正在读取准入考试…</p>
+        <LoadingState>正在读取准入考试…</LoadingState>
       ) : (
         management.data && (
           <>
-            <div className="space-y-1 rounded-xl border bg-muted p-4 text-[13px] text-muted-foreground">
-              <p>
-                进行中 {management.data.activeExamCount} / {management.data.maxActiveExamCount} 场
-              </p>
-              {!management.data.needWrittenExam && (
-                <p>生产计划未配置准入考试，当前不能组织新考试；历史名单仍可查看。</p>
-              )}
-              {management.data.createDisabledReason && (
-                <p>{management.data.createDisabledReason}</p>
-              )}
-              {expectedReadOnly && <p>当前仅可查看，考试由生效主策略官维护。</p>}
-            </div>
+            {(!management.data.needWrittenExam ||
+              management.data.createDisabledReason ||
+              expectedReadOnly) && (
+              <div className="space-y-1 text-[13px] text-muted-foreground">
+                {!management.data.needWrittenExam && (
+                  <p>生产计划未配置准入考试，当前不能组织新考试；历史名单仍可查看。</p>
+                )}
+                {management.data.createDisabledReason && (
+                  <p>{management.data.createDisabledReason}</p>
+                )}
+                {expectedReadOnly && <p>当前仅可查看，考试由生效主策略官维护。</p>}
+              </div>
+            )}
             <Tabs value={view} onValueChange={setView}>
               <TabsList aria-label="考试视图" variant="business">
                 <TabsTrigger variant="business" value="admission">
@@ -402,78 +421,78 @@ export function StrategistExamPanel({
               <TabsContent value="grading">
                 <div className="grid min-w-0 gap-4 lg:grid-cols-2">
                   {management.data.exams.map((exam) => (
-                    <article key={exam.examId} className="min-w-0 space-y-4 rounded-xl border p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-xs text-muted-foreground">{exam.examNo}</p>
-                          <h3 className="mt-1 break-words text-base font-semibold">
-                            {exam.examName}
-                          </h3>
+                    <Card asChild key={exam.examId}>
+                      <article className="space-y-3 p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-xs text-muted-foreground">{exam.examNo}</p>
+                            <CardTitle asChild className="mt-1">
+                              <h3>{exam.examName}</h3>
+                            </CardTitle>
+                          </div>
+                          <span className="rounded-md bg-accent px-2 py-1 text-xs text-primary">
+                            {exam.status === 'ACTIVE' ? '进行中' : '已关闭'}
+                          </span>
                         </div>
-                        <span className="rounded-md bg-accent px-2 py-1 text-xs text-primary">
-                          {exam.status === 'ACTIVE' ? '进行中' : '已关闭'}
-                        </span>
-                      </div>
-                      <p className="text-[13px] text-muted-foreground">
-                        已交卷 {exam.examineeCount} 人 · 考试通过 {exam.admittedCount} 人 · 通过率{' '}
-                        {exam.admissionRate}%
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        创建：{exam.createdAt}（上海时间）
-                        {exam.closedAt ? ` · 关闭：${exam.closedAt}` : ''}
-                      </p>
-                      <div className="flex flex-wrap gap-2 border-t pt-3">
-                        <Button
-                          variant="outline"
-                          size="mobileTouch"
-                          disabled={exam.status === 'CLOSED' || loadingConfig !== null}
-                          loading={loadingConfig === exam.examId}
-                          onClick={() => void openConfig(exam, false)}
-                        >
-                          查看配置
-                        </Button>
-                        <Button
-                          variant="primaryOutline"
-                          size="mobileTouch"
-                          onClick={() => setWorkspace({ exam })}
-                        >
-                          查看名单
-                        </Button>
-                        {canManage && exam.status === 'ACTIVE' && (
-                          <>
-                            <Button
-                              variant="outline"
-                              size="mobileTouch"
-                              disabled={writeDisabled}
-                              onClick={() => void openConfig(exam, true)}
-                            >
-                              编辑考试
-                            </Button>
-                            <Button
-                              variant="dangerGhost"
-                              size="mobileTouch"
-                              disabled={writeDisabled}
-                              onClick={() => {
-                                setError(null);
-                                setClosing({ exam, reason: '' });
-                              }}
-                            >
-                              关闭考试
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                      {exam.status === 'CLOSED' && (
-                        <p className="text-xs text-muted-foreground">
-                          已关闭配置不可编辑，名单保留考生绑定的原卷与判卷记录。
+                        <p className="text-[13px] text-muted-foreground">
+                          已交卷 {exam.examineeCount} 人 · 考试通过 {exam.admittedCount} 人 · 通过率{' '}
+                          {exam.admissionRate}%
                         </p>
-                      )}
-                    </article>
+                        <p className="text-xs text-muted-foreground">
+                          创建：{exam.createdAt}（上海时间）
+                          {exam.closedAt ? ` · 关闭：${exam.closedAt}` : ''}
+                        </p>
+                        <div className="flex flex-wrap gap-2 border-t pt-3">
+                          <Button
+                            variant="outline"
+                            size="mobileTouch"
+                            disabled={exam.status === 'CLOSED' || loadingConfig !== null}
+                            loading={loadingConfig === exam.examId}
+                            onClick={() => void openConfig(exam, false)}
+                          >
+                            查看配置
+                          </Button>
+                          <Button
+                            variant="primaryOutline"
+                            size="mobileTouch"
+                            onClick={() => setWorkspace({ exam })}
+                          >
+                            查看名单
+                          </Button>
+                          {canManage && exam.status === 'ACTIVE' && (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="mobileTouch"
+                                disabled={writeDisabled}
+                                onClick={() => void openConfig(exam, true)}
+                              >
+                                编辑考试
+                              </Button>
+                              <Button
+                                variant="dangerGhost"
+                                size="mobileTouch"
+                                disabled={writeDisabled}
+                                onClick={() => {
+                                  setError(null);
+                                  setClosing({ exam, reason: '' });
+                                }}
+                              >
+                                关闭考试
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                        {exam.status === 'CLOSED' && (
+                          <p className="text-xs text-muted-foreground">
+                            已关闭配置不可编辑，名单保留考生绑定的原卷与判卷记录。
+                          </p>
+                        )}
+                      </article>
+                    </Card>
                   ))}
                   {management.data.exams.length === 0 && (
-                    <p className="col-span-full rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-                      暂无考试
-                    </p>
+                    <EmptyState className="col-span-full" title="暂无考试" />
                   )}
                 </div>
               </TabsContent>
@@ -533,7 +552,7 @@ export function StrategistExamPanel({
               examId={workspace.exam.examId}
               attemptId={workspace.attemptId}
               canManage={canManage && !lock && !management.isError}
-              onChanged={() => refresh(false, true)}
+              onChanged={(written) => refresh(false, true, written)}
               onBack={() => setWorkspace({ exam: workspace.exam })}
             />
           )}

@@ -6,8 +6,11 @@ import type { AuthUser } from '@tyde/shared';
 import { api } from '@/services/api';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { projectNodeLabel } from './ProjectWorkflow';
+import { Card, CardTitle } from '@/components/ui/card';
+import { EmptyState, LoadingState } from '@/components/ui/empty-state';
+import { SearchInput } from '@/components/ui/search-input';
+import { projectCardNode, projectNodeLabel } from './ProjectWorkflow';
+import { ProjectCardTransition } from './ProjectCardTransition';
 
 /** 本人待办与唯一草稿分开读取，不将待办接口当成完整项目库。 */
 export function NavigatorProjectsPage({ user, created }: { user: AuthUser; created?: number }) {
@@ -34,29 +37,41 @@ export function NavigatorProjectsPage({ user, created }: { user: AuthUser; creat
   );
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="mb-2 text-xs font-medium text-primary">领航员工作台</p>
-          <h1 className="text-[24px] font-semibold tracking-tight">我创建的项目</h1>
-          <p className="mt-2 text-[13px] leading-6 text-muted-foreground">
-            从创建与发布开始，在项目内跟进各阶段协作。
-          </p>
-        </div>
-        <Button asChild size="mobileTouch">
+    <ProjectCardTransition direction="back" className="space-y-5">
+      <h1 className="sr-only">我创建的项目</h1>
+      <div className="flex items-center gap-2 sm:gap-3">
+        <SearchInput
+          id="navigator-project-search"
+          label="筛选当前待办"
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+          placeholder="搜索项目"
+          containerClassName="flex-1"
+        />
+        <Button
+          variant="ghost"
+          size="settings"
+          className="w-[40px] shrink-0 px-0 max-[640px]:w-[44px]"
+          aria-label="刷新项目"
+          title="刷新项目"
+          loading={projects.isFetching}
+          onClick={() => void projects.refetch()}
+        >
+          {!projects.isFetching && <RefreshCw className="size-4" aria-hidden />}
+        </Button>
+        <Button asChild size="settings" className="ml-auto shrink-0">
           <Link to="/projects/create">
             <Plus className="size-4" aria-hidden />
             创建项目
           </Link>
         </Button>
-      </header>
-
+      </div>
       {created && (
         <div
           role="status"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4 text-sm"
+          className="flex flex-wrap items-center justify-between gap-2 text-[13px]"
         >
-          <span>项目已发布，可进入详情查看。</span>
+          <span className="text-primary">项目已发布</span>
           <Button asChild variant="primaryGhost" size="mobileTouch">
             <Link to="/projects/$projectId" params={{ projectId: String(created) }}>
               查看已发布项目
@@ -65,154 +80,135 @@ export function NavigatorProjectsPage({ user, created }: { user: AuthUser; creat
           </Button>
         </div>
       )}
-
-      <section aria-label="项目草稿" className="rounded-[16px] border bg-card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <FilePenLine className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
-            <div>
-              <h2 className="text-sm font-semibold">
-                {draft.data?.hasDraft ? draft.data.draft?.projectName || '未命名草稿' : '项目草稿'}
-              </h2>
-              <p className="mt-1 text-[13px] text-muted-foreground">
-                {draft.isPending
-                  ? '正在读取草稿…'
-                  : draft.data?.hasDraft
-                    ? `已保存 · ${draft.data.draft?.updatedAt}，继续完善后即可发布。`
-                    : draft.isError
-                      ? '暂时无法确认草稿状态，请重试读取。'
-                      : '你可以先保存一份草稿，准备好后再发布。'}
-              </p>
-            </div>
-          </div>
-          {draft.data?.hasDraft && (
-            <Button asChild variant="outline" size="mobileTouch">
-              <Link to="/projects/create">继续完善</Link>
-            </Button>
-          )}
-          {draft.isError && (
-            <Button
-              variant="outline"
-              loading={draft.isFetching}
-              onClick={() => void draft.refetch()}
-            >
-              重试读取草稿
-            </Button>
-          )}
-        </div>
-        <div className="mt-3 empty:hidden">
+      {draft.data?.hasDraft && (
+        <section
+          aria-label="项目草稿"
+          className="flex items-center gap-3 rounded-xl bg-muted px-4 py-2"
+        >
+          <FilePenLine className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <h2 className="min-w-0 flex-1 truncate text-[13px]">
+            草稿 · {draft.data.draft?.projectName || '未命名草稿'}
+          </h2>
+          <Button asChild variant="primaryGhost" size="mobileTouch" className="shrink-0">
+            <Link to="/projects/create">继续完善</Link>
+          </Button>
+        </section>
+      )}
+      {draft.isError && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <ErrorNotice error={draft.error} />
-        </div>
-      </section>
-
-      <section
-        aria-labelledby="navigator-projects-title"
-        className="space-y-5 rounded-[16px] border bg-card p-5 sm:p-6"
-      >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 id="navigator-projects-title" className="text-base font-semibold">
-              当前待办项目
-            </h2>
-            <p className="mt-1 text-[13px] leading-6 text-muted-foreground">
-              这里展示当前需要你处理的已发布项目。项目推进后可能不再出现在待办中。
-            </p>
-          </div>
           <Button
-            variant="outline"
+            variant="ghost"
             size="mobileTouch"
-            loading={projects.isFetching}
-            onClick={() => void projects.refetch()}
+            loading={draft.isFetching}
+            onClick={() => void draft.refetch()}
           >
-            <RefreshCw className="size-4" aria-hidden />
-            刷新项目
+            重试读取草稿
           </Button>
         </div>
-        <div className="max-w-md space-y-2">
-          <label htmlFor="navigator-project-search" className="text-[13px] font-medium">
-            筛选当前待办
-          </label>
-          <Input
-            id="navigator-project-search"
-            type="search"
-            value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
-            placeholder="项目名称、编号、需求方或分类"
-          />
-        </div>
+      )}
+      <section aria-labelledby="navigator-projects-title" className="space-y-4">
+        <h2 id="navigator-projects-title" className="sr-only">
+          当前待办项目
+        </h2>
         <ErrorNotice error={projects.error} />
-        {projects.isPending && (
-          <p role="status" className="py-8 text-center text-sm text-muted-foreground">
-            正在读取项目…
-          </p>
-        )}
+        {projects.isPending && <LoadingState>正在读取项目…</LoadingState>}
         {!projects.isPending && !projects.isError && !visible.length && (
-          <div className="rounded-xl border border-dashed p-8 text-center">
-            <FolderOpen className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden />
-            <p className="text-sm font-medium">{query ? '没有匹配的待办项目' : '暂无待办项目'}</p>
-            <p className="mt-2 text-[13px] text-muted-foreground">
-              {query
-                ? '换一个关键词，或清空筛选查看全部当前待办。'
-                : '新发布的项目会从招募策略官阶段开始。'}
-            </p>
-          </div>
+          <Card>
+            <EmptyState
+              className="min-h-[240px] justify-center"
+              icon={<FolderOpen className="size-8" aria-hidden />}
+              title={query ? '没有匹配的待办项目' : '暂无待办项目'}
+              description={
+                query
+                  ? '试试其他关键词，或清除搜索查看全部待办。'
+                  : '当前没有需要处理的项目，后续待办会显示在这里。'
+              }
+              action={
+                <>
+                  {query && (
+                    <Button variant="outline" size="settings" onClick={() => setKeyword('')}>
+                      清除搜索
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="settings"
+                    loading={projects.isFetching}
+                    onClick={() => void projects.refetch()}
+                  >
+                    重新加载
+                  </Button>
+                </>
+              }
+            />
+          </Card>
         )}
         <div className="grid gap-4 md:grid-cols-2">
-          {visible.map((project) => (
-            <article key={project.id} className="flex min-w-0 flex-col rounded-xl border p-5">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <span className="break-all text-xs text-muted-foreground">{project.projectNo}</span>
-                <span className="rounded-md bg-accent px-2 py-1 text-xs text-primary">
-                  {project.workbenchStatusDescription}
-                </span>
-              </div>
-              <h3 className="break-words text-base font-semibold">
-                {project.projectName || '未命名项目'}
-              </h3>
-              <p className="mt-2 text-xs text-muted-foreground">{project.categoryDisplayName}</p>
-              {project.projectDescription && (
-                <p className="mt-3 line-clamp-2 text-[13px] leading-6 text-muted-foreground">
-                  {project.projectDescription}
-                </p>
-              )}
-              <dl className="my-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-[13px]">
-                <dt className="text-muted-foreground">需求方</dt>
-                <dd className="break-words">{project.requesterName}</dd>
-                <dt className="text-muted-foreground">当前阶段</dt>
-                <dd>{projectNodeLabel(project.currentNodeCode)}</dd>
-                <dt className="text-muted-foreground">策略官</dt>
-                <dd>{project.projectManagerName || project.projectManagerStatusDescription}</dd>
-                <dt className="text-muted-foreground">项目人数</dt>
-                <dd>
-                  {project.activeExpertCount} 人在项
-                  {project.requiredHeadcount != null && ` / 需求 ${project.requiredHeadcount} 人`}
-                </dd>
-                <dt className="text-muted-foreground">截止时间</dt>
-                <dd>{project.deadline || '未设置'}（上海时间）</dd>
-              </dl>
-              <div className="mt-auto flex flex-wrap justify-end gap-3 border-t pt-4">
-                {project.currentAction === 'RECRUIT_PROJECT_MANAGER' && (
-                  <Button asChild size="mobileTouch">
-                    <Link
-                      to="/projects/$projectId"
-                      params={{ projectId: String(project.id) }}
-                      hash="project-manager"
+          {visible.map((project) => {
+            const node = projectCardNode(project);
+            return (
+              <Card asChild key={project.id}>
+                <article className="project-card flex min-w-0 flex-col p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <CardTitle asChild className="min-w-0 flex-1">
+                      <h3>{project.projectName || '未命名项目'}</h3>
+                    </CardTitle>
+                    <span className="rounded-md bg-accent px-2 py-1 text-xs text-primary">
+                      {projectNodeLabel(node)}
+                    </span>
+                  </div>
+                  <p
+                    className="mt-3 truncate text-[13px] text-muted-foreground"
+                    title={project.requesterName}
+                  >
+                    {project.requesterName}
+                  </p>
+                  <div className="mt-5 flex flex-wrap items-center gap-2">
+                    <p
+                      className="mr-auto text-xs text-muted-foreground"
+                      title={
+                        project.deadline ? `截止时间：${project.deadline}（上海时间）` : undefined
+                      }
                     >
-                      招募策略官
-                    </Link>
-                  </Button>
-                )}
-                <Button asChild variant="primaryOutline" size="mobileTouch">
-                  <Link to="/projects/$projectId" params={{ projectId: String(project.id) }}>
-                    查看项目
-                    <ArrowRight className="size-4" aria-hidden />
-                  </Link>
-                </Button>
-              </div>
-            </article>
-          ))}
+                      {project.deadline
+                        ? `截止 ${project.deadline.slice(0, 10)}`
+                        : '未设置截止日期'}
+                    </p>
+                    {project.currentAction === 'RECRUIT_PROJECT_MANAGER' && (
+                      <Button
+                        asChild
+                        variant="primaryGhost"
+                        size="mobileTouch"
+                        className="project-card-secondary"
+                      >
+                        <Link
+                          to="/projects/$projectId"
+                          params={{ projectId: String(project.id) }}
+                          hash="project-manager"
+                        >
+                          招募策略官
+                        </Link>
+                      </Button>
+                    )}
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="iconTouch"
+                      className="project-card-link shrink-0"
+                    >
+                      <Link to="/projects/$projectId" params={{ projectId: String(project.id) }}>
+                        <span className="sr-only">查看项目</span>
+                        <ArrowRight className="size-4" aria-hidden />
+                      </Link>
+                    </Button>
+                  </div>
+                </article>
+              </Card>
+            );
+          })}
         </div>
       </section>
-    </div>
+    </ProjectCardTransition>
   );
 }

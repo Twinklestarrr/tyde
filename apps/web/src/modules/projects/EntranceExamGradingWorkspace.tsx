@@ -12,6 +12,7 @@ import {
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Dialog } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
@@ -40,7 +41,7 @@ interface EntranceExamGradingWorkspaceProps {
   examId: number;
   attemptId: number;
   canManage: boolean;
-  onChanged: () => Promise<void>;
+  onChanged: (written?: boolean) => Promise<void>;
   onBack: () => void;
 }
 
@@ -239,38 +240,54 @@ function GradingRound(
     });
   }
 
-  async function readFresh() {
-    const result = await api.getEntranceExamGradingDetail({
-      projectId,
-      examId,
-      attemptId,
-      roundNo,
-    });
-    if (!sessionMatches()) return;
-    cache.setQueryData(gradingKey(props, roundNo), result);
-    const next = entranceExamGradingValues(result);
-    initial.current = JSON.stringify(next);
-    setValues(next);
-    setCompensating(false);
-    setConfirming(null);
-    setErrors({});
-    await props.onChanged();
-    if (!sessionMatches()) return;
-    const currentLock =
+  async function readFresh(written = false) {
+    const previousLock =
       recordId === null ? undefined : cache.getQueryData<LockMap>(locksKey)?.[String(recordId)];
-    // 详情读取不证明历史轮次阅卷资格，提交403后仍保持只读。
-    if (currentLock !== 'access') setLock(null);
-    setError(null);
-    setReadError(null);
-    setNotice(
-      currentLock === 'access'
-        ? '当前账号没有本轮写入权限，仅可查看。'
-        : '已读取最新阅卷状态，请核对本轮与最终准入结果。',
-    );
+    const confirmed = written || previousLock === 'success';
+    try {
+      if (confirmed) {
+        setLock(null);
+        // 回读恢复也可能返回项目列表，不能沿用“正在写入”的离开拦截。
+        working.current = false;
+        await props.onChanged(true);
+        if (!sessionMatches()) return;
+      }
+      const result = await api.getEntranceExamGradingDetail({
+        projectId,
+        examId,
+        attemptId,
+        roundNo,
+      });
+      if (!sessionMatches()) return;
+      cache.setQueryData(gradingKey(props, roundNo), result);
+      const next = entranceExamGradingValues(result);
+      initial.current = JSON.stringify(next);
+      setValues(next);
+      setCompensating(false);
+      setConfirming(null);
+      setErrors({});
+      if (!confirmed) {
+        // 先核实未知写入的实际轮次；详情可读不证明历史轮次的写权限。
+        if (previousLock !== 'access') setLock(null);
+        working.current = false;
+        await props.onChanged();
+        if (!sessionMatches()) return;
+      }
+      setError(null);
+      setReadError(null);
+      setNotice(
+        previousLock === 'access'
+          ? '当前账号没有本轮写入权限，仅可查看。'
+          : '已读取最新阅卷状态，请核对本轮与最终准入结果。',
+      );
+    } catch (failure) {
+      if (sessionMatches() && previousLock) setLock(previousLock);
+      throw failure;
+    }
   }
 
   async function reread() {
-    if (working.current || !sessionMatches()) return;
+    if (reading || working.current || !sessionMatches()) return;
     if (!mayLeave('重新读取将替换未提交的阅卷内容，确认继续？')) return;
     working.current = true;
     setReading(true);
@@ -350,6 +367,8 @@ function GradingRound(
       if (!sessionMatches()) return;
       setLock('success');
       initial.current = JSON.stringify(values);
+      // 写入已完成，后续列表核对可能离开此项目；保留结果锁，解除写入中的离开拦截。
+      working.current = false;
       setNotice(
         write.kind === 'retry'
           ? '模拟阅卷重试已提交，正在读取最新结果。'
@@ -357,7 +376,7 @@ function GradingRound(
       );
       setReading(true);
       try {
-        await readFresh();
+        await readFresh(true);
       } catch (failure) {
         if (sessionMatches()) {
           setReadError(failure);
@@ -695,33 +714,37 @@ function GradingRound(
         )}
       </div>
       {confirming && (
-        <div
+        <Dialog
           role="alertdialog"
           aria-label={confirmLabel[confirming]}
-          className="space-y-4 rounded-xl border bg-accent p-4"
+          title={confirmLabel[confirming]}
+          size="sm"
+          busy={busy}
+          onClose={() => setConfirming(null)}
+          footer={
+            <>
+              <Button
+                variant="outline"
+                size="account"
+                disabled={busy}
+                onClick={() => setConfirming(null)}
+              >
+                取消
+              </Button>
+              <Button size="account" loading={busy} disabled={busy} onClick={() => void submit()}>
+                {confirming === 'retry' ? '确认重试' : '确认提交'}
+              </Button>
+            </>
+          }
         >
-          <h4 className="font-semibold">{confirmLabel[confirming]}</h4>
-          <p className="text-sm">
+          <p className="text-[13px] leading-5 text-muted-foreground">
             {confirming === 'retry'
               ? '本次仅重试当前失败轮次的模拟阅卷。'
               : confirming === 'compensate'
                 ? '将用当前逐题判定补偿本轮结果，并由服务端重新汇总最终准入状态。'
                 : '确认提交全部题目的判定与本轮总结？提交后不能再次修改本轮人工阅卷。'}
           </p>
-          <div className="flex flex-wrap justify-end gap-3">
-            <Button
-              variant="outline"
-              size="account"
-              disabled={busy}
-              onClick={() => setConfirming(null)}
-            >
-              取消
-            </Button>
-            <Button size="account" loading={busy} disabled={busy} onClick={() => void submit()}>
-              {confirming === 'retry' ? '确认重试' : '确认提交'}
-            </Button>
-          </div>
-        </div>
+        </Dialog>
       )}
     </section>
   );

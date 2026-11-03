@@ -4,6 +4,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: [
+    'ui-consistency.spec.ts',
     'frontend.spec.ts',
     'profile.spec.ts',
     'profile-attendance.spec.ts',
