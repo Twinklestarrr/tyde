@@ -1,18 +1,22 @@
 import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, FileText, RefreshCw } from 'lucide-react';
 import type { AuthUser } from '@tyde/shared';
 import { api } from '@/services/api';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { EmptyState, LoadingState } from '@/components/ui/empty-state';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { projectNodeLabel } from './ProjectWorkflow';
+import { projectCardNode, projectNodeLabel } from './ProjectWorkflow';
 import { ProjectDetailsDialog } from './ProjectDetailsDialog';
 import { ProductionPlanPanel, PRODUCTION_PLAN_LEAVE_REQUEST } from './ProductionPlanPanel';
 import { StrategistExamPanel } from './StrategistExamPanel';
 import { ENTRANCE_EXAM_LEAVE_REQUEST } from './EntranceExamDialog';
 import { StandardTrainingPanel, STANDARD_TRAINING_LEAVE_REQUEST } from './StandardTrainingPanel';
+import { ProjectCardTransition } from './ProjectCardTransition';
+import { useProjectCardContinuation } from './useProjectCardContinuation';
 
 const tabs = [
   'PRODUCTION_PLAN',
@@ -32,7 +36,6 @@ export function StrategistProjectPage({
   projectId: number;
   initialTab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM' | 'STANDARD_TRAINING';
 }) {
-  const client = useQueryClient();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [tab, setTab] = useState<string>(initialTab);
   const detail = useQuery({
@@ -41,49 +44,54 @@ export function StrategistProjectPage({
     retry: false,
   });
   const project = detail.data;
+  const continuation = useProjectCardContinuation({
+    user,
+    projectId,
+    role: 'PM',
+    reloadDetail: () => detail.refetch({ throwOnError: true }),
+    onContinue: (card) => {
+      const next = projectCardNode(card);
+      if (tabs.some((code) => code === next)) setTab(next);
+    },
+  });
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button asChild variant="ghost" size="mobileTouch">
-          <Link to="/strategist/projects">
-            <ArrowLeft className="size-4" aria-hidden />
-            返回我的项目
-          </Link>
-        </Button>
-        <Button
-          variant="outline"
-          size="mobileTouch"
-          loading={detail.isFetching}
-          onClick={() => void detail.refetch()}
-        >
-          <RefreshCw className="size-4" aria-hidden />
-          刷新详情
-        </Button>
-      </div>
-      <ErrorNotice error={detail.error} />
-      {detail.isPending && (
-        <p role="status" className="p-8 text-center text-sm text-muted-foreground">
-          正在读取项目详情…
-        </p>
-      )}
-      {project && (
-        <>
-          <header className="rounded-[16px] border bg-card p-5 sm:p-6">
-            <p className="mb-2 text-xs text-muted-foreground">{project.projectNo}</p>
-            <h1 className="break-words text-[24px] font-semibold">
-              {project.projectName || '未命名项目'}
-            </h1>
-            <p className="mt-3 whitespace-pre-wrap text-[13px] leading-6 text-muted-foreground">
-              {project.projectDescription || '暂无项目描述'}
+    <ProjectCardTransition transitionKey={continuation.transition} className="space-y-3">
+      <Card asChild>
+        <section aria-label="策略官项目流程" className="space-y-4 p-5">
+          <h1 className="sr-only">策略官项目流程</h1>
+          <div role="toolbar" aria-label="项目操作" className="flex items-center gap-2">
+            <Button asChild variant="ghost" size="mobileTouch">
+              <Link to="/strategist/projects">
+                <ArrowLeft className="size-4" aria-hidden />
+                <span className="sr-only sm:not-sr-only">返回我的项目</span>
+              </Link>
+            </Button>
+            <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              {project && `当前阶段：${projectNodeLabel(project.currentNodeCode)}`}
             </p>
-          </header>
-          <section aria-label="策略官项目流程" className="rounded-[16px] border bg-card p-5 sm:p-6">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-base font-semibold">策略官项目流程</h2>
-              <p className="text-[13px] text-muted-foreground">
-                当前阶段：{projectNodeLabel(project.currentNodeCode)}
-              </p>
-            </div>
+            <Button
+              variant="primaryOutline"
+              size="mobileTouch"
+              title="查看项目详情"
+              disabled={!project}
+              onClick={() => setDetailsOpen(true)}
+            >
+              <FileText className="size-4" aria-hidden />
+              <span className="sr-only sm:not-sr-only">查看项目详情</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="mobileTouch"
+              loading={detail.isFetching}
+              onClick={() => void detail.refetch()}
+            >
+              <RefreshCw className="size-4" aria-hidden />
+              <span className="sr-only sm:not-sr-only">刷新详情</span>
+            </Button>
+          </div>
+          <ErrorNotice error={detail.error} />
+          {detail.isPending && <LoadingState>正在读取项目详情…</LoadingState>}
+          {project && (
             <Tabs
               value={tab}
               onValueChange={(next) => {
@@ -111,46 +119,32 @@ export function StrategistProjectPage({
                   )
                 )
                   return;
+                continuation.cancel();
                 setTab(next);
               }}
             >
-              <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
-                <TabsList
-                  aria-label="策略官项目模块"
-                  variant="business"
-                  className="mb-0 flex h-auto w-full min-w-0 flex-none flex-wrap justify-start sm:w-auto sm:flex-1"
-                >
-                  {tabs.map((code) => (
-                    <TabsTrigger
-                      key={code}
-                      value={code}
-                      variant="business"
-                      className="min-h-11 flex-1 sm:flex-none"
-                      aria-current={code === project.currentNodeCode ? 'step' : undefined}
-                    >
-                      {projectNodeLabel(code)}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                <Button
-                  variant="primaryOutline"
-                  size="mobileTouch"
-                  onClick={() => setDetailsOpen(true)}
-                >
-                  <FileText className="size-4" aria-hidden />
-                  查看项目详情
-                </Button>
-              </div>
+              <TabsList
+                aria-label="策略官项目模块"
+                variant="business"
+                className="mb-3 grid h-auto w-full min-w-0 grid-cols-2 min-[360px]:grid-cols-3 sm:flex sm:flex-wrap sm:justify-start"
+              >
+                {tabs.map((code) => (
+                  <TabsTrigger
+                    key={code}
+                    value={code}
+                    variant="business"
+                    className="min-h-11 min-w-0 px-2 sm:flex-none sm:px-3"
+                    aria-current={code === project.currentNodeCode ? 'step' : undefined}
+                  >
+                    {projectNodeLabel(code)}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
               <TabsContent value="PRODUCTION_PLAN">
                 <ProductionPlanPanel
                   user={user}
                   projectId={projectId}
-                  onConfirmed={async () => {
-                    void client.invalidateQueries({
-                      queryKey: ['strategist-projects', user.id, 'PM'],
-                    });
-                    await detail.refetch({ throwOnError: true });
-                  }}
+                  onConfirmed={continuation.refresh}
                 />
               </TabsContent>
               <TabsContent value="ENTRANCE_EXAM">
@@ -158,42 +152,31 @@ export function StrategistProjectPage({
                   user={user}
                   projectId={projectId}
                   projectName={project.projectName || '未命名项目'}
-                  onChanged={async () => {
-                    void client.invalidateQueries({
-                      queryKey: ['strategist-projects', user.id, 'PM'],
-                    });
-                    await detail.refetch({ throwOnError: true });
-                  }}
+                  onChanged={continuation.refresh}
                 />
               </TabsContent>
               <TabsContent value="STANDARD_TRAINING">
                 <StandardTrainingPanel
                   user={user}
                   projectId={projectId}
-                  onChanged={async () => {
-                    void client.invalidateQueries({
-                      queryKey: ['strategist-projects', user.id, 'PM'],
-                    });
-                    await detail.refetch({ throwOnError: true });
-                  }}
+                  onChanged={continuation.refresh}
                 />
               </TabsContent>
               {tabs.slice(3).map((code) => (
-                <TabsContent
-                  key={code}
-                  value={code}
-                  className="rounded-xl border border-dashed p-5 text-[13px] leading-6 text-muted-foreground"
-                >
-                  {projectNodeLabel(code)}入口暂未开放，可点击“查看项目详情”查看项目资料。
+                <TabsContent key={code} value={code}>
+                  <EmptyState
+                    title={`${projectNodeLabel(code)}入口暂未开放`}
+                    description="可点击“查看项目详情”查看项目资料。"
+                  />
                 </TabsContent>
               ))}
             </Tabs>
-          </section>
-          {detailsOpen && (
-            <ProjectDetailsDialog project={project} onClose={() => setDetailsOpen(false)} />
           )}
-        </>
+        </section>
+      </Card>
+      {project && detailsOpen && (
+        <ProjectDetailsDialog project={project} onClose={() => setDetailsOpen(false)} />
       )}
-    </div>
+    </ProjectCardTransition>
   );
 }

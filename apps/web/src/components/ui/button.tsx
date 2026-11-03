@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils';
  * - `successOutline`：成功、通过等正向描边按钮；
  * - `ghost`：弱化背景的次级按钮；
  * - `link`：链接式按钮；
- * - `unstyled`：除全站统一的 12px 圆角外，不注入或合并其他视觉类。
+ * - `unstyled`：除全站统一的控件圆角外，不注入或合并其他视觉类。
  * 尺寸统一使用 `xs`、`sm`、`default`、`lg`、`mobileTouch`、`settings`、`account`、`formControl` 和图标尺寸变体。
  * `settings` 对齐个人中心表单，`account` 用于始终保留 44px 点击区域的账户菜单。
  * `formControl` 用于与表单输入框并排的操作，桌面端保持相同高度，移动端保留触控区域。
@@ -118,12 +118,8 @@ export function Button({
 }: ButtonProps) {
   const buttonClassName =
     variant === 'unstyled'
-      ? cn('rounded-[12px]', className)
-      : cn(
-          buttonVariants({ variant, size }),
-          size === 'settings' || size === 'account' ? 'rounded-[8px]' : 'rounded-[12px]',
-          className,
-        );
+      ? cn('rounded-lg', className)
+      : cn(buttonVariants({ variant, size }), 'rounded-lg', className);
 
   if (asChild) {
     return (

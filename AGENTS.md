@@ -700,7 +700,13 @@ React 页面 → services/api → packages/platform
 - 页面重连恢复展示，不重新启动执行；继续／重试尚未开放，后续须由服务端幂等协调。流式结束、停止受理和实际停止分别确认，正常退出只请求停止本客户端明确关联的任务／尝试；正式业务提交仍需用户确认。
 - 修改 shared、platform、Electron 或根构建脚本时同步调用方与影响范围验证。开发分工、契约语义、工作包、桌面装配及待定事项集中维护在 [docs/AGENT_DEVELOPMENT.md](docs/AGENT_DEVELOPMENT.md)，同事无需访问仓库外设计目录。
 
+项目卡片交互：三角色项目列表采用搜索工具栏和紧凑卡片，详细资料留在详情。提交成功后重新请求完整本人待办列表；NAV/PM按项目ID、EXPERT按sourceBizType+sourceBizId匹配，仍存在则续接最新待办，消失才返回列表。筛选结果不作为撤卡依据，读取失败保留详情并仅重试读取。`useProjectCardContinuation.ts`统一NAV/PM列表核对与会话保护，`ProjectWorkflow.tsx`映射当前支线到模块；`ProjectCardTransition.tsx`及`project-card-motion.css`提供不重挂载表单的切卡动效并支持减少动态效果。仅接入现有业务模块，不新增接口。
+
 ## 开发新需求时
+
+- 2026-11-03迁移范围调整：按用户要求排除找回密码、多组织选择/切换，不新增这两个客户端入口；保留后端已有能力，不把它们列为后续客户端迁移任务。
+- 专家标准培训通过`ExpertTrainingPanel.tsx`接入已接单的STANDARD_TRAINING待办，读取既有材料接口；确认使用POST `/projects/standard-materials/confirm-read?projectId=...`，不发JSON body、版本或幂等键。以服务端canConfirmRead决定普通成员资格，负责人及未实际入项者只读。确认前重核原来源待办与材料内容，变更须重新阅读勾选；现有契约不提供按材料版本重新确认，保留首次确认时间。成功后完整待办按sourceBizType+sourceBizId续接；未知结果锁跨关闭/局部返回保留，显式GET核实时间，不自动重发；成功后的回读失败只重试读取。`StandardMaterialsContent.tsx`共用策略官与专家安全正文、HTTP(S)链接和鉴权下载，不变更PM编辑发布逻辑。领航员标准维护仍待迁移。
+- 执行专家准入考试通过`ExpertExamPanel.tsx`接入真实当前待办，门禁为EXPERT、ACCEPTED及ENTRANCE_EXAM来源；调用既有current/enter/submit/cancel四接口，不改后端或数据库。`expert-exam-form.ts`校验必答、附件、诚信及2MiB UTF-8答卷，上海截止显式按+08:00解析。原卷恢复不等于恢复答案，草稿与未知写入锁仅留来源隔离的页面内存；关闭弹框保留，离开与角色切换保护。聚合PENDING/PASSED只暂停写入，不证明某次未知命令成功，NOT_PASSED不直接解释为落榜；恢复同attempt/版本/试卷才重新编辑。个人中心项目详情仅查询聚合状态，不借管理阅卷权限。`StrategistExamFiles`通过默认PM、显式EXPERT的role参数复用上传。领航员准入模块仍未迁移。
 
 - 业务前端任务负责 Web、Electron 和必要客户端适配；同步 main 已有后端代码不属于自行扩展业务。以后端现有 API 和 shared DTO/schema 为准；不得自行新增后端业务接口、修改 Prisma schema 或数据库迁移。用户已授权的后端例外为支撑 Electron 页面直接 HTTP 的最小来源/CORS/Cookie 适配，以及 2026-10-23 组织 Logo 的现有上传/创建/更新接口认领与替换释放；Logo 例外不新增路由、Prisma schema 或迁移，不扩展排班业务。已有接口按当前契约对接，剩余语义缺口先列清单并与后端确认，不提前把设计写成已实现契约。个人中心已授权接入现有资料、改密和组织读取接口；仅扩展 shared 客户端能力接口，不修改后端 DTO/schema。 Agent 后端任务按当前授权范围在 `apps/agent` 实现接口、执行状态和存储，涉及业务后端仍按其职责协作。
 - 业务 UI 放 `apps/web/src/modules/<业务>/`，路由接入 `app/App.tsx`；业务后端模块放 `apps/server/src/modules/<业务>/`，在 `application.ts` 装配。Agent UI 与服务分别落在 `apps/agent-web`、`apps/agent`。
@@ -709,8 +715,8 @@ React 页面 → services/api → packages/platform
 - Swagger 字段说明是新增/修改接口的必交付项：所有请求、响应、嵌套对象、数组项及参数均需中文 `description`，枚举逐值解释，说明条件必填/默认行为/单位/格式/null，并提供真实可校验示例；未接入和占位能力如实标注。常规枚举使用 `type: string` + `enum`，避免无必要的 `anyOf`。完整规则和验收要求见 `docs/backend/API.md` 的“Swagger 文档标准”。
 - 已有业务 API 的客户端变更同步维护 platform Web/桌面适配、Electron preload/受限 IPC 与页面调用；业务后端 DTO/schema、路由、service 和数据库变更由业务后端负责人实现。Agent 契约由 Agent 前后端共同确认，在 shared 维护唯一跨应用定义。
 - 业务 UI 统一通过平台适配层访问业务能力；Agent UI 集中通过自身客户端层访问 Agent 服务。Electron 只承担桌面能力，不复制业务页面、不内嵌业务后端或 Pi 执行进程。
-- Web 与 Electron 的业务 UI 只维护 `apps/web` 这一份组件、路由和业务逻辑；优先复用 `components/ui/`，不再引入 Ant Design 或另一套业务路由。按钮尺寸通过公共 `size` 变体管理。独立 Agent UI 在 `apps/agent-web` 维护和构建，隔离样式。
-- 认证页当前采用满页浅青背景与右侧白色悬浮卡片。登录与完善资料共用固定全屏潮汐背景及卡片流光，表单切换不重建背景或重启动画；不添加网格或鼠标拖尾。桌面左侧沿用 main 的英文引导、中文主标题与辅助说明层级，使用当前的潮汐主题文案、协作说明和欢迎语。手机端使用相同背景与白卡，隐藏左侧文案。
+- Web 与 Electron 的业务 UI 只维护 `apps/web` 这一份组件、路由和业务逻辑；优先复用 `components/ui/`，不再引入 Ant Design 或另一套业务路由。按钮尺寸通过公共 `size` 变体管理；页头、卡片、弹窗、表格、分页及空/加载状态复用公共组合，字号、间距与圆角以 [业务界面规范](docs/UI_STANDARDS.md) 为准，不再复制模块外壳。独立 Agent UI 在 `apps/agent-web` 维护和构建，隔离样式。
+- 认证页当前采用满页浅青背景与右侧白色悬浮卡片。登录与完善资料共用固定全屏潮汐背景及卡片流光，表单切换不重建背景或重启动画；卡片宽高以320ms平滑过渡，按自然内容高度同步校验提示与响应式变化，减少动态效果时即时调整。顶部品牌对齐窗口页边距（桌面40px、手机16px），不受中间1120px内容容器限制；不添加网格或鼠标拖尾。桌面左侧沿用 main 的英文引导、中文主标题与辅助说明层级，使用当前的潮汐主题文案、协作说明和欢迎语。手机端使用相同背景与白卡，隐藏左侧文案。
 - 资料页使用 20px 标题并收紧顶部间距，分为“基础信息”（密码、确认密码）与“个人信息”（姓名、昵称、身份证号、邮箱）两段，保留全部字段与校验；375px 宽手机保持两列，仅宽度不超过 360px 时改为单列，手机卡片左右内边距为 16px。初始、校验错误和提交提示状态以在 1280×720 桌面及典型 375px 宽手机视口内单页完整展示为目标，手机和矮窗仍保留自然滚动，不隐藏溢出内容。
 - 业务前端优先复用现有通用 UI、主题变量和基础样式，认证展示组件放 `modules/auth/components/`。业务页面只通过 `services/api.ts` 调用平台能力；不重新引入旧认证契约、前端本地验证码 mock 或上传服务。
 - 登录、注册页不主动查询 `/users/me`；工作台与个人中心启动时查询，开发和生产均恢复真实会话。不自动发起健康检查。发码只在点击且手机号校验通过后请求 `/auth/sms/send`，使用 `scene=login`。当前后端成功 data 为“验证码已发送，请注意查收”，不另设验证码、短信模式或成功重发间隔字段；页面保留服务端提示，并在成功后展示与后端 mock 共用的 shared 常量 `MOCK_SMS_CODE`，不在页面另行写死验证码，提示已含该验证码时不重复追加。接入真实短信时同步移除固定测试码提示；不根据输入本地判定验证成功，也不猜测成功倒计时。HTTP 429 时使用后端 `Retry-After` 禁止重发。失败显示后端错误或网络错误，不显示测试码、不回退到模拟成功。

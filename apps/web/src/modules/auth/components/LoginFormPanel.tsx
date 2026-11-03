@@ -9,7 +9,7 @@ import { loginInputClassName, submitButtonClassName } from '../styles';
 
 function LoginInputIcon({ type }: { type: 'phone' | 'code' | 'password' }) {
   return (
-    <span className="pointer-events-none absolute top-1/2 left-[12px] z-10 -translate-y-1/2 text-[#86a0b1] [&_svg]:h-[17px] [&_svg]:w-[17px] [&_svg]:fill-none [&_svg]:stroke-current [&_svg]:[stroke-linecap:round] [&_svg]:[stroke-linejoin:round] [&_svg]:[stroke-width:1.7]">
+    <span className="pointer-events-none absolute top-1/2 left-[12px] z-10 -translate-y-1/2 text-muted-foreground [&_svg]:h-[17px] [&_svg]:w-[17px] [&_svg]:fill-none [&_svg]:stroke-current [&_svg]:[stroke-linecap:round] [&_svg]:[stroke-linejoin:round] [&_svg]:[stroke-width:1.7]">
       {type === 'phone' ? <PhoneIcon /> : type === 'code' ? <ShieldCheckIcon /> : <LockIcon />}
     </span>
   );
@@ -110,7 +110,7 @@ export default function LoginFormPanel({ controller }: { controller: LoginFormCo
       <Button
         type="submit"
         size="authSubmit"
-        className={`${submitButtonClassName} ![font-family:inherit]`}
+        className={submitButtonClassName}
         loading={submitting}
         disabled={sms.sending}
       >

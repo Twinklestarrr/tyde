@@ -7,6 +7,7 @@
 | 文档                                  | 用途                                                       |
 | ------------------------------------- | ---------------------------------------------------------- |
 | [当前功能](IMPLEMENTED_FEATURES.md)   | Web、Electron、独立 Agent 已接入及未开放范围               |
+| [界面规范](UI_STANDARDS.md)           | 业务 Web/Electron 的统一尺度、公共组件及用途差异           |
 | [验证入口](VERIFICATION.md)           | 回归方式、已记录基线和仍待验收范围                         |
 | [测试部署](DEPLOY_TEST.md)            | 交付包、服务、存储、HTTPS和维护命令                        |
 | [release 发布](RELEASE_DEPLOYMENT.md) | release 发布目标、跨仓同步的显式启用与失败处理             |

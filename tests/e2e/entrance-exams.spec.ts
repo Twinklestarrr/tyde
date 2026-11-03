@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Dialog, type Locator, type Page } from '@playwright/test';
+import { strategistProjectCard } from '../helpers/strategist-project-card';
 import { expectPickerOnBodyClick } from './native-picker';
 import { mkdir } from 'node:fs/promises';
 import type {
@@ -374,11 +375,15 @@ async function backend(page: Page, desktop = false) {
       state.user.selectedRole = role;
       return reply({ selectedRole: role, roles: state.user.roles });
     }
-    if (
-      ['/api/v1/projects/list', '/api/v1/projects/manager/list'].includes(path) &&
-      log.method === 'GET'
-    )
-      return reply([]);
+    if (path === '/api/v1/projects/list' && log.method === 'GET') return reply([]);
+    if (path === '/api/v1/projects/manager/list' && log.method === 'GET')
+      return reply([
+        {
+          ...strategistProjectCard(project),
+          currentNodeCode: 'PRODUCTION_TASK',
+          branchNodeCode: 'ENTRANCE_EXAM_GRADING',
+        },
+      ]);
     if (path === '/api/v1/projects/draft/current' && log.method === 'GET')
       return reply({ hasDraft: false, draft: null });
     if (path === '/api/v1/expert-assignments/my-tasks' && log.method === 'POST') return reply([]);
@@ -716,7 +721,7 @@ async function createEditor(page: Page, panel: Locator) {
 async function fillEditor(editor: Locator, name = '完整发布考试') {
   await editor.getByRole('textbox', { name: '考试名称', exact: true }).fill(name);
   await editor.getByRole('spinbutton', { name: '答题时限（分钟）', exact: true }).fill('30');
-  await editor.getByLabel(/^截止时间（上海时间）\s*\*$/).fill('2099-12-31T18:20:30');
+  await editor.getByLabel(/^截止日期（上海时间）\s*\*$/).fill('2099-12-31');
   await editor.getByRole('spinbutton', { name: '试卷满分', exact: true }).fill('20');
   await editor.getByRole('spinbutton', { name: '准入分数线', exact: true }).fill('12');
   await editor
@@ -777,7 +782,8 @@ for (const [mode, desktop] of [
     if (!desktop) await screenshot(page, 'management');
     const editor = await createEditor(page, panel);
     await fillEditor(editor);
-    await expectPickerOnBodyClick(editor.getByLabel(/^截止时间（上海时间）\s*\*$/));
+    await expect(editor.getByLabel(/^截止日期（上海时间）\s*\*$/)).toHaveAttribute('type', 'date');
+    await expectPickerOnBodyClick(editor.getByLabel(/^截止日期（上海时间）\s*\*$/));
     await editor.getByRole('button', { name: '添加试卷', exact: true }).click();
     await editor
       .getByRole('textbox', { name: '试卷2题目1题干', exact: true })
@@ -801,7 +807,7 @@ for (const [mode, desktop] of [
     expect(calls('publish')[0]!.body).toMatchObject({
       projectId,
       examName: '完整发布考试',
-      registrationDeadline: '2099-12-31 18:20:30',
+      registrationDeadline: '2099-12-31 23:59:59',
       durationMinutes: 30,
       fullScore: 20,
       passScore: 12,
@@ -893,13 +899,13 @@ test('多卷题目与人工自动轮次校验阻止错误分数、时间和敏�
     'true',
   );
   await editor.getByRole('spinbutton', { name: '准入分数线', exact: true }).fill('12');
-  await editor.getByLabel(/^截止时间（上海时间）\s*\*$/).fill('2020-01-01T00:00:01');
+  await editor.getByLabel(/^截止日期（上海时间）\s*\*$/).fill('2020-01-01');
   await editor.getByRole('button', { name: '发布考试', exact: true }).click();
-  await expect(editor.getByLabel(/^截止时间（上海时间）\s*\*$/)).toHaveAttribute(
+  await expect(editor.getByLabel(/^截止日期（上海时间）\s*\*$/)).toHaveAttribute(
     'aria-invalid',
     'true',
   );
-  await editor.getByLabel(/^截止时间（上海时间）\s*\*$/).fill('2099-12-31T18:20:30');
+  await editor.getByLabel(/^截止日期（上海时间）\s*\*$/).fill('2099-12-31');
   await choose(page, editor, '试卷1题目1分值来源', '手动分值');
   await editor.getByRole('spinbutton', { name: '试卷1题目1分值', exact: true }).fill('19');
   await editor.getByRole('button', { name: '发布考试', exact: true }).click();
@@ -995,7 +1001,7 @@ test('协作身份403只读与候选503禁写，真实切换角色后不读取�
   await expect(panel.getByRole('button', { name: '组织考试', exact: true })).toBeEnabled();
   await page.getByRole('combobox', { name: '当前角色', exact: true }).click();
   await page.getByRole('option', { name: '执行专家', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
   const before = calls('management').length;
   await page.goto(`${origin}/#/strategist/projects/${projectId}`);
   await expect(page).toHaveURL(/#\/$/);
@@ -1005,6 +1011,74 @@ test('协作身份403只读与候选503禁写，真实切换角色后不读取�
   ).toEqual([{ role: 'EXPERT' }]);
   expect(calls('publish')).toHaveLength(0);
 });
+
+for (const viewport of [
+  { width: 1280, height: 800 },
+  { width: 375, height: 812 },
+  { width: 812, height: 375 },
+]) {
+  test(`考试筛选栏在${viewport.width}宽度下标签、控件和按钮对齐`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await backend(page);
+    const panel = await openExams(page, 'admission');
+    const admissions = panel.getByRole('region', { name: '项目准入情况', exact: true });
+    await expect(admissions.getByRole('row').filter({ hasText: '应试甲' })).toBeVisible();
+    async function aligned(
+      region: Locator,
+      searchLabel: string,
+      statusLabel: string,
+      refresh: string,
+      name: string,
+    ) {
+      const form = region.locator('form');
+      const controls = [
+        form.getByRole('textbox', { name: searchLabel, exact: true }),
+        form.getByRole('combobox', { name: statusLabel, exact: true }),
+        ...['查询', '重置', refresh].map((label) =>
+          form.getByRole('button', { name: label, exact: true }),
+        ),
+      ];
+      const boxes = await Promise.all(
+        controls.map(async (control) => {
+          await expect(control).toBeVisible();
+          return (await control.boundingBox())!;
+        }),
+      );
+      const height = viewport.width <= 640 ? 44 : 40;
+      for (const box of boxes) expect(box.height).toBe(height);
+      if (viewport.width >= 1024) {
+        const tops = boxes.map((box) => box.y);
+        const bottoms = boxes.map((box) => box.y + box.height);
+        expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(1);
+        expect(Math.max(...bottoms) - Math.min(...bottoms)).toBeLessThanOrEqual(1);
+      }
+      const labels = form.locator('label');
+      await expect(labels).toHaveCount(2);
+      for (const label of await labels.all()) await expect(label).toHaveCSS('line-height', '20px');
+      const bounds = (await form.boundingBox())!;
+      for (const box of boxes) {
+        expect(box.x).toBeGreaterThanOrEqual(bounds.x - 1);
+        expect(box.x + box.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
+      }
+      expect(await form.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+      await mkdir('artifacts/ui-alignment', { recursive: true });
+      await form.screenshot({
+        path: `artifacts/ui-alignment/${name}-${viewport.width}.png`,
+        animations: 'disabled',
+      });
+    }
+    await aligned(admissions, '搜索准入人员', '准入状态', '刷新准入情况', 'admissions');
+    const list = await roster(page, panel);
+    await aligned(
+      list.getByRole('region', { name: '考试花名册', exact: true }),
+      '搜索考试人员',
+      '考试结果',
+      '刷新名单',
+      'roster',
+    );
+  });
+}
 
 test('项目准入与考试名单分别使用真实GET和POST筛选分页，考试通过不冒充入项', async ({ page }) => {
   const { calls } = await backend(page);
@@ -1109,7 +1183,7 @@ test('网络未知发布结果跨弹框关闭仍锁写，显式管理回读后�
 });
 
 test('发布成功回读失败保留已成功事实，仅显式读取恢复不重复发布', async ({ page }) => {
-  const { state, calls } = await backend(page);
+  const { state, calls, requests } = await backend(page);
   state.failReadAfterWrite = true;
   const panel = await openExams(page);
   const editor = await createEditor(page, panel);
@@ -1125,6 +1199,9 @@ test('发布成功回读失败保留已成功事实，仅显式读取恢复不�
     }),
   ).toBeVisible();
   expect(calls('publish')).toHaveLength(1);
+  expect(requests.filter((row) => row.path === '/api/v1/projects/manager/list')).not.toHaveLength(
+    0,
+  );
   await expect(panel.getByRole('button', { name: '组织考试', exact: true })).toBeDisabled();
   state.managementStatus = 200;
   state.detailStatus = 200;
@@ -1136,43 +1213,84 @@ test('发布成功回读失败保留已成功事实，仅显式读取恢复不�
   expect(calls('publish')).toHaveLength(1);
 });
 
-test('导入只填当前表单、敏感附件一次上传与鉴权下载，375弹框安全关闭恢复焦点', async ({ page }) => {
-  const { calls, requests } = await backend(page);
+test('导入弹框确认后回填、取消与失败保留草稿，敏感附件鉴权及375弹框焦点恢复', async ({ page }) => {
+  const { state, calls, requests } = await backend(page);
   const panel = await openExams(page);
   await page.setViewportSize({ width: 375, height: 812 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect(page.getByRole('toolbar', { name: '项目操作', exact: true })).toBeInViewport();
   const opener = panel.getByRole('button', { name: '组织考试', exact: true });
   const editor = await createEditor(page, panel);
   await fillEditor(editor, '导入前未保存名称');
-  await editor.getByText('导入试卷与下载模板', { exact: true }).click();
+  const importOpener = editor.getByRole('button', { name: '导入试卷与下载模板', exact: true });
+  await importOpener.click();
+  const importDialog = page.getByRole('dialog', { name: '导入试卷', exact: true });
+  await expect(importDialog).toBeVisible();
+  const unexpectedDialogs: string[] = [];
+  const dismissUnexpected = async (dialog: Dialog) => {
+    unexpectedDialogs.push(dialog.message());
+    await dialog.dismiss();
+  };
+  page.on('dialog', dismissUnexpected);
+  await page.keyboard.press('Escape');
+  await expect(importDialog).toHaveCount(0);
+  await expect(editor).toBeVisible();
+  await expect(importOpener).toBeFocused();
+  page.off('dialog', dismissUnexpected);
+  expect(unexpectedDialogs).toEqual([]);
+  await importOpener.click();
+  await expect(
+    importDialog.getByRole('button', { name: '确认并解析', exact: true }),
+  ).toBeDisabled();
+  await expect(importDialog).toContainText('确认解析后将替换当前表单中的考试配置');
   const [template] = await Promise.all([
     page.waitForEvent('download'),
-    editor.getByRole('button', { name: 'TXT模板', exact: true }).click(),
+    importDialog.getByRole('button', { name: 'TXT模板', exact: true }).click(),
   ]);
   expect(template.suggestedFilename()).toBe('entrance-exam-import-v1.txt');
-  await editor.getByLabel('选择试卷文件', { exact: true }).setInputFiles({
+  const sourceFile = {
     name: 'fixture.txt',
     mimeType: 'text/plain',
     buffer: Buffer.from('isolated source exam'),
-  });
-  page.once('dialog', (dialog) => dialog.dismiss());
-  await editor.getByRole('button', { name: '解析并填入表单', exact: true }).click();
+  };
+  await importDialog.getByLabel('选择试卷文件', { exact: true }).setInputFiles(sourceFile);
   expect(calls('import/parse')).toHaveLength(0);
+  await expect(importDialog).toContainText('fixture.txt');
+  expect(await importDialog.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await screenshot(page, 'mobile-import');
+  await importDialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(importDialog).toHaveCount(0);
+  await expect(importOpener).toBeFocused();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden');
   await expect(editor.getByRole('textbox', { name: '考试名称', exact: true })).toHaveValue(
     '导入前未保存名称',
   );
-  page.once('dialog', (dialog) => dialog.accept());
-  await editor.getByRole('button', { name: '解析并填入表单', exact: true }).click();
+  await importOpener.click();
+  await expect(
+    importDialog.getByRole('button', { name: '确认并解析', exact: true }),
+  ).toBeDisabled();
+  await importDialog.getByLabel('选择试卷文件', { exact: true }).setInputFiles(sourceFile);
+  state.importStatus = 503;
+  await importDialog.getByRole('button', { name: '确认并解析', exact: true }).click();
+  await expect(importDialog.getByRole('alert')).toContainText('导入预览读取结果');
+  expect(calls('import/parse')).toHaveLength(1);
+  await expect(importDialog).toContainText('fixture.txt');
+  await expect(editor.locator('#exam-field-examName')).toHaveValue('导入前未保存名称');
+  state.importStatus = 200;
+  await importDialog.getByRole('button', { name: '确认并解析', exact: true }).click();
+  await expect(importDialog).toHaveCount(0);
+  await expect(importOpener).toBeFocused();
   await expect(editor.getByRole('textbox', { name: '考试名称', exact: true })).toHaveValue(
     '导入预览考试',
   );
-  expect(calls('import/parse')).toHaveLength(1);
-  expect(calls('import/parse')[0]).toMatchObject({
+  expect(calls('import/parse')).toHaveLength(2);
+  expect(calls('import/parse')[1]).toMatchObject({
     body: null,
     fileName: 'fixture.txt',
     form: { projectId: String(projectId) },
   });
   expect(calls('publish')).toHaveLength(0);
-  await expect(editor).toContainText('远程文档导入暂未开放');
+  await expect(editor.getByRole('status')).toContainText('试卷已解析到当前表单');
   await editor.getByLabel('上传试卷1题目1题干附件', { exact: true }).setInputFiles({
     name: 'question.txt',
     mimeType: 'text/plain',

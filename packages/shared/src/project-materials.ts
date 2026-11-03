@@ -27,6 +27,8 @@ export interface ProjectStandardMaterialsInput {
 
 export interface ProjectStandardMaterialsApi {
   getProjectStandardMaterials(projectId: number): Promise<ProjectStandardMaterials>;
+  /** 仅实际入项普通专家可确认；重复确认保留首次时间，不改变项目主线或版本。 */
+  confirmProjectStandardMaterialsRead(projectId: number): Promise<ProjectStandardMaterials>;
   /** 无客户端版本字段或幂等键；网络未知结果应先显式读取核实。 */
   updateProjectStandardMaterials(
     input: ProjectStandardMaterialsInput,

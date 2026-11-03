@@ -55,7 +55,7 @@ export function StrategistExamFields({
     value: string,
     onValue: (value: string) => void,
     options: {
-      type?: 'number' | 'datetime-local';
+      type?: 'number' | 'date';
       required?: boolean;
       multiline?: boolean;
       maxLength?: number;
@@ -89,13 +89,7 @@ export function StrategistExamFields({
               size="profile"
               value={value}
               type={options.type ?? 'text'}
-              step={
-                options.type === 'datetime-local'
-                  ? 1
-                  : options.type === 'number'
-                    ? 'any'
-                    : undefined
-              }
+              step={options.type === 'number' ? 'any' : undefined}
               readOnly={options.readOnly}
               maxLength={options.maxLength}
               aria-invalid={invalid || undefined}
@@ -199,10 +193,17 @@ export function StrategistExamFields({
             )}
           {text(
             'registrationDeadline',
-            '截止时间（上海时间）',
-            values.registrationDeadline,
-            (value) => update('registrationDeadline', value),
-            { type: 'datetime-local', required: true },
+            '截止日期（上海时间）',
+            values.registrationDeadline.slice(0, 10),
+            (value) => {
+              if (value !== values.registrationDeadline.slice(0, 10))
+                update('registrationDeadline', value);
+            },
+            {
+              type: 'date',
+              required: true,
+              description: '新选日期在上海当天结束时截止，日期未修改时保留原截止时间。',
+            },
           )}
           {text('fullScore', '试卷满分', values.fullScore, (value) => update('fullScore', value), {
             type: 'number',

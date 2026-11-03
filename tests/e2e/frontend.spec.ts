@@ -640,11 +640,15 @@ for (const [mode, origin] of [
   });
 }
 
-test('个人资料在1280与375视口保留字段、键盘操作和完整单页布局', async ({ page }) => {
+test('个人资料在1920、1280与375视口保留字段、键盘操作和完整单页布局', async ({ page }) => {
   await webBackend(page);
-  for (const width of [1280, 375]) {
-    await page.setViewportSize({ width, height: width === 1280 ? 720 : 812 });
+  for (const width of [1920, 1280, 375]) {
+    const height = width === 375 ? 812 : 720;
+    await page.setViewportSize({ width, height });
     await openAuth(page, 'http://127.0.0.1:5176');
+    expect((await page.locator('.auth-page > header').boundingBox())!.x).toBe(
+      width === 375 ? 16 : 40,
+    );
     await page.getByRole('tab', { name: '验证码登录', exact: true }).focus();
     await page.keyboard.press('ArrowRight');
     await expect(page.getByRole('tab', { name: '密码登录', exact: true })).toHaveAttribute(
@@ -660,7 +664,7 @@ test('个人资料在1280与375视口保留字段、键盘操作和完整单页�
         const bounds = element.getBoundingClientRect();
         return { width: bounds.width, height: bounds.height };
       }),
-    ).toEqual({ width, height: width === 1280 ? 720 : 812 });
+    ).toEqual({ width, height });
     await page.getByRole('button', { name: '提交', exact: true }).click();
     await expect(page.getByText('请输入密码', { exact: true })).toBeVisible();
     await expect(page.getByText('请输入姓名', { exact: true })).toBeVisible();
@@ -685,6 +689,69 @@ test('个人资料在1280与375视口保留字段、键盘操作和完整单页�
       animations: 'disabled',
     });
   }
+});
+
+test('认证卡片尺寸平滑切换，背景连续且动态校验内容完整显示', async ({ page }) => {
+  await webBackend(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await openAuth(page, 'http://127.0.0.1:5176');
+  await page.getByLabel(/^手机号/).hover();
+  const card = page.getByRole('main');
+  const before = (await card.boundingBox())!;
+  const background = await page.locator('.auth-atmosphere').elementHandle();
+  const recording = await page.evaluateHandle(() => {
+    const state = { active: true, sizes: [] as { width: number; height: number }[] };
+    const sample = () => {
+      const bounds = document.getElementById('main-content')!.getBoundingClientRect();
+      state.sizes.push({ width: bounds.width, height: bounds.height });
+      if (state.active) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+    return state;
+  });
+  await smsLogin(page);
+  await expect(page.getByRole('heading', { name: '完善个人资料', exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      card.evaluate((element) =>
+        [...element.getAnimations(), ...element.parentElement!.getAnimations()]
+          .filter((animation) => animation instanceof CSSTransition)
+          .every((animation) => animation.playState === 'finished'),
+      ),
+    )
+    .toBe(true);
+  const after = (await card.boundingBox())!;
+  const sizes = await recording.evaluate((state) => {
+    state.active = false;
+    return state.sizes;
+  });
+  expect(after.width).toBeGreaterThan(before.width + 100);
+  expect(after.height).toBeGreaterThan(before.height + 2);
+  expect(sizes.some(({ width }) => width > before.width + 1 && width < after.width - 1)).toBe(true);
+  expect(sizes.some(({ height }) => height > before.height + 1 && height < after.height - 1)).toBe(
+    true,
+  );
+  expect(await background!.evaluate((element) => element.isConnected)).toBe(true);
+
+  await page.getByRole('button', { name: '提交', exact: true }).click();
+  await expect(page.getByText('请输入姓名', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '提交', exact: true })).toBeInViewport({
+    ratio: 1,
+  });
+  await page.getByRole('link', { name: '返回登录 / 注册', exact: true }).click();
+  await expect
+    .poll(() => card.evaluate((element) => Math.round(element.getBoundingClientRect().height)))
+    .toBe(Math.round(before.height));
+  expect(await background!.evaluate((element) => element.isConnected)).toBe(true);
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await smsLogin(page);
+  await expect(page.getByRole('heading', { name: '完善个人资料', exact: true })).toBeVisible();
+  expect(await card.evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0s');
+  await expect(page.getByRole('button', { name: '提交', exact: true })).toBeInViewport({
+    ratio: 1,
+  });
 });
 
 async function desktopBackend(origin = 'http://127.0.0.1:5177') {

@@ -114,8 +114,8 @@ export function ProductionPlanFields({
   }
 
   return (
-    <div className="space-y-[28px]">
-      <section aria-label="预估数据" className="space-y-[18px]">
+    <div className="space-y-4">
+      <section aria-label="预估数据" className="space-y-3">
         <h3 id="production-estimates-title" className="text-[16px] font-semibold">
           预估数据
         </h3>
@@ -123,7 +123,7 @@ export function ProductionPlanFields({
           CPD 为每人每天的产能。项目需求人数：{productionPlanNumber(reference.requiredHeadcount)}{' '}
           人。
         </p>
-        <div className="grid gap-[18px] sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {field('operatorHeadcount', '作业人数', { type: 'number', required: true })}
           {field('operatorCpd', '作业 CPD', { type: 'number', required: true })}
           {field('inspectorHeadcount', '质检人数（选填）', { type: 'number' })}
@@ -133,11 +133,11 @@ export function ProductionPlanFields({
           })}
         </div>
       </section>
-      <section aria-label="考核设置" className="space-y-[18px] border-t pt-[24px]">
+      <section aria-label="考核设置" className="space-y-3 border-t pt-4">
         <h3 id="production-assessments-title" className="text-[16px] font-semibold">
           考核设置
         </h3>
-        <div className="flex flex-wrap gap-x-[28px] gap-y-[16px]">
+        <div className="flex flex-wrap gap-x-6 gap-y-3">
           <label className="flex min-h-11 cursor-pointer items-center gap-[10px] text-[14px]">
             <input
               type="checkbox"
@@ -163,7 +163,7 @@ export function ProductionPlanFields({
           })}
         </div>
       </section>
-      <section aria-label="人群画像" className="space-y-[18px] border-t pt-[24px]">
+      <section aria-label="人群画像" className="space-y-3 border-t pt-4">
         <header className="flex flex-wrap items-center justify-between gap-[12px]">
           <h3 id="production-crowds-title" className="text-[16px] font-semibold">
             人群画像
@@ -183,7 +183,7 @@ export function ProductionPlanFields({
             </Button>
           )}
         </header>
-        <details className="rounded-[10px] border bg-muted p-[14px] text-[13px] leading-6">
+        <details className="rounded-[10px] border bg-muted p-3 text-[13px] leading-5">
           <summary className="cursor-pointer font-medium">查看项目创建时的人员要求</summary>
           <dl className="mt-[12px] grid gap-x-[20px] gap-y-[8px] sm:grid-cols-2">
             <div>
@@ -214,9 +214,9 @@ export function ProductionPlanFields({
         </details>
         {collectionError('crowds')}
         {crowds.fields.map((crowd, index) => (
-          <fieldset key={crowd.id} className="space-y-[14px] rounded-[12px] border p-[16px]">
+          <fieldset key={crowd.id} className="space-y-3 rounded-xl border p-3">
             <legend className="px-[4px] text-[14px] font-medium">人群 {index + 1}</legend>
-            <div className="grid gap-[16px] sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
               {field(`crowds.${index}.crowdName`, `人群${index + 1}名称`, {
                 required: true,
                 maxLength: 100,
@@ -240,7 +240,7 @@ export function ProductionPlanFields({
           </fieldset>
         ))}
       </section>
-      <section aria-label="生产阶段" className="space-y-[18px] border-t pt-[24px]">
+      <section aria-label="生产阶段" className="space-y-3 border-t pt-4">
         <header className="flex flex-wrap items-center justify-between gap-[12px]">
           <h3 id="production-stages-title" className="text-[16px] font-semibold">
             生产阶段
@@ -275,7 +275,7 @@ export function ProductionPlanFields({
           const daysError = form.getFieldState(`stages.${index}.workdayCount`, form.formState).error
             ?.message;
           return (
-            <fieldset key={stage.id} className="space-y-[16px] rounded-[12px] border p-[16px]">
+            <fieldset key={stage.id} className="space-y-3 rounded-xl border p-3">
               <legend className="px-[4px] text-[14px] font-medium">阶段 {index + 1}</legend>
               <div className="flex items-start gap-[12px]">
                 <div className="min-w-0 flex-1">
@@ -296,7 +296,7 @@ export function ProductionPlanFields({
                   </Button>
                 )}
               </div>
-              <div className="grid gap-[18px] sm:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {field(`stages.${index}.startDate`, `阶段${index + 1}开始日期`, {
                   required: true,
                   type: 'date',

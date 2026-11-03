@@ -59,8 +59,15 @@
 
 .auth-card {
   position: relative;
+  height: var(--auth-card-height, auto);
   background-color: color-mix(in srgb, var(--card) 94%, transparent);
   backdrop-filter: blur(16px);
+}
+
+.auth-card-viewport {
+  height: 100%;
+  overflow: clip;
+  overflow-clip-margin: 16px;
 }
 
 .auth-card::before {
@@ -137,6 +144,14 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .auth-columns {
+    transition: grid-template-columns 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .auth-card {
+    transition: height 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
   .auth-aurora {
     animation: auth-tide-drift 18s ease-in-out infinite alternate;
   }

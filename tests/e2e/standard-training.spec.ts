@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { strategistProjectCard } from '../helpers/strategist-project-card';
 import type {
   AuthUser,
   ProjectStandardMaterials,
@@ -122,6 +123,7 @@ async function backend(page: Page, desktop = false) {
     uploadStatus: 200,
     networkFailure: false,
     failReadAfterWrite: false,
+    listNode: null as string | null,
   };
   const requests: RequestLog[] = [];
   await page.route('**/api/v1/**', async (route) => {
@@ -151,8 +153,14 @@ async function backend(page: Page, desktop = false) {
       state.user.selectedRole = role;
       return reply({ selectedRole: role, roles: state.user.roles });
     }
-    if (['/api/v1/projects/list', '/api/v1/projects/manager/list'].includes(log.path))
-      return reply([]);
+    if (log.path === '/api/v1/projects/list') return reply([]);
+    if (log.path === '/api/v1/projects/manager/list')
+      return reply([
+        strategistProjectCard({
+          ...project,
+          currentNodeCode: state.listNode ?? state.materials.currentNodeCode,
+        }),
+      ]);
     if (log.path === '/api/v1/projects/draft/current')
       return reply({ hasDraft: false, draft: null });
     if (log.path === '/api/v1/expert-assignments/my-tasks') return reply([]);
@@ -260,7 +268,7 @@ for (const [mode, desktop] of [
   ['Web', false],
   ['桌面运行配置', true],
 ] as const) {
-  test(`${mode}标准读取、附件下载及发布使用现有Cookie契约，发布后停留标准模块`, async ({
+  test(`${mode}标准读取、附件下载及发布使用现有Cookie契约，发布后续接最新待办模块`, async ({
     page,
   }) => {
     const { requests, calls } = await backend(page, desktop);
@@ -276,8 +284,7 @@ for (const [mode, desktop] of [
       .getByRole('textbox', { name: '标准链接', exact: true })
       .fill('https://example.com/new-standard');
     await publish(page);
-    await expect(panel).toContainText('新版作业标准');
-    await expect(page.getByRole('tab', { name: '标准与培训', exact: true })).toHaveAttribute(
+    await expect(page.getByRole('tab', { name: '招募执行专家', exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -285,6 +292,8 @@ for (const [mode, desktop] of [
       'aria-current',
       'step',
     );
+    await page.getByRole('tab', { name: '标准与培训', exact: true }).click();
+    await expect(panel).toContainText('新版作业标准');
     expect(calls('projects/standard-materials/update').map((row) => row.body)).toEqual([
       {
         projectId,
@@ -402,15 +411,23 @@ test('保存成功而回读失败时不重复提交，跨模块恢复只读取�
   const panel = await editMaterials(page);
   await panel.getByRole('textbox', { name: '标准正文', exact: true }).fill('已保存但待核实的标准');
   state.failReadAfterWrite = true;
+  state.listNode = 'STANDARD_TRAINING';
   await publish(page);
   await expect(panel).toContainText('标准材料已保存，但最新资料读取尚未完成，请重新读取核对。');
+  expect(calls('projects/manager/list')).not.toHaveLength(0);
   await page.getByRole('tab', { name: '招募执行专家', exact: true }).click();
   await page.getByRole('tab', { name: '标准与培训', exact: true }).click();
   await expect(
     panel.getByRole('button', { name: '编辑标准材料', exact: true }).and(panel.locator(':enabled')),
   ).toHaveCount(0);
   state.readStatus = 200;
+  state.listNode = null;
   await panel.getByRole('button', { name: '重新读取标准材料', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '招募执行专家', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.getByRole('tab', { name: '标准与培训', exact: true }).click();
   await expect(panel).toContainText('已保存但待核实的标准');
   await expect(panel.getByRole('button', { name: '编辑标准材料', exact: true })).toBeEnabled();
   expect(calls('projects/standard-materials/update')).toHaveLength(1);
@@ -436,7 +453,12 @@ test('未保存标准保护模块与角色切换，375px布局和详情弹框保
   );
   const before = requests.length;
   await page.getByRole('button', { name: '查看项目详情', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '项目详情', exact: true })).toBeVisible();
+  const dialog = page.getByRole('dialog', { name: '项目详情', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(project.projectNo, { exact: true })).toBeVisible();
+  const basicInfo = dialog.getByRole('region', { name: '基础信息', exact: true });
+  await expect(basicInfo).toContainText(project.projectName!);
+  await expect(basicInfo).toContainText(project.projectDescription!);
   await page.keyboard.press('Escape');
   await expect(panel.getByRole('textbox', { name: '标准正文', exact: true })).toHaveValue(
     '保留未保存草稿',

@@ -4,13 +4,14 @@ import { Link } from '@tanstack/react-router';
 import { ApiError, type AuthUser, type WorkbenchAttendanceCalendarStatus } from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
+import { Card, CardTitle } from '@/components/ui/card';
+import { EmptyState, LoadingState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { shanghaiToday } from '@/modules/organizations/common';
 import { api } from '@/services/api';
 import { AttendanceDayDialog, PersonalScheduleDialog } from './ProfileAttendanceDialogs';
 
-const panelClass = 'min-w-0 space-y-[20px] rounded-[8px] border bg-card p-[16px] sm:p-[24px]';
 const quietClass = 'text-[13px] leading-[22px] text-[var(--color-neutral-strong)]';
 const flowLabels = {
   PENDING: '待审批',
@@ -135,250 +136,255 @@ export function ProfileAttendance({
     } else setQueryMonth(month);
   }
   return (
-    <section aria-label="我的排班考勤" className={panelClass}>
-      <div>
-        <h3 className="text-[17px] leading-[26px] font-semibold">我的排班考勤</h3>
-        <p className={`mt-[6px] ${quietClass}`}>
-          查看本人排班、打卡与考勤汇总，点击日期查看详情和可用操作。
-        </p>
-      </div>
-      <form onSubmit={submit} className="flex min-w-0 flex-wrap items-end gap-[8px]">
-        <label className="min-w-0 flex-1 basis-[160px] text-[12px] leading-[20px]">
-          考勤月份
-          <Input
-            size="profile"
-            type="month"
-            min="1900-01"
-            max="9999-12"
-            value={month}
-            className="mt-[6px]"
-            aria-invalid={!!monthError}
-            aria-describedby={monthError ? 'profile-month-error' : undefined}
-            onChange={(event) => setMonth(event.target.value)}
-          />
-        </label>
-        <Button
-          type="submit"
-          variant="outline"
-          size="settings"
-          loading={attendance.isFetching || holidays.isFetching}
-        >
-          查询考勤
-        </Button>
-      </form>
-      {attendance.isSuccess && (
-        <div className="flex flex-wrap items-center justify-between gap-[12px] rounded-[8px] bg-muted p-[14px]">
-          <div className="min-w-0 space-y-[4px]">
-            <p className="text-[14px] font-medium">
-              {attendance.data.independentSchedule ? '个人排班' : '组织排班'}
-            </p>
-            <p className={quietClass}>
-              {attendance.data.permissions.canBatchSchedule
-                ? '可为自己设置工作日、休息日和班次。'
-                : attendance.data.independentSchedule
-                  ? '当前账号暂不可编辑排班。'
-                  : canManageOrganization
-                    ? '可前往组织管理的排班管理，为自己和组织成员安排班次。'
-                    : '组织班次由主管或管理员统一安排；你可以在这里查看本人排班与考勤。'}
-            </p>
-          </div>
-          {attendance.data.permissions.canBatchSchedule && (
-            <Button variant="outline" size="settings" onClick={() => setScheduleOpen(true)}>
-              为自己排班
-            </Button>
-          )}
-          {!attendance.data.independentSchedule && canManageOrganization && (
-            <Button asChild variant="outline" size="settings">
-              <Link to="/organization" search={{ tab: 'schedules' }}>
-                管理组织排班
-              </Link>
-            </Button>
-          )}
+    <Card asChild>
+      <section aria-label="我的排班考勤" className="space-y-5 p-5 sm:p-6">
+        <div>
+          <CardTitle asChild>
+            <h3>我的排班考勤</h3>
+          </CardTitle>
+          <p className={`mt-[6px] ${quietClass}`}>
+            查看本人排班、打卡与考勤汇总，点击日期查看详情和可用操作。
+          </p>
         </div>
-      )}
-      {notice && (
-        <p role="status" className={quietClass}>
-          {notice}
-        </p>
-      )}
-      {monthError && (
-        <p id="profile-month-error" role="alert" className="text-[13px] text-[var(--color-danger)]">
-          {monthError}
-        </p>
-      )}
-      {!canRead && (
-        <p className={quietClass}>当前组织关系暂不能读取考勤，请在我的组织中核对入组状态。</p>
-      )}
-      {canRead && attendance.isPending && (
-        <p role="status" className={quietClass}>
-          正在读取本人考勤…
-        </p>
-      )}
-      {attendance.isError && (
-        <div className="space-y-[8px]">
-          <ErrorNotice error={attendance.error} />
-          <Button variant="outline" size="settings" onClick={() => void attendance.refetch()}>
-            重新读取考勤
+        <form onSubmit={submit} className="flex min-w-0 flex-wrap items-end gap-[8px]">
+          <label className="min-w-0 flex-1 basis-[160px] text-[12px] leading-[20px]">
+            考勤月份
+            <Input
+              size="profile"
+              type="month"
+              min="1900-01"
+              max="9999-12"
+              value={month}
+              className="mt-[6px]"
+              aria-invalid={!!monthError}
+              aria-describedby={monthError ? 'profile-month-error' : undefined}
+              onChange={(event) => setMonth(event.target.value)}
+            />
+          </label>
+          <Button
+            type="submit"
+            variant="outline"
+            size="settings"
+            loading={attendance.isFetching || holidays.isFetching}
+          >
+            查询考勤
           </Button>
-        </div>
-      )}
-      {attendance.isSuccess && (
-        <>
-          <dl
-            aria-label="月度考勤汇总"
-            className="grid grid-cols-2 gap-[12px] text-[13px] sm:grid-cols-5"
-          >
-            {[
-              ['正常出勤', attendance.data.summary.presentCount],
-              ['迟到', attendance.data.summary.lateCount],
-              ['早退', attendance.data.summary.earlyLeaveCount],
-              ['请假', attendance.data.summary.leaveCount],
-              ['缺勤', attendance.data.summary.absentCount],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-[8px] bg-muted p-[12px]">
-                <dt className="text-muted-foreground">{label}</dt>
-                <dd className="mt-[4px] text-[18px] font-semibold">
-                  {value}
-                  <span className="ml-[4px] text-[12px] font-normal">天</span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-          {attendance.data.days.every((day) => day.calendarStatus === 'UNSCHEDULED') && (
-            <p className={quietClass}>本月暂无排班记录</p>
-          )}
-          <div aria-label={`${queryMonth} 本人考勤月历`}>
-            <div
-              className="mb-[6px] grid grid-cols-7 gap-[4px] text-center text-[12px] text-muted-foreground"
-              aria-hidden
-            >
-              {['一', '二', '三', '四', '五', '六', '日'].map((day) => (
-                <span key={day}>{day}</span>
-              ))}
+        </form>
+        {attendance.isSuccess && (
+          <div className="flex flex-wrap items-center justify-between gap-[12px] rounded-[8px] bg-muted p-[14px]">
+            <div className="min-w-0 space-y-[4px]">
+              <p className="text-[14px] font-medium">
+                {attendance.data.independentSchedule ? '个人排班' : '组织排班'}
+              </p>
+              <p className={quietClass}>
+                {attendance.data.permissions.canBatchSchedule
+                  ? '可为自己设置工作日、休息日和班次。'
+                  : attendance.data.independentSchedule
+                    ? '当前账号暂不可编辑排班。'
+                    : canManageOrganization
+                      ? '可前往组织管理的排班管理，为自己和组织成员安排班次。'
+                      : '组织班次由主管或管理员统一安排；你可以在这里查看本人排班与考勤。'}
+              </p>
             </div>
-            <ul className="grid grid-cols-7 gap-[4px]">
-              {Array.from({ length: firstWeekday }, (_, index) => (
-                <li key={`empty-${index}`} aria-hidden />
-              ))}
-              {attendance.data.days.map((day) => {
-                const meta = attendanceMeta[day.calendarStatus];
-                return (
-                  <li key={day.scheduleDate} aria-label={`${day.scheduleDate} ${meta.label}`}>
-                    <button
-                      type="button"
-                      aria-label={`${day.scheduleDate} ${meta.label}`}
-                      onClick={() => setSelectedDate(day.scheduleDate)}
-                      className={`flex min-h-[64px] w-full min-w-0 flex-col items-center justify-center gap-[5px] rounded-[6px] border px-[2px] py-[8px] text-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${meta.color}`}
-                    >
-                      <time dateTime={day.scheduleDate}>{Number(day.scheduleDate.slice(-2))}</time>
-                      <span aria-hidden>{meta.short}</span>
-                      <span className="sr-only">{meta.label}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            {attendance.data.permissions.canBatchSchedule && (
+              <Button variant="outline" size="settings" onClick={() => setScheduleOpen(true)}>
+                为自己排班
+              </Button>
+            )}
+            {!attendance.data.independentSchedule && canManageOrganization && (
+              <Button asChild variant="outline" size="settings">
+                <Link to="/organization" search={{ tab: 'schedules' }}>
+                  管理组织排班
+                </Link>
+              </Button>
+            )}
           </div>
-          <ul
-            aria-label="考勤状态图例"
-            className="flex flex-wrap gap-x-[14px] gap-y-[8px] text-[12px] leading-[20px] text-muted-foreground"
-          >
-            {[...new Set(attendance.data.days.map((day) => day.calendarStatus))].map((status) => (
-              <li key={status}>
-                {attendanceMeta[status].short} · {attendanceMeta[status].label}
-              </li>
-            ))}
-          </ul>
-          <details className="rounded-[8px] border p-[12px]">
-            <summary className="flex min-h-[44px] cursor-pointer items-center text-[13px] font-medium">
-              查看每日班次与打卡明细
-            </summary>
-            <ul className="mt-[8px] divide-y text-[12px] leading-[20px]">
-              {attendance.data.days.map((day) => (
-                <li
-                  key={day.scheduleDate}
-                  className="space-y-[4px] py-[12px] [overflow-wrap:anywhere]"
-                >
-                  <p className="font-medium">
-                    {day.scheduleDate} · {attendanceMeta[day.calendarStatus].label}
-                  </p>
-                  <p className="text-muted-foreground">
-                    班次：
-                    {day.shiftStartAt && day.shiftEndAt
-                      ? `${day.shiftStartAt.slice(11)} — ${day.shiftEndAt.slice(11)}（${day.timezone}）`
-                      : '无有效工作班次'}
-                  </p>
-                  <p className="text-muted-foreground">
-                    上班打卡：{day.firstClockInAt || '无记录'}；下班打卡：
-                    {day.lastClockOutAt || '无记录'}
-                  </p>
-                  {day.reviewReason && <p>复核说明：{day.reviewReason}</p>}
-                  {day.application && (
-                    <p>
-                      考勤申请：{day.application.applicationType === 'LEAVE' ? '请假' : '考勤修正'}{' '}
-                      · {flowLabels[day.application.status]}
-                    </p>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </details>
-        </>
-      )}
-      <section aria-label="节假日安排" className="space-y-[10px] border-t pt-[16px]">
-        <h4 className="text-[14px] font-semibold">节假日安排</h4>
-        {holidays.isPending && (
+        )}
+        {notice && (
           <p role="status" className={quietClass}>
-            正在读取节假日日历…
+            {notice}
           </p>
         )}
-        {holidays.isError && (
+        {monthError && (
+          <p
+            id="profile-month-error"
+            role="alert"
+            className="text-[13px] text-[var(--color-danger)]"
+          >
+            {monthError}
+          </p>
+        )}
+        {!canRead && (
+          <p className={quietClass}>当前组织关系暂不能读取考勤，请在我的组织中核对入组状态。</p>
+        )}
+        {canRead && attendance.isPending && <LoadingState>正在读取本人考勤…</LoadingState>}
+        {attendance.isError && (
           <div className="space-y-[8px]">
-            <ErrorNotice error={holidays.error} />
-            <Button variant="outline" size="settings" onClick={() => void holidays.refetch()}>
-              重新读取节假日
+            <ErrorNotice error={attendance.error} />
+            <Button variant="outline" size="settings" onClick={() => void attendance.refetch()}>
+              重新读取考勤
             </Button>
           </div>
         )}
-        {holidays.isSuccess &&
-          (holidays.data.days.length ? (
-            <ul className="space-y-[8px] text-[12px] leading-[20px]">
-              {holidays.data.days.map((day) => (
-                <li key={day.date} className="break-words">
-                  {day.date} · {day.holidayName} ·{' '}
-                  {day.calendarDayType === 'PUBLIC_HOLIDAY' ? '法定放假日' : '调休工作日'}
+        {attendance.isSuccess && (
+          <>
+            <dl
+              aria-label="月度考勤汇总"
+              className="grid grid-cols-2 gap-[12px] text-[13px] sm:grid-cols-5"
+            >
+              {[
+                ['正常出勤', attendance.data.summary.presentCount],
+                ['迟到', attendance.data.summary.lateCount],
+                ['早退', attendance.data.summary.earlyLeaveCount],
+                ['请假', attendance.data.summary.leaveCount],
+                ['缺勤', attendance.data.summary.absentCount],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-[8px] bg-muted p-[12px]">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="mt-[4px] text-[18px] font-semibold">
+                    {value}
+                    <span className="ml-[4px] text-[12px] font-normal">天</span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            {attendance.data.days.every((day) => day.calendarStatus === 'UNSCHEDULED') && (
+              <EmptyState title="本月暂无排班记录" className="py-6" />
+            )}
+            <div aria-label={`${queryMonth} 本人考勤月历`}>
+              <div
+                className="mb-[6px] grid grid-cols-7 gap-[4px] text-center text-[12px] text-muted-foreground"
+                aria-hidden
+              >
+                {['一', '二', '三', '四', '五', '六', '日'].map((day) => (
+                  <span key={day}>{day}</span>
+                ))}
+              </div>
+              <ul className="grid grid-cols-7 gap-[4px]">
+                {Array.from({ length: firstWeekday }, (_, index) => (
+                  <li key={`empty-${index}`} aria-hidden />
+                ))}
+                {attendance.data.days.map((day) => {
+                  const meta = attendanceMeta[day.calendarStatus];
+                  return (
+                    <li key={day.scheduleDate} aria-label={`${day.scheduleDate} ${meta.label}`}>
+                      <button
+                        type="button"
+                        aria-label={`${day.scheduleDate} ${meta.label}`}
+                        onClick={() => setSelectedDate(day.scheduleDate)}
+                        className={`flex min-h-[64px] w-full min-w-0 flex-col items-center justify-center gap-[5px] rounded-[6px] border px-[2px] py-[8px] text-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${meta.color}`}
+                      >
+                        <time dateTime={day.scheduleDate}>
+                          {Number(day.scheduleDate.slice(-2))}
+                        </time>
+                        <span aria-hidden>{meta.short}</span>
+                        <span className="sr-only">{meta.label}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <ul
+              aria-label="考勤状态图例"
+              className="flex flex-wrap gap-x-[14px] gap-y-[8px] text-[12px] leading-[20px] text-muted-foreground"
+            >
+              {[...new Set(attendance.data.days.map((day) => day.calendarStatus))].map((status) => (
+                <li key={status}>
+                  {attendanceMeta[status].short} · {attendanceMeta[status].label}
                 </li>
               ))}
             </ul>
-          ) : (
-            <p className={quietClass}>本月没有已公布的特殊放假或调休安排。</p>
-          ))}
-        <p className={quietClass}>
-          节假日安排与实际排班分别展示，不据此推算出勤。迟到且早退会同时计入两项汇总。
-        </p>
+            <details className="rounded-[8px] border p-[12px]">
+              <summary className="flex min-h-[44px] cursor-pointer items-center text-[13px] font-medium">
+                查看每日班次与打卡明细
+              </summary>
+              <ul className="mt-[8px] divide-y text-[12px] leading-[20px]">
+                {attendance.data.days.map((day) => (
+                  <li
+                    key={day.scheduleDate}
+                    className="space-y-[4px] py-[12px] [overflow-wrap:anywhere]"
+                  >
+                    <p className="font-medium">
+                      {day.scheduleDate} · {attendanceMeta[day.calendarStatus].label}
+                    </p>
+                    <p className="text-muted-foreground">
+                      班次：
+                      {day.shiftStartAt && day.shiftEndAt
+                        ? `${day.shiftStartAt.slice(11)} — ${day.shiftEndAt.slice(11)}（${day.timezone}）`
+                        : '无有效工作班次'}
+                    </p>
+                    <p className="text-muted-foreground">
+                      上班打卡：{day.firstClockInAt || '无记录'}；下班打卡：
+                      {day.lastClockOutAt || '无记录'}
+                    </p>
+                    {day.reviewReason && <p>复核说明：{day.reviewReason}</p>}
+                    {day.application && (
+                      <p>
+                        考勤申请：
+                        {day.application.applicationType === 'LEAVE' ? '请假' : '考勤修正'} ·{' '}
+                        {flowLabels[day.application.status]}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </>
+        )}
+        <section aria-label="节假日安排" className="space-y-[10px] border-t pt-[16px]">
+          <CardTitle asChild>
+            <h4>节假日安排</h4>
+          </CardTitle>
+          {holidays.isPending && <LoadingState>正在读取节假日日历…</LoadingState>}
+          {holidays.isError && (
+            <div className="space-y-[8px]">
+              <ErrorNotice error={holidays.error} />
+              <Button variant="outline" size="settings" onClick={() => void holidays.refetch()}>
+                重新读取节假日
+              </Button>
+            </div>
+          )}
+          {holidays.isSuccess &&
+            (holidays.data.days.length ? (
+              <ul className="space-y-[8px] text-[12px] leading-[20px]">
+                {holidays.data.days.map((day) => (
+                  <li key={day.date} className="break-words">
+                    {day.date} · {day.holidayName} ·{' '}
+                    {day.calendarDayType === 'PUBLIC_HOLIDAY' ? '法定放假日' : '调休工作日'}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState title="本月没有已公布的特殊放假或调休安排。" className="px-0 py-6" />
+            ))}
+          <p className={quietClass}>
+            节假日安排与实际排班分别展示，不据此推算出勤。迟到且早退会同时计入两项汇总。
+          </p>
+        </section>
+        {scheduleOpen && attendance.data?.permissions.canBatchSchedule && (
+          <PersonalScheduleDialog
+            month={queryMonth}
+            onClose={() => setScheduleOpen(false)}
+            onWritten={written}
+          />
+        )}
+        {selectedDay && (
+          <AttendanceDayDialog
+            key={selectedDay.scheduleDate}
+            day={selectedDay}
+            orgId={attendance.data?.organizationId ?? null}
+            memberId={attendance.data?.memberId ?? null}
+            statusLabel={attendanceMeta[selectedDay.calendarStatus].label}
+            onClose={() => setSelectedDate(null)}
+            onReload={async () => {
+              const result = await attendance.refetch();
+              if (result.isError) throw result.error;
+            }}
+            onWritten={written}
+          />
+        )}
       </section>
-      {scheduleOpen && attendance.data?.permissions.canBatchSchedule && (
-        <PersonalScheduleDialog
-          month={queryMonth}
-          onClose={() => setScheduleOpen(false)}
-          onWritten={written}
-        />
-      )}
-      {selectedDay && (
-        <AttendanceDayDialog
-          key={selectedDay.scheduleDate}
-          day={selectedDay}
-          orgId={attendance.data?.organizationId ?? null}
-          memberId={attendance.data?.memberId ?? null}
-          statusLabel={attendanceMeta[selectedDay.calendarStatus].label}
-          onClose={() => setSelectedDate(null)}
-          onReload={async () => {
-            const result = await attendance.refetch();
-            if (result.isError) throw result.error;
-          }}
-          onWritten={written}
-        />
-      )}
-    </section>
+    </Card>
   );
 }

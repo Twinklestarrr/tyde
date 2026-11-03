@@ -13,7 +13,10 @@ import {
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Card, CardTitle } from '@/components/ui/card';
+import { EmptyState, LoadingState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
+import { Pagination } from '@/components/ui/pagination';
 import { TabsContent } from '@/components/ui/tabs';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { joinStatusLabels, positionLabels } from '@/modules/organizations/common';
@@ -22,8 +25,9 @@ import { ProfileAttendance } from './ProfileAttendance';
 import { ProfileOverview } from './ProfileOverview';
 import { ProfileApplicationWithdrawal } from './ProfileApplicationWithdrawal';
 import { api } from '@/services/api';
+import { ExpertExamStatus } from '@/modules/projects/ExpertExamPanel';
 
-const panelClass = 'min-w-0 space-y-[20px] rounded-[8px] border bg-card p-[16px] sm:p-[24px]';
+const panelClass = 'space-y-5 p-5 sm:p-6';
 const quietClass = 'text-[13px] leading-[22px] text-[var(--color-neutral-strong)]';
 const flowLabels = {
   PENDING: '待审批',
@@ -43,7 +47,7 @@ const nodeLabels: Record<string, string> = {
 const admissionLabels = {
   PASSED: '已通过准入',
   PENDING: '待阅卷',
-  NOT_PASSED: '未通过准入',
+  NOT_PASSED: '尚未取得通过结果',
   NOT_EXAMINED: '未参加考试',
 };
 const profileScope = (user: AuthUser) => [
@@ -144,143 +148,149 @@ function ExpertProjects({
     else setSearch(keyword.trim());
   }
   return (
-    <section aria-label="我的项目" className={panelClass}>
-      <div>
-        <h3 className="text-[17px] leading-[26px] font-semibold">我的项目</h3>
-        <p className={`mt-[6px] ${quietClass}`}>
-          查看本人已接单项目与当前履约节点，参与范围以服务端实际分配为准。
-        </p>
-      </div>
-      <form onSubmit={submit} className="flex min-w-0 flex-wrap items-end gap-[8px]">
-        <label className="min-w-0 flex-1 basis-[180px] text-[12px] leading-[20px]">
-          搜索我的项目
-          <Input
-            size="profile"
-            className="mt-[6px]"
-            maxLength={100}
-            value={keyword}
-            placeholder="项目名称、需求方或节点"
-            onChange={(event) => setKeyword(event.target.value)}
-          />
-        </label>
-        <Button type="submit" variant="outline" size="settings" loading={projects.isFetching}>
-          查询项目
-        </Button>
-      </form>
-      {projects.isPending && (
-        <p role="status" className={quietClass}>
-          正在读取我的项目…
-        </p>
-      )}
-      {projects.isError && (
-        <div className="space-y-[8px]">
-          <ErrorNotice error={projects.error} />
-          <Button variant="outline" size="settings" onClick={() => void projects.refetch()}>
-            重新读取项目
-          </Button>
+    <Card asChild>
+      <section aria-label="我的项目" className={panelClass}>
+        <div>
+          <CardTitle asChild>
+            <h3>我的项目</h3>
+          </CardTitle>
+          <p className={`mt-[6px] ${quietClass}`}>
+            查看本人已接单项目与当前履约节点，参与范围以服务端实际分配为准。
+          </p>
         </div>
-      )}
-      {projects.isSuccess && projects.data.length === 0 && (
-        <p className={`${quietClass} py-[24px] text-center`}>暂无符合执行专家参与范围的项目</p>
-      )}
-      {projects.isSuccess && projects.data.length > 0 && (
-        <ul aria-label="我的项目列表" className="grid min-w-0 gap-[10px] sm:grid-cols-2">
-          {projects.data.map((project) => (
-            <li key={project.projectId} className="min-w-0">
-              <button
-                type="button"
-                aria-pressed={selectedId === project.projectId}
-                onClick={() => setSelectedId(project.projectId)}
-                className="flex min-h-[100px] w-full min-w-0 flex-col items-start gap-[6px] rounded-[8px] border p-[14px] text-left text-[13px] leading-[20px] transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-primary aria-pressed:bg-accent"
-              >
-                <span className="max-w-full break-words font-semibold [overflow-wrap:anywhere]">
-                  {project.projectName || `项目 ${project.projectId}`}
-                </span>
-                <span className="max-w-full break-words text-muted-foreground [overflow-wrap:anywhere]">
-                  需求方：{project.requesterName || '未提供'}
-                </span>
-                <span className="flex max-w-full flex-wrap gap-x-[12px] gap-y-[4px] text-[12px]">
-                  <span>{nodeLabels[project.currentNodeCode] || project.currentNodeCode}</span>
-                  {project.needWrittenExam && (
-                    <span>{admissionLabels[project.admissionStatus]}</span>
-                  )}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {selectedProject && (
-        <section aria-label="项目详情" className="space-y-[16px] border-t pt-[20px]">
-          <h3 className="text-[16px] font-semibold">项目详情</h3>
-          {detail.isPending && (
-            <p role="status" className={quietClass}>
-              正在读取项目详情…
-            </p>
-          )}
-          {detail.isError && (
-            <div className="space-y-[8px]">
-              <ErrorNotice error={detail.error} />
-              <Button variant="outline" size="settings" onClick={() => void detail.refetch()}>
-                重新读取项目详情
-              </Button>
-            </div>
-          )}
-          {detail.isSuccess && (
-            <>
-              <h4 className="break-words text-[15px] font-semibold [overflow-wrap:anywhere]">
-                {detail.data.projectDetail.projectName || `项目 ${selectedProject.projectId}`}
-              </h4>
-              <dl className="grid min-w-0 gap-[16px] text-[13px] leading-[22px] sm:grid-cols-2 [&_dd]:break-words [&_dd]:[overflow-wrap:anywhere] [&_dt]:mb-[4px] [&_dt]:text-muted-foreground">
-                <div>
-                  <dt>需求方</dt>
-                  <dd>{detail.data.projectDetail.requesterName || '未提供'}</dd>
-                </div>
-                <div>
-                  <dt>截止时间（上海时间）</dt>
-                  <dd>{detail.data.projectDetail.deadline || '未设置'}</dd>
-                </div>
-                <div>
-                  <dt>本人当前节点</dt>
-                  <dd>
-                    {nodeLabels[selectedProject.currentNodeCode] || selectedProject.currentNodeCode}
-                  </dd>
-                </div>
-                <div>
-                  <dt>生产量级</dt>
-                  <dd>
-                    {detail.data.productionPlan.totalExpectedOutput ?? '未配置'}{' '}
-                    {detail.data.productionPlan.totalExpectedOutput != null &&
-                      detail.data.projectDetail.quantityUnit}
-                  </dd>
-                </div>
-                <div>
-                  <dt>作业人数要求</dt>
-                  <dd>{detail.data.productionPlan.operatorHeadcount ?? '未配置'}</dd>
-                </div>
-                <div>
-                  <dt>质检人数要求</dt>
-                  <dd>{detail.data.productionPlan.inspectorHeadcount ?? '未配置'}</dd>
-                </div>
-                <div className="sm:col-span-2">
-                  <dt>项目说明</dt>
-                  <dd className="whitespace-pre-wrap">
-                    {detail.data.projectDetail.projectDescription || '未提供'}
-                  </dd>
-                </div>
-                <div className="sm:col-span-2">
-                  <dt>作业标准</dt>
-                  <dd className="whitespace-pre-wrap">
-                    {detail.data.projectDetail.standardContent || '未提供'}
-                  </dd>
-                </div>
-              </dl>
-              <p className={quietClass}>当前提供只读详情，接单、考试和生产操作尚未接入。</p>
-            </>
-          )}
-        </section>
-      )}
-    </section>
+        <form onSubmit={submit} className="flex min-w-0 flex-wrap items-end gap-[8px]">
+          <label className="min-w-0 flex-1 basis-[180px] text-[12px] leading-[20px]">
+            搜索我的项目
+            <Input
+              size="profile"
+              className="mt-[6px]"
+              maxLength={100}
+              value={keyword}
+              placeholder="项目名称、需求方或节点"
+              onChange={(event) => setKeyword(event.target.value)}
+            />
+          </label>
+          <Button type="submit" variant="outline" size="settings" loading={projects.isFetching}>
+            查询项目
+          </Button>
+        </form>
+        {projects.isPending && <LoadingState>正在读取我的项目…</LoadingState>}
+        {projects.isError && (
+          <div className="space-y-[8px]">
+            <ErrorNotice error={projects.error} />
+            <Button variant="outline" size="settings" onClick={() => void projects.refetch()}>
+              重新读取项目
+            </Button>
+          </div>
+        )}
+        {projects.isSuccess && projects.data.length === 0 && (
+          <EmptyState title="暂无符合执行专家参与范围的项目" />
+        )}
+        {projects.isSuccess && projects.data.length > 0 && (
+          <ul aria-label="我的项目列表" className="grid min-w-0 gap-[10px] sm:grid-cols-2">
+            {projects.data.map((project) => (
+              <li key={project.projectId} className="min-w-0">
+                <Card asChild>
+                  <button
+                    type="button"
+                    aria-pressed={selectedId === project.projectId}
+                    onClick={() => setSelectedId(project.projectId)}
+                    className="flex min-h-[100px] w-full flex-col items-start gap-2 p-5 text-left text-[13px] leading-5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-primary aria-pressed:bg-accent"
+                  >
+                    <span className="max-w-full break-words text-[16px] leading-6 font-semibold [overflow-wrap:anywhere]">
+                      {project.projectName || `项目 ${project.projectId}`}
+                    </span>
+                    <span className="max-w-full break-words text-muted-foreground [overflow-wrap:anywhere]">
+                      需求方：{project.requesterName || '未提供'}
+                    </span>
+                    <span className="flex max-w-full flex-wrap gap-x-[12px] gap-y-[4px] text-[12px]">
+                      <span>{nodeLabels[project.currentNodeCode] || project.currentNodeCode}</span>
+                      {project.needWrittenExam && (
+                        <span>{admissionLabels[project.admissionStatus]}</span>
+                      )}
+                    </span>
+                  </button>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+        {selectedProject && (
+          <section aria-label="项目详情" className="space-y-[16px] border-t pt-[20px]">
+            <CardTitle asChild>
+              <h3>项目详情</h3>
+            </CardTitle>
+            {detail.isPending && <LoadingState>正在读取项目详情…</LoadingState>}
+            {detail.isError && (
+              <div className="space-y-[8px]">
+                <ErrorNotice error={detail.error} />
+                <Button variant="outline" size="settings" onClick={() => void detail.refetch()}>
+                  重新读取项目详情
+                </Button>
+              </div>
+            )}
+            {detail.isSuccess && (
+              <>
+                <h4 className="break-words text-[15px] font-semibold [overflow-wrap:anywhere]">
+                  {detail.data.projectDetail.projectName || `项目 ${selectedProject.projectId}`}
+                </h4>
+                <dl className="grid min-w-0 gap-[16px] text-[13px] leading-[22px] sm:grid-cols-2 [&_dd]:break-words [&_dd]:[overflow-wrap:anywhere] [&_dt]:mb-[4px] [&_dt]:text-muted-foreground">
+                  <div>
+                    <dt>需求方</dt>
+                    <dd>{detail.data.projectDetail.requesterName || '未提供'}</dd>
+                  </div>
+                  <div>
+                    <dt>截止时间（上海时间）</dt>
+                    <dd>{detail.data.projectDetail.deadline || '未设置'}</dd>
+                  </div>
+                  <div>
+                    <dt>本人当前节点</dt>
+                    <dd>
+                      {nodeLabels[selectedProject.currentNodeCode] ||
+                        selectedProject.currentNodeCode}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>生产量级</dt>
+                    <dd>
+                      {detail.data.productionPlan.totalExpectedOutput ?? '未配置'}{' '}
+                      {detail.data.productionPlan.totalExpectedOutput != null &&
+                        detail.data.projectDetail.quantityUnit}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>作业人数要求</dt>
+                    <dd>{detail.data.productionPlan.operatorHeadcount ?? '未配置'}</dd>
+                  </div>
+                  <div>
+                    <dt>质检人数要求</dt>
+                    <dd>{detail.data.productionPlan.inspectorHeadcount ?? '未配置'}</dd>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <dt>项目说明</dt>
+                    <dd className="whitespace-pre-wrap">
+                      {detail.data.projectDetail.projectDescription || '未提供'}
+                    </dd>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <dt>作业标准</dt>
+                    <dd className="whitespace-pre-wrap">
+                      {detail.data.projectDetail.standardContent || '未提供'}
+                    </dd>
+                  </div>
+                </dl>
+                {selectedProject.needWrittenExam && (
+                  <ExpertExamStatus user={user} projectId={selectedProject.projectId} />
+                )}
+                <p className={quietClass}>
+                  项目操作从工作台当前待办进入，此处查看项目资料和准入状态。
+                </p>
+              </>
+            )}
+          </section>
+        )}
+      </section>
+    </Card>
   );
 }
 
@@ -410,213 +420,205 @@ function ExpertApplications({ user }: { user: AuthUser }) {
     await refreshAfterWrite('考勤申请已撤回');
   }
   return (
-    <section aria-label="组织与申请" className={panelClass}>
-      <div>
-        <h3 className="text-[17px] leading-[26px] font-semibold">组织与申请</h3>
-        <p className={`mt-[6px] ${quietClass}`}>
-          组织身份来自真实成员关系，申请记录只查询本人发起的流程。
-        </p>
-      </div>
-      {notice && <Alert>{notice}</Alert>}
-      {refreshFailed && (
-        <Button
-          variant="outline"
-          size="settings"
-          loading={refreshing}
-          onClick={() => void refreshAfterWrite('组织与申请已更新')}
-        >
-          重新读取组织与申请
-        </Button>
-      )}
-      <div className="space-y-[12px] rounded-[8px] border p-[16px]">
-        <h4 className="text-[14px] font-semibold">我的组织</h4>
-        {org ? (
-          <>
-            <p className="break-words text-[14px] leading-[22px] font-medium">
-              {typeof organizationSummary?.name === 'string'
-                ? organizationSummary.name
-                : '所属组织'}
-            </p>
-            <p className={quietClass}>
-              {[position, joinStatus].filter(Boolean).join(' · ') || '查看成员关系详情'}
-            </p>
-            {typeof organizationSummary?.description === 'string' &&
-              organizationSummary.description.trim() && (
-                <p className={`${quietClass} whitespace-pre-wrap`}>
-                  {organizationSummary.description}
-                </p>
-              )}
-            {typeof organizationSummary?.unifiedCreditCode === 'string' &&
-              organizationSummary.unifiedCreditCode && (
-                <p className={quietClass}>
-                  统一社会信用代码：{organizationSummary.unifiedCreditCode}
-                </p>
-              )}
-            <div className="flex flex-wrap items-center gap-[8px]">
-              <Button asChild variant="outline" size="settings">
-                <Link to="/organization">查看组织信息与可用操作</Link>
-              </Button>
-              {canEditOrganization && (
-                <Button
-                  variant="outline"
-                  size="settings"
-                  disabled={organizationDetail.isFetching}
-                  onClick={() => setEditingOrganization(true)}
-                >
-                  编辑组织资料
-                </Button>
-              )}
-              {canExit && (
-                <Button
-                  variant="destructiveOutline"
-                  size="settings"
-                  onClick={() => setExiting(true)}
-                >
-                  申请退出组织
-                </Button>
-              )}
-              {pendingExit && <p className={quietClass}>退出审批中</p>}
-            </div>
-            {org.position === 'OWNER' && org.joinStatus === 'ACTIVE' && (
-              <p className={quietClass}>主管退出前请先在组织管理中转让主管角色。</p>
-            )}
-            {(!activeOrganizationOwner ||
-              (organizationDetail.data && organizationDetail.data.position !== 'OWNER')) && (
-              <p className={quietClass}>仅正常在组的主管可修改组织资料。</p>
-            )}
-            {canReadOrganization && organizationDetail.isPending && (
-              <p role="status" className={quietClass}>
-                正在读取组织资料…
-              </p>
-            )}
-            {canReadOrganization && organizationDetail.isError && (
-              <div className="space-y-[8px]">
-                <p className={quietClass}>组织详情未更新，请重新读取后编辑组织资料。</p>
-                <ErrorNotice error={organizationDetail.error} />
-                <Button
-                  variant="outline"
-                  size="settings"
-                  loading={organizationDetail.isFetching}
-                  onClick={() => void organizationDetail.refetch()}
-                >
-                  重新读取组织资料
-                </Button>
-              </div>
-            )}
-          </>
-        ) : (
-          <p className={quietClass}>当前未加入组织</p>
-        )}
-      </div>
-      <section aria-label="我的申请" className="space-y-[16px]">
-        <h4 className="text-[15px] font-semibold">我的申请</h4>
-        {applications.isPending && (
-          <p role="status" className={quietClass}>
-            正在读取我的申请…
+    <Card asChild>
+      <section aria-label="组织与申请" className={panelClass}>
+        <div>
+          <CardTitle asChild>
+            <h3>组织与申请</h3>
+          </CardTitle>
+          <p className={`mt-[6px] ${quietClass}`}>
+            组织身份来自真实成员关系，申请记录只查询本人发起的流程。
           </p>
-        )}
-        {applications.isError && (
-          <div className="space-y-[8px]">
-            <ErrorNotice error={applications.error} />
-            <Button variant="outline" size="settings" onClick={() => void applications.refetch()}>
-              重新读取申请
-            </Button>
-          </div>
-        )}
-        {applications.isSuccess &&
-          (applications.data.records.length ? (
-            <ul className="space-y-[12px]">
-              {applications.data.records.map((application) => (
-                <li
-                  key={application.applicationId}
-                  className="min-w-0 space-y-[8px] rounded-[8px] border p-[14px] text-[13px] leading-[22px] [overflow-wrap:anywhere]"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-[8px]">
-                    <h5 className="min-w-0 flex-1 font-medium">{application.title}</h5>
-                    <span className="rounded-[5px] bg-muted px-[8px] py-[2px] text-[12px]">
-                      {flowLabels[application.status]}
-                    </span>
-                  </div>
-                  <p className="text-[12px] text-muted-foreground">
-                    申请时间：{application.appliedAt}（上海时间）
-                  </p>
-                  {application.applicantOrgName && <p>所属组织：{application.applicantOrgName}</p>}
-                  {application.applyReason && (
-                    <p className="whitespace-pre-wrap">申请原因：{application.applyReason}</p>
-                  )}
-                  {attendanceApplicationDetails(application).map(([label, value]) => (
-                    <p key={label}>
-                      {label}：{value}
-                    </p>
-                  ))}
-                  {application.targetMemberName && <p>目标成员：{application.targetMemberName}</p>}
-                  {application.plannedLeaveDate && <p>计划离组：{application.plannedLeaveDate}</p>}
-                  {application.finishedAt && <p>结束时间：{application.finishedAt}（上海时间）</p>}
-                  <p className="text-[12px] text-muted-foreground">流水号：{application.flowNo}</p>
-                  <ProfileApplicationWithdrawal
-                    application={application}
-                    userId={user.id}
-                    onSuccess={withdrawn}
-                    onRefresh={() => applications.refetch()}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className={`${quietClass} py-[20px] text-center`}>暂无申请记录</p>
-          ))}
-        {applications.isSuccess && (
-          <nav
-            aria-label="申请分页"
-            className="flex flex-wrap items-center justify-between gap-[12px] border-t pt-[16px] text-[12px] text-muted-foreground"
+        </div>
+        {notice && <Alert>{notice}</Alert>}
+        {refreshFailed && (
+          <Button
+            variant="outline"
+            size="settings"
+            loading={refreshing}
+            onClick={() => void refreshAfterWrite('组织与申请已更新')}
           >
-            <span>
-              共 {applications.data.total} 条 · 第 {current} /{' '}
-              {Math.max(1, applications.data.pages)} 页
-            </span>
-            <div className="flex gap-[8px]">
-              <Button
-                variant="outline"
-                size="settings"
-                disabled={current <= 1 || applications.isFetching}
-                onClick={() => setCurrent((page) => page - 1)}
-              >
-                上一页
-              </Button>
-              <Button
-                variant="outline"
-                size="settings"
-                disabled={current >= applications.data.pages || applications.isFetching}
-                onClick={() => setCurrent((page) => page + 1)}
-              >
-                下一页
+            重新读取组织与申请
+          </Button>
+        )}
+        <Card className="space-y-3 p-5">
+          <CardTitle asChild>
+            <h4>我的组织</h4>
+          </CardTitle>
+          {org ? (
+            <>
+              <p className="break-words text-[14px] leading-[22px] font-medium">
+                {typeof organizationSummary?.name === 'string'
+                  ? organizationSummary.name
+                  : '所属组织'}
+              </p>
+              <p className={quietClass}>
+                {[position, joinStatus].filter(Boolean).join(' · ') || '查看成员关系详情'}
+              </p>
+              {typeof organizationSummary?.description === 'string' &&
+                organizationSummary.description.trim() && (
+                  <p className={`${quietClass} whitespace-pre-wrap`}>
+                    {organizationSummary.description}
+                  </p>
+                )}
+              {typeof organizationSummary?.unifiedCreditCode === 'string' &&
+                organizationSummary.unifiedCreditCode && (
+                  <p className={quietClass}>
+                    统一社会信用代码：{organizationSummary.unifiedCreditCode}
+                  </p>
+                )}
+              <div className="flex flex-wrap items-center gap-[8px]">
+                <Button asChild variant="outline" size="settings">
+                  <Link to="/organization">查看组织信息与可用操作</Link>
+                </Button>
+                {canEditOrganization && (
+                  <Button
+                    variant="outline"
+                    size="settings"
+                    disabled={organizationDetail.isFetching}
+                    onClick={() => setEditingOrganization(true)}
+                  >
+                    编辑组织资料
+                  </Button>
+                )}
+                {canExit && (
+                  <Button
+                    variant="destructiveOutline"
+                    size="settings"
+                    onClick={() => setExiting(true)}
+                  >
+                    申请退出组织
+                  </Button>
+                )}
+                {pendingExit && <p className={quietClass}>退出审批中</p>}
+              </div>
+              {org.position === 'OWNER' && org.joinStatus === 'ACTIVE' && (
+                <p className={quietClass}>主管退出前请先在组织管理中转让主管角色。</p>
+              )}
+              {(!activeOrganizationOwner ||
+                (organizationDetail.data && organizationDetail.data.position !== 'OWNER')) && (
+                <p className={quietClass}>仅正常在组的主管可修改组织资料。</p>
+              )}
+              {canReadOrganization && organizationDetail.isPending && (
+                <LoadingState>正在读取组织资料…</LoadingState>
+              )}
+              {canReadOrganization && organizationDetail.isError && (
+                <div className="space-y-[8px]">
+                  <p className={quietClass}>组织详情未更新，请重新读取后编辑组织资料。</p>
+                  <ErrorNotice error={organizationDetail.error} />
+                  <Button
+                    variant="outline"
+                    size="settings"
+                    loading={organizationDetail.isFetching}
+                    onClick={() => void organizationDetail.refetch()}
+                  >
+                    重新读取组织资料
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : (
+            <EmptyState title="当前未加入组织" className="px-0 py-6" />
+          )}
+        </Card>
+        <section aria-label="我的申请" className="space-y-[16px]">
+          <CardTitle asChild>
+            <h4>我的申请</h4>
+          </CardTitle>
+          {applications.isPending && <LoadingState>正在读取我的申请…</LoadingState>}
+          {applications.isError && (
+            <div className="space-y-[8px]">
+              <ErrorNotice error={applications.error} />
+              <Button variant="outline" size="settings" onClick={() => void applications.refetch()}>
+                重新读取申请
               </Button>
             </div>
-          </nav>
+          )}
+          {applications.isSuccess &&
+            (applications.data.records.length ? (
+              <ul className="space-y-[12px]">
+                {applications.data.records.map((application) => (
+                  <Card asChild key={application.applicationId}>
+                    <li className="space-y-2 p-5 text-[13px] leading-[22px] [overflow-wrap:anywhere]">
+                      <div className="flex flex-wrap items-start justify-between gap-[8px]">
+                        <h5 className="min-w-0 flex-1 font-medium">{application.title}</h5>
+                        <span className="rounded-[5px] bg-muted px-[8px] py-[2px] text-[12px]">
+                          {flowLabels[application.status]}
+                        </span>
+                      </div>
+                      <p className="text-[12px] text-muted-foreground">
+                        申请时间：{application.appliedAt}（上海时间）
+                      </p>
+                      {application.applicantOrgName && (
+                        <p>所属组织：{application.applicantOrgName}</p>
+                      )}
+                      {application.applyReason && (
+                        <p className="whitespace-pre-wrap">申请原因：{application.applyReason}</p>
+                      )}
+                      {attendanceApplicationDetails(application).map(([label, value]) => (
+                        <p key={label}>
+                          {label}：{value}
+                        </p>
+                      ))}
+                      {application.targetMemberName && (
+                        <p>目标成员：{application.targetMemberName}</p>
+                      )}
+                      {application.plannedLeaveDate && (
+                        <p>计划离组：{application.plannedLeaveDate}</p>
+                      )}
+                      {application.finishedAt && (
+                        <p>结束时间：{application.finishedAt}（上海时间）</p>
+                      )}
+                      <p className="text-[12px] text-muted-foreground">
+                        流水号：{application.flowNo}
+                      </p>
+                      <ProfileApplicationWithdrawal
+                        application={application}
+                        userId={user.id}
+                        onSuccess={withdrawn}
+                        onRefresh={() => applications.refetch()}
+                      />
+                    </li>
+                  </Card>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState title="暂无申请记录" />
+            ))}
+          {applications.isSuccess && (
+            <Pagination
+              aria-label="申请分页"
+              current={current}
+              total={applications.data.total}
+              pages={applications.data.pages}
+              loading={applications.isFetching}
+              onPageChange={setCurrent}
+            />
+          )}
+        </section>
+        {editingOrganization && canEditOrganization && organizationDetail.data && (
+          <OrganizationEdit
+            orgId={orgId}
+            detail={organizationDetail.data}
+            onClose={() => setEditingOrganization(false)}
+            onSuccess={organizationSaved}
+          />
+        )}
+        {exiting && canExit && (
+          <SelfDeparture
+            orgId={orgId}
+            requestKeys={departureKeys.current}
+            onClose={() => setExiting(false)}
+            onSuccess={async () => {
+              if (cache.getQueryData<AuthUser | null>(SESSION_KEY)?.id !== user.id) return;
+              setExiting(false);
+              setExitSubmitted(true);
+              await refreshAfterWrite('退出申请已提交，等待主管审批');
+            }}
+          />
         )}
       </section>
-      {editingOrganization && canEditOrganization && organizationDetail.data && (
-        <OrganizationEdit
-          orgId={orgId}
-          detail={organizationDetail.data}
-          onClose={() => setEditingOrganization(false)}
-          onSuccess={organizationSaved}
-        />
-      )}
-      {exiting && canExit && (
-        <SelfDeparture
-          orgId={orgId}
-          requestKeys={departureKeys.current}
-          onClose={() => setExiting(false)}
-          onSuccess={async () => {
-            if (cache.getQueryData<AuthUser | null>(SESSION_KEY)?.id !== user.id) return;
-            setExiting(false);
-            setExitSubmitted(true);
-            await refreshAfterWrite('退出申请已提交，等待主管审批');
-          }}
-        />
-      )}
-    </section>
+    </Card>
   );
 }
 

@@ -1,4 +1,5 @@
 import type { EntranceExamConfiguration } from '@tyde/shared';
+import { Card, CardTitle } from '@/components/ui/card';
 import { EntranceExamFiles } from './EntranceExamFiles';
 import { EntranceExamText } from './EntranceExamText';
 
@@ -36,66 +37,70 @@ export function EntranceExamConfigurationView({ config }: { config: EntranceExam
         此处为当前版本。考生的历史卷与成绩在考试名单中查看。
       </p>
       {config.papers.map((paper) => (
-        <section
-          key={paper.paperId}
-          aria-label={`试卷${paper.sequenceNo}配置`}
-          className="space-y-4 rounded-xl border p-4"
-        >
-          <h3 className="text-base font-semibold">
-            {paper.paperName || `试卷${paper.sequenceNo}`} · 满分 {paper.totalScore}
-          </h3>
-          {paper.questions.map((question) => (
-            <article key={question.questionId} className="space-y-3 border-t pt-4">
-              <h4 className="text-sm font-medium">
-                题目 {question.sequenceNo} · {question.requiredFlag ? '必答' : '选答'} ·{' '}
-                {question.score} 分
-              </h4>
-              <EntranceExamText value={question.questionContent} empty="附件题" />
-              <EntranceExamFiles
-                value={question.questionFiles}
-                label={`题目${question.sequenceNo}题干附件`}
-              />
-              <p className="text-xs text-muted-foreground">参考答案</p>
-              <EntranceExamText value={question.referenceAnswer} />
-              <EntranceExamFiles
-                value={question.referenceFiles}
-                label={`题目${question.sequenceNo}参考附件`}
-              />
-            </article>
-          ))}
-        </section>
+        <Card asChild key={paper.paperId}>
+          <section aria-label={`试卷${paper.sequenceNo}配置`} className="space-y-4 p-5">
+            <CardTitle asChild>
+              <h3>
+                {paper.paperName || `试卷${paper.sequenceNo}`} · 满分 {paper.totalScore}
+              </h3>
+            </CardTitle>
+            {paper.questions.map((question) => (
+              <article key={question.questionId} className="space-y-3 border-t pt-4">
+                <h4 className="text-sm font-medium">
+                  题目 {question.sequenceNo} · {question.requiredFlag ? '必答' : '选答'} ·{' '}
+                  {question.score} 分
+                </h4>
+                <EntranceExamText value={question.questionContent} empty="附件题" />
+                <EntranceExamFiles
+                  value={question.questionFiles}
+                  label={`题目${question.sequenceNo}题干附件`}
+                />
+                <p className="text-xs text-muted-foreground">参考答案</p>
+                <EntranceExamText value={question.referenceAnswer} />
+                <EntranceExamFiles
+                  value={question.referenceFiles}
+                  label={`题目${question.sequenceNo}参考附件`}
+                />
+              </article>
+            ))}
+          </section>
+        </Card>
       ))}
       <section aria-label="配置判卷轮次" className="space-y-3">
-        <h3 className="text-base font-semibold">判卷轮次</h3>
+        <CardTitle asChild>
+          <h3>判卷轮次</h3>
+        </CardTitle>
         {config.gradingRounds.map((round) => (
-          <article
-            key={round.gradingRoundId}
-            className="space-y-2 rounded-xl border p-4 text-[13px]"
-          >
-            <h4 className="font-medium">
-              第 {round.roundNo} 轮 · {round.gradingMode === 'AUTO' ? '模拟自动阅卷' : '人工阅卷'}
-            </h4>
-            {round.gradingMode === 'AUTO' ? (
-              <>
+          <Card asChild key={round.gradingRoundId}>
+            <article className="space-y-2 p-5 text-[13px]">
+              <h4 className="font-medium">
+                第 {round.roundNo} 轮 · {round.gradingMode === 'AUTO' ? '模拟自动阅卷' : '人工阅卷'}
+              </h4>
+              {round.gradingMode === 'AUTO' ? (
+                <>
+                  <p>
+                    {round.toolName}（{round.toolCode}）
+                  </p>
+                  <EntranceExamFiles
+                    value={round.toolFiles}
+                    label={`第${round.roundNo}轮工具附件`}
+                  />
+                </>
+              ) : (
                 <p>
-                  {round.toolName}（{round.toolCode}）
+                  {Array.isArray(round.reviewers)
+                    ? round.reviewers
+                        .map((reviewer) =>
+                          reviewer && typeof reviewer === 'object'
+                            ? String(reviewer.name ?? reviewer.uid ?? '历史阅卷人')
+                            : '历史阅卷人',
+                        )
+                        .join('、') || '未配置'
+                    : '历史阅卷人快照未展开'}
                 </p>
-                <EntranceExamFiles value={round.toolFiles} label={`第${round.roundNo}轮工具附件`} />
-              </>
-            ) : (
-              <p>
-                {Array.isArray(round.reviewers)
-                  ? round.reviewers
-                      .map((reviewer) =>
-                        reviewer && typeof reviewer === 'object'
-                          ? String(reviewer.name ?? reviewer.uid ?? '历史阅卷人')
-                          : '历史阅卷人',
-                      )
-                      .join('、') || '未配置'
-                  : '历史阅卷人快照未展开'}
-              </p>
-            )}
-          </article>
+              )}
+            </article>
+          </Card>
         ))}
       </section>
     </section>

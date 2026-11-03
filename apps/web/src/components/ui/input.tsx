@@ -32,7 +32,7 @@ export function Input({
     variant === 'unstyled'
       ? className
       : cn(
-          'w-full min-w-0 rounded-xl border border-input text-foreground shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60',
+          'w-full min-w-0 rounded-lg border border-input text-foreground shadow-none outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60',
           'aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20',
           variant === 'muted' ? 'bg-[var(--color-surface-muted)]' : 'bg-transparent',
           inputSizeClassNames[size],

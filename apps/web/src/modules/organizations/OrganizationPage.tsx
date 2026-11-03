@@ -15,6 +15,8 @@ import { ErrorNotice } from '@/components/ErrorNotice';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { EmptyState, LoadingState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
@@ -41,27 +43,31 @@ export function OrganizationPage({
   const orgId = typeof org?.id === 'string' ? org.id : '';
   if (!uuid.test(orgId))
     return (
-      <div className="mx-auto max-w-[1040px] space-y-[16px]">
+      <div className="mx-auto max-w-[1200px] space-y-[20px]">
         <OrganizationPageHeader title="我的组织" description="在这里查看组织资料、成员与审批。" />
-        <section className="flex flex-col gap-[20px] rounded-[12px] border bg-card p-[20px] sm:flex-row sm:items-center sm:justify-between sm:p-[28px]">
-          <div className="min-w-0">
-            <h2 className="m-0 text-[20px] font-semibold">还没有组织</h2>
-            <p className="mt-[6px] max-w-[520px] text-[14px] leading-[22px] text-[var(--color-neutral-strong)]">
-              创建组织后，你会成为组织主管，可以完善资料、管理成员和处理审批。
-            </p>
-          </div>
-          <div className="flex w-full shrink-0 flex-col gap-[10px] sm:w-auto sm:flex-row sm:items-center">
-            <Button asChild size="account" className="text-[14px]">
-              <Link to="/organization/create">
-                <Plus className="size-[16px]" aria-hidden />
-                创建组织
-              </Link>
-            </Button>
-            <Button asChild variant="outline" size="account" className="text-[14px]">
-              <Link to="/">返回工作台</Link>
-            </Button>
-          </div>
-        </section>
+        <Card>
+          <EmptyState
+            title={
+              <span role="heading" aria-level={2}>
+                还没有组织
+              </span>
+            }
+            description="创建组织后，你会成为组织主管，可以完善资料、管理成员和处理审批。"
+            action={
+              <div className="flex flex-wrap justify-center gap-[8px]">
+                <Button asChild size="mobileTouch">
+                  <Link to="/organization/create">
+                    <Plus className="size-[16px]" aria-hidden />
+                    创建组织
+                  </Link>
+                </Button>
+                <Button asChild variant="outline" size="mobileTouch">
+                  <Link to="/">返回工作台</Link>
+                </Button>
+              </div>
+            }
+          />
+        </Card>
       </div>
     );
   return (
@@ -125,7 +131,7 @@ function CurrentOrganization({
     }
   }
   return (
-    <div className="mx-auto max-w-[1200px] space-y-[16px]">
+    <div className="mx-auto max-w-[1200px] space-y-[20px]">
       <OrganizationPageHeader
         title={manager ? '组织管理' : '我的组织'}
         description={
@@ -170,11 +176,7 @@ function CurrentOrganization({
           onUpdated={organizationSaved}
         />
         <div className="min-w-0 space-y-[16px]">
-          {manager && detail.isPending && (
-            <p role="status" className="text-[13px] text-muted-foreground">
-              正在读取组织资料…
-            </p>
-          )}
+          {manager && detail.isPending && <LoadingState>正在读取组织资料…</LoadingState>}
           {manager && detail.isError && (
             <div className="space-y-[8px] rounded-[12px] border bg-card p-[20px]">
               <p className="text-[13px]">组织详情未更新，当前显示账户中的组织摘要。</p>
@@ -234,30 +236,36 @@ function CurrentOrganization({
               </TabsContent>
             </Tabs>
           ) : (
-            <section className="rounded-[12px] border bg-card p-[24px]">
-              <h2 className="m-0 text-[17px] font-semibold">我的组织关系</h2>
-              <dl className="mt-[20px] space-y-[12px] text-[13px]">
-                <div className="flex justify-between gap-[12px]">
-                  <dt>组织角色</dt>
-                  <dd>{positionLabels[position]}</dd>
-                </div>
-                <div className="flex justify-between gap-[12px]">
-                  <dt>入组状态</dt>
-                  <dd>
-                    {joinStatusLabels[joinStatus as keyof typeof joinStatusLabels] ?? '待确认'}
-                  </dd>
-                </div>
-              </dl>
-              <p className="mt-[20px] text-[13px] leading-[22px] text-[var(--color-neutral-strong)]">
-                组织资料编辑、人员管理与审批由组织主管或管理员负责。
-              </p>
-              {joinStatus === 'EXIT_APPROVING' && (
-                <Alert className="mt-[16px]">退出申请正在审批中，请等待组织主管处理。</Alert>
-              )}
-              {joinStatus === 'PENDING_LEAVE' && (
-                <Alert className="mt-[16px]">退出申请已通过，将按拟离职日期处理。</Alert>
-              )}
-            </section>
+            <Card asChild>
+              <section>
+                <CardHeader>
+                  <CardTitle>我的组织关系</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <dl className="space-y-[12px] text-[13px]">
+                    <div className="flex justify-between gap-[12px]">
+                      <dt>组织角色</dt>
+                      <dd>{positionLabels[position]}</dd>
+                    </div>
+                    <div className="flex justify-between gap-[12px]">
+                      <dt>入组状态</dt>
+                      <dd>
+                        {joinStatusLabels[joinStatus as keyof typeof joinStatusLabels] ?? '待确认'}
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="mt-[20px] text-[13px] leading-[22px] text-[var(--color-neutral-strong)]">
+                    组织资料编辑、人员管理与审批由组织主管或管理员负责。
+                  </p>
+                  {joinStatus === 'EXIT_APPROVING' && (
+                    <Alert className="mt-[16px]">退出申请正在审批中，请等待组织主管处理。</Alert>
+                  )}
+                  {joinStatus === 'PENDING_LEAVE' && (
+                    <Alert className="mt-[16px]">退出申请已通过，将按拟离职日期处理。</Alert>
+                  )}
+                </CardContent>
+              </section>
+            </Card>
           )}
         </div>
       </div>
@@ -304,75 +312,75 @@ function OrganizationCard({
     ? org.expertiseTags.filter((tag): tag is string => typeof tag === 'string')
     : [];
   return (
-    <aside
-      aria-label="组织基本信息"
-      className="min-w-0 rounded-[12px] border bg-card px-[16px] py-[16px] sm:px-[20px]"
-    >
-      <div className="flex flex-wrap items-start gap-[14px]">
-        <UserAvatar
-          name={name}
-          url={logo}
-          className="size-[44px] shrink-0 rounded-[10px] text-[18px]"
-        />
-        <div className="min-w-0 flex-1 basis-[200px]">
-          <div className="flex flex-wrap items-center gap-x-[10px] gap-y-[6px]">
-            <h2 className="m-0 break-words text-[17px] leading-[25px] font-semibold">{name}</h2>
-            <span className="inline-flex items-center gap-[5px] rounded-[5px] bg-[var(--color-primary-soft)] px-[7px] py-[2px] text-[11px] font-medium text-[var(--color-primary-strong)]">
-              {org.verifyStatus === 'APPROVED'
-                ? '已生效'
-                : org.verifyStatus === 'REJECTED'
-                  ? '认证未通过'
-                  : '认证待审核'}
-            </span>
-            {typeof org.status === 'string' && (
-              <span className="text-[12px] text-[var(--color-neutral-strong)]">
-                {{ ACTIVE: '正常', FROZEN: '冻结', DISSOLVED: '已解散' }[org.status] ?? org.status}
+    <Card asChild>
+      <aside aria-label="组织基本信息" className="p-[20px]">
+        <div className="flex flex-wrap items-start gap-[14px]">
+          <UserAvatar
+            name={name}
+            url={logo}
+            className="size-[44px] shrink-0 rounded-[10px] text-[18px]"
+          />
+          <div className="min-w-0 flex-1 basis-[200px]">
+            <div className="flex flex-wrap items-center gap-x-[10px] gap-y-[6px]">
+              <CardTitle className="break-words">{name}</CardTitle>
+              <span className="inline-flex items-center gap-[5px] rounded-[5px] bg-[var(--color-primary-soft)] px-[7px] py-[2px] text-[11px] font-medium text-[var(--color-primary-strong)]">
+                {org.verifyStatus === 'APPROVED'
+                  ? '已生效'
+                  : org.verifyStatus === 'REJECTED'
+                    ? '认证未通过'
+                    : '认证待审核'}
               </span>
-            )}
-          </div>
-          <p className="mt-[4px] break-words whitespace-pre-wrap text-[13px] leading-[21px] text-[var(--color-neutral-strong)]">
-            {description || '暂未填写组织简介'}
-          </p>
-          {(credit || tags.length > 0) && (
-            <div className="mt-[8px] flex flex-wrap items-center gap-x-[16px] gap-y-[6px] text-[12px] text-[var(--color-neutral-strong)]">
-              {credit && (
-                <p className="min-w-0 break-all">
-                  统一社会信用代码 <span className="ml-[4px] font-mono">{credit}</span>
-                </p>
-              )}
-              {tags.length > 0 && (
-                <ul aria-label="组织领域" className="flex flex-wrap gap-[6px]">
-                  {tags.map((tag) => (
-                    <li key={tag} className="rounded-[4px] bg-muted px-[7px] py-[2px]">
-                      {tag}
-                    </li>
-                  ))}
-                </ul>
+              {typeof org.status === 'string' && (
+                <span className="text-[12px] text-[var(--color-neutral-strong)]">
+                  {{ ACTIVE: '正常', FROZEN: '冻结', DISSOLVED: '已解散' }[org.status] ??
+                    org.status}
+                </span>
               )}
             </div>
+            <p className="mt-[4px] break-words whitespace-pre-wrap text-[13px] leading-[21px] text-[var(--color-neutral-strong)]">
+              {description || '暂未填写组织简介'}
+            </p>
+            {(credit || tags.length > 0) && (
+              <div className="mt-[8px] flex flex-wrap items-center gap-x-[16px] gap-y-[6px] text-[12px] text-[var(--color-neutral-strong)]">
+                {credit && (
+                  <p className="min-w-0 break-all">
+                    统一社会信用代码 <span className="ml-[4px] font-mono">{credit}</span>
+                  </p>
+                )}
+                {tags.length > 0 && (
+                  <ul aria-label="组织领域" className="flex flex-wrap gap-[6px]">
+                    {tags.map((tag) => (
+                      <li key={tag} className="rounded-[4px] bg-muted px-[7px] py-[2px]">
+                        {tag}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+          {canEdit && detail && (
+            <Button
+              variant="ghost"
+              size="mobileTouch"
+              className="ml-auto shrink-0"
+              onClick={() => setEditing(true)}
+            >
+              <Pencil className="size-[14px]" aria-hidden />
+              编辑组织资料
+            </Button>
           )}
         </div>
-        {canEdit && detail && (
-          <Button
-            variant="ghost"
-            size="mobileTouch"
-            className="ml-auto shrink-0"
-            onClick={() => setEditing(true)}
-          >
-            <Pencil className="size-[14px]" aria-hidden />
-            编辑组织资料
-          </Button>
+        {editing && detail && (
+          <OrganizationEdit
+            orgId={orgId}
+            detail={detail}
+            onClose={() => setEditing(false)}
+            onSuccess={onUpdated}
+          />
         )}
-      </div>
-      {editing && detail && (
-        <OrganizationEdit
-          orgId={orgId}
-          detail={detail}
-          onClose={() => setEditing(false)}
-          onSuccess={onUpdated}
-        />
-      )}
-    </aside>
+      </aside>
+    </Card>
   );
 }
 

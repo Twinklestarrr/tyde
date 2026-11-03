@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useBlocker } from '@tanstack/react-router';
-import { Download, ExternalLink, Pencil, RefreshCw } from 'lucide-react';
+import { Pencil, RefreshCw } from 'lucide-react';
 import { ApiError, type AuthUser } from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { CardTitle } from '@/components/ui/card';
+import { LoadingState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
@@ -13,11 +15,9 @@ import { SESSION_KEY } from '@/hooks/useSession';
 import { WORKSPACE_ROLE_SWITCH_REQUEST } from '@/layouts/WorkspaceView';
 import { api } from '@/services/api';
 import { EntranceExamDialog } from './EntranceExamDialog';
-import { EntranceExamText } from './EntranceExamText';
-import { saveExamBlob } from './EntranceExamFiles';
+import { StandardMaterialsContent } from './StandardMaterialsContent';
 import { StrategistExamFiles } from './StrategistExamFiles';
 import {
-  standardMaterialLink,
   standardTrainingDraft,
   standardTrainingInput,
   type StandardTrainingDraft,
@@ -88,7 +88,6 @@ export function StandardTrainingPanel({
   const [error, setError] = useState<unknown>(null);
   const [readError, setReadError] = useState<unknown>(null);
   const [notice, setNotice] = useState('');
-  const [downloading, setDownloading] = useState<number | null>(null);
   const mounted = useRef(false);
   const writing = useRef(false);
   const dirty = draft !== null && JSON.stringify(draft) !== original.current;
@@ -146,12 +145,20 @@ export function StandardTrainingPanel({
     enableBeforeUnload: () => writing.current || uploading || dirty,
   });
 
-  async function reread(discard = true) {
+  async function reread(discard = true, written = false) {
     if (reading || writing.current || uploading || !sameSession()) return;
     if (discard && dirty && !window.confirm('重新读取将替换未保存的标准材料，确认继续？')) return;
+    const previousLock = cache.getQueryData<WriteLock | null>(lockKey) ?? null;
+    const confirmed = written || previousLock === 'success';
     setReading(true);
     setReadError(null);
     try {
+      if (confirmed) {
+        // 父级可能切换待办或返回列表，先清除已确定成功的持久锁。
+        setLock(null);
+        await onChanged();
+        if (!sameSession()) return;
+      }
       const [result, allowed] = await Promise.all([
         api.getProjectStandardMaterials(projectId),
         materialsManagement(projectId),
@@ -160,13 +167,16 @@ export function StandardTrainingPanel({
       cache.setQueryData(scope, result);
       cache.setQueryData(permissionsKey, allowed);
       setDraft(null);
-      await onChanged();
-      if (!sameSession()) return;
-      setLock(null);
+      if (!confirmed) {
+        setLock(null);
+        await onChanged();
+        if (!sameSession()) return;
+      }
       setError(null);
       setNotice('已读取最新标准材料，请核对当前内容。');
     } catch (failure) {
       if (sameSession()) {
+        setLock(previousLock);
         setReadError(failure);
         if (failure instanceof ApiError && [401, 403, 404].includes(failure.status))
           setLock('access');
@@ -222,36 +232,15 @@ export function StandardTrainingPanel({
         setConfirming(false);
       }
     }
-    if (saved && sameSession()) await reread(false);
-  }
-
-  async function download(id: number) {
-    const file = materials.data?.attachments.find((item) => item.id === id);
-    if (!file || downloading !== null || !sameSession()) return;
-    setDownloading(id);
-    setError(null);
-    try {
-      const blob = await api.readProjectAttachment(file.objectKey);
-      if (sameSession()) saveExamBlob(blob, file.fileName);
-    } catch (failure) {
-      if (sameSession()) setError(failure);
-    } finally {
-      if (mounted.current) setDownloading(null);
-    }
+    if (saved && sameSession()) await reread(false, true);
   }
 
   if (!isPm) return null;
   const data = materials.data;
-  const link = standardMaterialLink(data?.standardLink ?? null);
   return (
-    <section aria-label="标准与培训" className="space-y-5 p-0 sm:p-4">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-[20px] font-semibold">标准与培训</h2>
-          <p className="mt-2 text-[13px] leading-6 text-muted-foreground">
-            维护项目作业标准、培训说明和参考附件，供执行专家阅读。
-          </p>
-        </div>
+    <section aria-label="标准与培训" className="space-y-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <CardTitle>标准与培训</CardTitle>
         <Button
           variant="outline"
           size="mobileTouch"
@@ -271,7 +260,7 @@ export function StandardTrainingPanel({
           {notice}
         </p>
       )}
-      {!data && materials.isPending && <p role="status">正在读取标准材料…</p>}
+      {!data && materials.isPending && <LoadingState>正在读取标准材料…</LoadingState>}
       {lock && (
         <Alert>
           {lock === 'success'
@@ -296,9 +285,9 @@ export function StandardTrainingPanel({
                 setError(null);
                 if (!disabled && !uploading && input()) setConfirming(true);
               }}
-              className="space-y-5"
+              className="space-y-4"
             >
-              <fieldset disabled={disabled} className="min-w-0 space-y-5">
+              <fieldset disabled={disabled} className="min-w-0 space-y-4">
                 <FormField
                   controlId="standard-content"
                   label="标准正文"
@@ -306,7 +295,7 @@ export function StandardTrainingPanel({
                 >
                   <Textarea
                     id="standard-content"
-                    rows={10}
+                    rows={6}
                     value={draft.standardContent}
                     onChange={(event) =>
                       setDraft({ ...draft, standardContent: event.target.value })
@@ -340,7 +329,7 @@ export function StandardTrainingPanel({
                 />
               </fieldset>
               <ErrorNotice error={error} />
-              <footer className="flex flex-wrap justify-end gap-3 border-t pt-5">
+              <footer className="flex flex-wrap justify-end gap-3 border-t pt-3">
                 <Button
                   variant="outline"
                   size="mobileTouch"
@@ -366,52 +355,10 @@ export function StandardTrainingPanel({
             </form>
           ) : (
             <>
-              <div className="rounded-xl border bg-muted/30 p-4 sm:p-5">
-                <h3 className="mb-3 text-[14px] font-semibold">标准正文</h3>
-                <EntranceExamText value={data.standardContent} empty="暂无标准正文。" />
-              </div>
-              <div className="min-w-0 space-y-2 text-[13px]">
-                <h3 className="font-semibold">标准链接</h3>
-                {link ? (
-                  <a
-                    href={link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex max-w-full items-center gap-2 break-all text-primary underline"
-                  >
-                    <ExternalLink className="size-4 shrink-0" aria-hidden />
-                    {data.standardLink}
-                  </a>
-                ) : (
-                  <p className="break-all text-muted-foreground">
-                    {data.standardLink || '暂无标准链接。'}
-                  </p>
-                )}
-              </div>
-              <div className="space-y-2 text-[13px]" aria-label="标准附件">
-                <h3 className="font-semibold">标准附件（{data.attachments.length}）</h3>
-                {data.attachments.length === 0 && (
-                  <p className="text-muted-foreground">暂无标准附件。</p>
-                )}
-                {data.attachments.map((file) => (
-                  <Button
-                    key={file.id}
-                    variant="outline"
-                    size="mobileTouch"
-                    className="flex h-auto max-w-full justify-start whitespace-normal break-all text-left"
-                    loading={downloading === file.id}
-                    aria-label={`下载${file.fileName}`}
-                    disabled={downloading !== null}
-                    onClick={() => void download(file.id)}
-                  >
-                    <Download className="size-4 shrink-0" aria-hidden />
-                    {file.fileName}
-                  </Button>
-                ))}
-              </div>
+              <StandardMaterialsContent user={user} materials={data} />
               <ErrorNotice error={error} />
               {canManage && (
-                <div className="flex justify-end border-t pt-5">
+                <div className="flex justify-end border-t pt-3">
                   <Button
                     size="mobileTouch"
                     disabled={disabled}

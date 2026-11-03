@@ -7,6 +7,7 @@ import {
   AVATAR_EXTENSIONS,
   PROJECT_ATTACHMENT_MAX_BYTES,
   PROJECT_ATTACHMENT_EXTENSIONS,
+  ENTRANCE_EXAM_ANSWER_MAX_BYTES,
   BUSINESS_ROLES,
   type AuthApi,
   type ApiFailure,
@@ -2183,7 +2184,165 @@ export function createHttpAuth(
       examInputError();
   }
 
+  function candidateInputError(): never {
+    throw new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: '考试作答参数不合法，请核对应试记录、诚信承诺和答案附件。',
+    });
+  }
+  function candidatePaper(value: unknown, projectId: number): Exam.EntranceExamCandidatePaper {
+    if (
+      !record(value) ||
+      !onlyKeys(value, [
+        'projectId',
+        'attemptId',
+        'examId',
+        'examVersionId',
+        'paperId',
+        'examName',
+        'paperName',
+        'durationMinutes',
+        'fullScore',
+        'enteredAt',
+        'answerDeadlineAt',
+        'questions',
+      ]) ||
+      value.projectId !== projectId ||
+      !['attemptId', 'examId', 'examVersionId', 'paperId'].every((key) =>
+        projectPlanId(value[key]),
+      ) ||
+      !strings(value, ['examName']) ||
+      !(value.paperName === null || typeof value.paperName === 'string') ||
+      !(value.durationMinutes === null || projectPlanId(value.durationMinutes)) ||
+      !examScore(value.fullScore, true) ||
+      !attendanceTime(value.enteredAt) ||
+      !(value.answerDeadlineAt === null || attendanceTime(value.answerDeadlineAt)) ||
+      !Array.isArray(value.questions) ||
+      !value.questions.length ||
+      value.questions.length > 500 ||
+      !value.questions.every(
+        (question) =>
+          record(question) &&
+          onlyKeys(question, [
+            'questionId',
+            'sequenceNo',
+            'questionContent',
+            'questionFiles',
+            'requiredFlag',
+            'score',
+          ]) &&
+          projectPlanId(question.questionId) &&
+          projectPlanId(question.sequenceNo) &&
+          (question.questionContent === null || typeof question.questionContent === 'string') &&
+          Object.hasOwn(question, 'questionFiles') &&
+          typeof question.requiredFlag === 'boolean' &&
+          examScore(question.score, true),
+      ) ||
+      new Set(value.questions.map((question) => question.questionId)).size !==
+        value.questions.length ||
+      new Set(value.questions.map((question) => question.sequenceNo)).size !==
+        value.questions.length
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamCandidatePaper;
+  }
+  function candidateAttemptInput(value: unknown, submit = false) {
+    if (
+      !record(value) ||
+      !onlyKeys(value, [
+        'projectId',
+        'attemptId',
+        ...(submit ? ['integritySigned', 'answers'] : []),
+      ]) ||
+      !projectPlanId(value.projectId) ||
+      !projectPlanId(value.attemptId)
+    )
+      candidateInputError();
+  }
+  function candidateSubmitInput(input: Exam.EntranceExamCandidateSubmitInput) {
+    candidateAttemptInput(input, true);
+    if (
+      input.integritySigned !== true ||
+      !Array.isArray(input.answers) ||
+      input.answers.length > 500 ||
+      !input.answers.every(
+        (answer) =>
+          record(answer) &&
+          onlyKeys(answer, ['questionId', 'answerContent', 'answerFiles']) &&
+          projectPlanId(answer.questionId) &&
+          examText(answer.answerContent, 100000) &&
+          (answer.answerFiles == null ||
+            (Array.isArray(answer.answerFiles) &&
+              answer.answerFiles.length <= 10 &&
+              answer.answerFiles.every(
+                (file) =>
+                  examFileInput(file) &&
+                  record(file) &&
+                  file.uploadedFileId == null &&
+                  typeof file.uploadToken === 'string' &&
+                  !!file.uploadToken.trim(),
+              ))),
+      ) ||
+      new Set(input.answers.map((answer) => answer.questionId)).size !== input.answers.length
+    )
+      candidateInputError();
+    const keys = input.answers.flatMap((answer) =>
+      (answer.answerFiles ?? []).map((file) => file.objectKey),
+    );
+    if (new Set(keys).size !== keys.length) candidateInputError();
+    if (new TextEncoder().encode(JSON.stringify(input)).byteLength > ENTRANCE_EXAM_ANSWER_MAX_BYTES)
+      throw new ApiError(413, {
+        code: 'PAYLOAD_TOO_LARGE',
+        message: '答卷超过当前可提交大小，请缩短文字答案后重试。',
+      });
+  }
+
   return {
+    getEntranceExamCandidateCurrent: async (projectId) => {
+      if (!projectPlanId(projectId)) candidateInputError();
+      const data = await request(
+        `/entrance-exams/current?projectId=${projectId}`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (
+        !record(data) ||
+        data.projectId !== projectId ||
+        !inEnum(data.status, ['PASSED', 'PENDING', 'NOT_PASSED', 'NOT_EXAMINED'])
+      )
+        invalidResponse();
+      return data as unknown as Exam.EntranceExamCandidateCurrent;
+    },
+    enterEntranceExam: async (projectId) => {
+      if (!projectPlanId(projectId)) candidateInputError();
+      return candidatePaper(
+        await request('/entrance-exams/enter', { projectId }, 'POST', true),
+        projectId,
+      );
+    },
+    submitEntranceExam: async (input) => {
+      candidateSubmitInput(input);
+      const data = await request('/entrance-exams/submit', input, 'POST', true);
+      if (
+        !record(data) ||
+        data.attemptId !== input.attemptId ||
+        !projectPlanId(data.answerCount) ||
+        Number(data.answerCount) < input.answers.length ||
+        !projectPlanId(data.gradingRoundCount) ||
+        data.gradingStatus !== 'PENDING' ||
+        !attendanceTime(data.submittedAt)
+      )
+        invalidResponse();
+      return data as unknown as Exam.EntranceExamCandidateSubmitResult;
+    },
+    cancelEntranceExam: async (input) => {
+      candidateAttemptInput(input);
+      const data = await request('/entrance-exams/cancel', input, 'POST', true);
+      if (!record(data) || data.attemptId !== input.attemptId || !attendanceTime(data.cancelledAt))
+        invalidResponse();
+      return data as unknown as Exam.EntranceExamCandidateCancelResult;
+    },
     getEntranceExamManagement: async (projectId) => {
       if (!projectPlanId(projectId)) examInputError();
       return examManagement(
@@ -2771,6 +2930,22 @@ export function createHttpAuth(
         ),
         projectId,
       );
+    },
+    confirmProjectStandardMaterialsRead: async (projectId) => {
+      if (!projectPlanId(projectId))
+        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+      const data = projectStandardMaterials(
+        await request(
+          `/projects/standard-materials/confirm-read?projectId=${projectId}`,
+          undefined,
+          'POST',
+          true,
+        ),
+        projectId,
+      );
+      if (data.confirmedReadAt === null || data.canConfirmRead || data.stateTransitioned)
+        invalidResponse();
+      return data;
     },
     updateProjectStandardMaterials: async (input) => {
       validateProjectMaterialsInput(input);
