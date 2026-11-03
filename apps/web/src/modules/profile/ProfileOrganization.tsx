@@ -4,6 +4,8 @@ import type { AuthUser } from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
+import { CardTitle } from '@/components/ui/card';
+import { LoadingState } from '@/components/ui/empty-state';
 import { sessionQuery } from '@/hooks/useSession';
 import { api } from '@/services/api';
 
@@ -15,7 +17,9 @@ export function ProfileOrganization({ organization }: { organization: AuthUser['
   if (!organization)
     return (
       <section aria-label="所属组织" className="mt-[24px] border-t pt-[20px]">
-        <h3 className="m-0 text-[14px] leading-[22px] font-semibold">所属组织</h3>
+        <CardTitle asChild>
+          <h3>所属组织</h3>
+        </CardTitle>
         <p className="mt-[10px] text-[12px] leading-[20px] text-[var(--color-neutral-strong)]">
           还没有组织，可以创建自己的团队。
         </p>
@@ -61,7 +65,9 @@ function OrganizationSummary({ organization }: { organization: Record<string, un
   if (!name && !canRead) return null;
   return (
     <section aria-label="所属组织" className="mt-[24px] border-t pt-[20px]">
-      <h3 className="m-0 text-[14px] leading-[22px] font-semibold">所属组织</h3>
+      <CardTitle asChild>
+        <h3>所属组织</h3>
+      </CardTitle>
       {name && (
         <div className="mt-[12px] flex items-start gap-[10px]">
           <UserAvatar url={logo} name={name} className="size-[32px] rounded-[6px] text-[14px]" />
@@ -112,9 +118,7 @@ function OrganizationSummary({ organization }: { organization: Record<string, un
         <Link to="/organization">{canRead ? '进入组织管理' : '查看我的组织'}</Link>
       </Button>
       {canRead && detail.isFetching && (
-        <p role="status" className="mt-[12px] text-[12px] text-[var(--color-neutral-strong)]">
-          正在读取组织详情…
-        </p>
+        <LoadingState className="mt-3 justify-start p-0">正在读取组织详情…</LoadingState>
       )}
       {canRead && detail.isError && (
         <div className="mt-[12px] space-y-[8px]">

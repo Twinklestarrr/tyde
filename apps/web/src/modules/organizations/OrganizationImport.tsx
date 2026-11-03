@@ -191,7 +191,7 @@ function ImportDialog({ orgId, onSuccess }: OrganizationImportProps) {
 
   return (
     <>
-      <Button size="mobileTouch" variant="dark" onClick={() => setOpen(true)}>
+      <Button size="mobileTouch" onClick={() => setOpen(true)}>
         <UsersRound className="size-[16px]" aria-hidden />
         批量导入成员
       </Button>

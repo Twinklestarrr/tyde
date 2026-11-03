@@ -166,6 +166,33 @@ test('Shanghai deadline must be a real future wall-clock second and is rechecked
   }
 });
 
+test('date-only exam deadlines close at Shanghai day end and retain future-date validation', () => {
+  const values = valid();
+  values.registrationDeadline = '2026-10-28';
+  assert.equal(input(values).input.registrationDeadline, '2026-10-28 23:59:59');
+  assert.ok(input(values, { now: new Date('2026-10-28T15:59:58Z') }).input);
+  assert.ok(input(values, { now: new Date('2026-10-28T15:59:59Z') }).errors.registrationDeadline);
+  for (const value of ['', '2026-02-30', '2026-10-27', '2026-2-28']) {
+    values.registrationDeadline = value;
+    assert.ok(input(values).errors.registrationDeadline, value);
+  }
+  values.registrationDeadline = '2028-02-29';
+  assert.equal(input(values).input.registrationDeadline, '2028-02-29 23:59:59');
+});
+
+test('existing and imported precise deadlines survive unrelated edits; a newly selected date uses day end', () => {
+  for (const values of [
+    entranceExamConfigurationValues(configuration()),
+    entranceExamImportedValues(input(valid()).input),
+  ]) {
+    assert.equal(values.registrationDeadline.slice(0, 10), '2099-01-01');
+    values.examName = '只修改考试名称';
+    assert.equal(input(values).input.registrationDeadline, '2099-01-01 18:00:00');
+    values.registrationDeadline = '2099-01-02';
+    assert.equal(input(values).input.registrationDeadline, '2099-01-02 23:59:59');
+  }
+});
+
 test('duration, duplicate names and per-collection limits follow current backend boundaries', () => {
   const values = valid();
   values.durationMode = 'UNLIMITED';

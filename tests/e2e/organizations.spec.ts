@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { expectPickerOnBodyClick } from './native-picker';
 import type {
   AuthUser,
   OrganizationDetail,
@@ -547,6 +548,10 @@ for (const [mode, origin, desktop] of [
     const row = page.getByRole('row').filter({ hasText: '联调成员甲' });
     await row.getByRole('button', { name: '编辑成员', exact: true }).click();
     const memberEdit = page.getByRole('dialog', { name: '编辑组织成员', exact: true });
+    const joinedDate = memberEdit.getByLabel('入组日期（上海）', { exact: true });
+    await expect(joinedDate).toHaveAttribute('type', 'date');
+    await expect(joinedDate).toHaveValue(timestamp.slice(0, 10));
+    await expectPickerOnBodyClick(joinedDate);
     await memberEdit.getByLabel('人员属性', { exact: true }).selectOption('PART_TIME');
     state.memberUpdateStatus = 409;
     await memberEdit.getByRole('button', { name: '保存成员资料', exact: true }).click();
@@ -564,17 +569,21 @@ for (const [mode, origin, desktop] of [
     await page.getByRole('button', { name: '刷新人员', exact: true }).click();
     await expect(page.getByRole('button', { name: '刷新人员', exact: true })).toBeEnabled();
     await row.getByRole('button', { name: '编辑成员', exact: true }).click();
+    await memberEdit.getByLabel('入组日期（上海）', { exact: true }).fill('2026-10-01');
     await memberEdit.getByLabel('人员属性', { exact: true }).selectOption('PART_TIME');
     await memberEdit.getByRole('button', { name: '保存成员资料', exact: true }).click();
     await expect(memberEdit).not.toBeVisible();
     await expect(row.getByText('兼职', { exact: true })).toBeVisible();
     expect(calls(requests, writePaths.member)).toHaveLength(2);
     expect(calls(requests, writePaths.member).at(-1)?.body?.versionNo).toBe(5);
+    expect(calls(requests, writePaths.member).at(-1)?.body?.joinedAt).toBe('2026-10-01 00:00:00');
     state.departureStatus = 503;
     const removal = page.getByRole('dialog', { name: '移出组织', exact: true });
     for (const count of [1, 2]) {
       await row.getByRole('button', { name: '移出组织', exact: true }).click();
       await removal.getByLabel(/^拟离职日期（上海）\s*\*?\s*$/).fill('2099-01-01');
+      if (count === 1)
+        await expectPickerOnBodyClick(removal.getByLabel(/^拟离职日期（上海）\s*\*?\s*$/));
       await removal.getByLabel(/^退出原因\s*\*?\s*$/).fill('组织工作安排调整');
       await removal.getByRole('button', { name: '确认移出组织', exact: true }).click();
       await expect(removal.getByText('组织退出服务暂不可用', { exact: true })).toBeVisible();
@@ -625,6 +634,8 @@ for (const [mode, origin, desktop] of [
     expect(calls(requests, writePaths.approval)).toHaveLength(1);
     await approval.getByRole('button', { name: '取消', exact: true }).click();
     await page.getByRole('radio', { name: '审批记录', exact: true }).check();
+    await expectPickerOnBodyClick(page.getByLabel('处理开始日期', { exact: true }));
+    await expectPickerOnBodyClick(page.getByLabel('处理结束日期', { exact: true }));
     await page.getByLabel('处理开始日期', { exact: true }).fill('2026-02-01');
     await page.getByLabel('处理结束日期', { exact: true }).fill('2026-01-01');
     await expect(page.getByText('开始日期不能晚于结束日期', { exact: true })).toBeVisible();
@@ -824,6 +835,7 @@ test('组织管理 ADMIN权限、MEMBER只读摘要和本人退出，不请求�
   await page.getByRole('button', { name: '申请退出组织', exact: true }).click();
   const departure = page.getByRole('dialog', { name: '申请退出组织', exact: true });
   await departure.getByLabel(/^拟离职日期\s*\*?\s*$/).fill('2099-01-01');
+  await expectPickerOnBodyClick(departure.getByLabel(/^拟离职日期\s*\*?\s*$/));
   await departure.getByLabel(/^退出原因\s*\*?\s*$/).fill('本人工作安排调整');
   await departure.getByRole('button', { name: '提交退出申请', exact: true }).click();
   await expect(departure).not.toBeVisible();
@@ -873,6 +885,8 @@ test('组织管理紧凑工具栏、高级筛选与桌面移动布局', async ({
   await project.fill('42');
   await joinedStart.fill('2026-01-01');
   await joinedEnd.fill('2026-01-31');
+  for (const label of ['入组日期起', '入组日期止', '离组日期起', '离组日期止'])
+    await expectPickerOnBodyClick(page.getByLabel(label, { exact: true }));
   await employment.selectOption('FULL_TIME');
   await page.getByRole('button', { name: '查询', exact: true }).click();
   await expect
@@ -1384,6 +1398,7 @@ test('组织导入人员属性和角色使用公共下拉，原生日期可填�
   await expect(date).toHaveAttribute('type', 'date');
   await date.fill('2024-02-29');
   await expect(date).toHaveValue('2024-02-29');
+  await expectPickerOnBodyClick(date);
   await date.fill('');
   await expect(date).toHaveValue('');
   await date.fill('2026-10-05');

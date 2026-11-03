@@ -6,6 +6,7 @@ import type {
   OrganizationScheduleMember,
   OrganizationSchedulesInput,
 } from '../../packages/shared/src/index';
+import { expectPickerOnBodyClick } from './native-picker';
 
 const origin = 'http://127.0.0.1:5176';
 const uuid = (id: number) => `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`;
@@ -198,6 +199,7 @@ test('组织排班活动页签加载、服务器筛选分页、月份变化清�
   await expect(page.getByRole('tab', { name: '排班管理' })).toBeVisible();
   expect(calls('')).toHaveLength(0);
   await page.getByRole('tab', { name: '排班管理' }).click();
+  await page.getByLabel('排班月份', { exact: true }).fill('2026-10');
   await expect(page.getByRole('checkbox', { name: '选择 排班成员3', exact: true })).toBeDisabled();
   await page.getByRole('checkbox', { name: '选择 联调成员甲', exact: true }).check();
   await expect(page.getByRole('button', { name: '批量排班（1 人）' })).toBeEnabled();
@@ -226,11 +228,16 @@ for (const [mode, desktop] of [
   }) => {
     const { state, calls } = await backend(page, desktop);
     await openSchedules(page);
+    await expectPickerOnBodyClick(page.getByLabel('排班月份', { exact: true }));
     await page.getByRole('checkbox', { name: '选择 联调成员甲', exact: true }).check();
     await page.getByRole('button', { name: '批量排班（1 人）' }).click();
     const dialog = page.getByRole('dialog', { name: '组织批量排班', exact: true });
     await dialog.getByLabel(/^开始日期/).fill('2026-10-12');
     await dialog.getByLabel(/^结束日期/).fill('2026-10-12');
+    await expectPickerOnBodyClick(dialog.getByLabel(/^开始日期/));
+    await expectPickerOnBodyClick(dialog.getByLabel(/^结束日期/));
+    await expectPickerOnBodyClick(dialog.getByLabel(/^上班时间/));
+    await expectPickerOnBodyClick(dialog.getByLabel(/^下班时间/));
     state.batchStatus = 503;
     await dialog.getByRole('button', { name: '保存排班', exact: true }).click();
     await expect(dialog.getByText('排班保存暂时不可用')).toBeVisible();

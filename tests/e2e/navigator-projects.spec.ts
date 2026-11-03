@@ -364,7 +364,7 @@ for (const [mode, desktop] of [
     const { state, calls } = await backend(page, desktop);
     state.draft = draftFixture();
     await page.goto(`${origin}/#/`);
-    await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '待办项目甲', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: '继续完善', exact: true })).toBeVisible();
     if (!desktop) await screenshot(page, 'workbench', 'artifacts/project-dialog-audit');
@@ -372,8 +372,12 @@ for (const [mode, desktop] of [
     await expect(page.getByText('没有匹配的待办项目', { exact: true })).toBeVisible();
     await page.getByLabel('筛选当前待办', { exact: true }).fill('PROJECT-501');
     await page.getByRole('link', { name: '查看项目', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '待办项目甲', exact: true })).toBeVisible();
     const workflow = page.getByRole('region', { name: '项目主流程', exact: true });
+    await expect(workflow).toBeVisible();
+    const toolbar = workflow.getByRole('toolbar', { name: '项目操作', exact: true });
+    await expect(toolbar.getByRole('link', { name: '返回我的项目', exact: true })).toBeVisible();
+    await expect(toolbar.getByRole('button', { name: '刷新详情', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '待办项目甲', exact: true })).toHaveCount(0);
     const tabs = workflow.getByRole('tablist', { name: '领航员项目模块', exact: true });
     await expect(tabs.getByRole('tab')).toHaveCount(4);
     for (const name of ['招募策略官', '准入考试', '标准与培训', '生产任务'])
@@ -404,6 +408,7 @@ for (const [mode, desktop] of [
     await detailsButton.click();
     const dialog = page.getByRole('dialog', { name: '项目详情', exact: true });
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(detail.projectNo, { exact: true })).toBeVisible();
     const basic = dialog.getByRole('region', { name: '基础信息', exact: true });
     for (const value of [
       detail.projectName!,
@@ -480,7 +485,7 @@ for (const [mode, desktop] of [
     const before = calls('projects/list').length;
     await chooseRole(page, '策略官');
     await expect(page).toHaveURL(/#\/$/);
-    await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toHaveCount(0);
+    await expect(page.locator('#navigator-project-search')).toHaveCount(0);
     await page.goto(`${origin}/#/projects/create`);
     await expect(page).toHaveURL(/#\/$/);
     expect(calls('projects/create')).toHaveLength(0);
@@ -658,6 +663,44 @@ for (const [mode, desktop] of [
       versionNo: 7,
       attachments: [{ id: 81, sortNo: 0 }],
     });
+  });
+}
+
+for (const [mode, desktop] of [
+  ['Web', false],
+  ['Electron 运行配置', true],
+] as const) {
+  test(`${mode} 三级类型点击文字和整行可选中或取消，搜索与键盘交互保留`, async ({ page }) => {
+    const { state, calls } = await backend(page, desktop);
+    state.draft = draftFixture();
+    await page.goto(`${origin}/#/projects/create`);
+    const trigger = page.getByRole('combobox', { name: /^三级项目类型/ });
+    await trigger.click();
+    const dialog = page.getByRole('dialog', { name: '选择三级项目类型', exact: true });
+    const search = dialog.getByRole('textbox', { name: '搜索三级项目类型', exact: true });
+    const checkbox = dialog.getByRole('checkbox', { name: '内容分类', exact: true });
+    await expect(search).toBeFocused();
+    await expect(checkbox).toBeChecked();
+    await dialog.getByText('内容分类', { exact: true }).click();
+    await expect(checkbox).not.toBeChecked();
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('button', { name: '移除 内容分类', exact: true })).toHaveCount(0);
+    await search.fill('内容');
+    await dialog.getByText('内容分类', { exact: true }).click();
+    await expect(checkbox).toBeChecked();
+    await expect(page.getByRole('button', { name: '移除 内容分类', exact: true })).toBeVisible();
+    await search.focus();
+    await checkbox.locator('..').click({ position: { x: 4, y: 22 } });
+    await expect(checkbox).not.toBeChecked();
+    await search.focus();
+    await search.press('ArrowDown');
+    await expect(checkbox).toBeFocused();
+    await checkbox.press('Space');
+    await expect(checkbox).toBeChecked();
+    await page.keyboard.press('Escape');
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(calls('projects/create')).toHaveLength(0);
   });
 }
 
@@ -906,7 +949,7 @@ for (const [mode, desktop] of [
     });
     await releaseSave();
     await expect(page).toHaveURL(/#\/projects\?created=501$/);
-    await expect(page.getByText('项目已发布，可进入详情查看。', { exact: true })).toBeVisible();
+    await expect(page.getByText('项目已发布', { exact: true })).toBeVisible();
     if (!desktop) await screenshot(page, 'published');
     expect(calls('projects/create')).toHaveLength(1);
     expect(calls('projects/create')[0]?.headers.cookie).toContain('navigator_session=active');

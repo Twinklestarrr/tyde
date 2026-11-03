@@ -1,6 +1,7 @@
 import { House, RefreshCw } from 'lucide-react';
 import { TideIcon } from './icons';
 import { Button } from './ui/button';
+import { Card, CardDescription, CardTitle } from './ui/card';
 
 function returnHome() {
   const home = new URL(window.location.href);
@@ -34,29 +35,31 @@ export function PageRecovery({
         </header>
       )}
       <div className={fullPage ? 'grid flex-1 place-items-center px-[16px] py-[32px]' : ''}>
-        <section
-          aria-label={title}
-          role="alert"
-          className="mx-auto w-full max-w-[480px] rounded-[16px] border bg-card px-[24px] py-[32px] text-center sm:p-[40px]"
-        >
-          <div className="mx-auto mb-[20px] grid size-[56px] place-items-center rounded-[16px] bg-accent text-[var(--color-primary-strong)]">
-            <RefreshCw className="size-[26px]" aria-hidden />
-          </div>
-          <h1 className="m-0 text-[20px] font-semibold leading-[30px]">{title}</h1>
-          <p className="mt-[10px] text-[14px] leading-[24px] text-[var(--color-neutral-strong)]">
-            {description}
-          </p>
-          <div className="mt-[28px] flex flex-wrap justify-center gap-[10px]">
-            <Button size="account" onClick={returnHome}>
-              <House className="size-[16px]" aria-hidden />
-              返回首页
-            </Button>
-            <Button variant="outline" size="account" onClick={onRetry} loading={loading}>
-              <RefreshCw className="size-[16px]" aria-hidden />
-              重试
-            </Button>
-          </div>
-        </section>
+        <Card asChild>
+          <section
+            aria-label={title}
+            role="alert"
+            className="mx-auto w-full max-w-[480px] px-6 py-8 text-center sm:p-10"
+          >
+            <div className="mx-auto mb-5 grid size-[56px] place-items-center rounded-[8px] bg-accent text-[var(--color-primary-strong)]">
+              <RefreshCw className="size-[26px]" aria-hidden />
+            </div>
+            <CardTitle asChild>
+              <h1>{title}</h1>
+            </CardTitle>
+            <CardDescription className="mt-3">{description}</CardDescription>
+            <div className="mt-[28px] flex flex-wrap justify-center gap-[10px]">
+              <Button size="account" onClick={returnHome}>
+                <House className="size-[16px]" aria-hidden />
+                返回首页
+              </Button>
+              <Button variant="outline" size="account" onClick={onRetry} loading={loading}>
+                <RefreshCw className="size-[16px]" aria-hidden />
+                重试
+              </Button>
+            </div>
+          </section>
+        </Card>
       </div>
     </div>
   );

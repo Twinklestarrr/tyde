@@ -1,6 +1,6 @@
 # 当前已实现功能与自动化覆盖
 
-更新日期：2026-10-28。以下按当前源码、实际页面入口和现有测试列出功能；“页面已接入”表示页面调用现有业务接口，不表示所有远程环境、数据库迁移、OSS、安装包及完整业务流程均已验收。
+更新日期：2026-11-03。以下按当前源码、实际页面入口和现有测试列出功能；“页面已接入”表示页面调用现有业务接口，不表示所有远程环境、数据库迁移、OSS、安装包及完整业务流程均已验收。
 
 在仓库根目录运行 `pnpm test:features`，统一执行业务与独立 Agent 的隔离测试、构建及业务页面回归。最近一次运行的报告位置由 `artifacts/feature-tests/latest.json` 给出；每次运行保留自己的日志、JSON 汇总、页面截图和失败 trace。该入口不执行数据库初始化、迁移或清表，也不调用真实模型或真实业务阅卷 Agent。具体通过、失败、跳过和未运行结果以对应运行报告为准。
 
@@ -24,7 +24,20 @@ Web 与 Electron 共用 `apps/web` 的业务组件、路由和客户端适配；
 | 策略官项目与生产计划 | 负责项目待办、详情和计划读取；人群与阶段增删、日期和数字精度校验、主策略官确认；协作负责人和已确认计划只读；未保存输入保护                                                                                | [StrategistProjectsPage.tsx](../apps/web/src/modules/projects/StrategistProjectsPage.tsx)、[ProductionPlanPanel.tsx](../apps/web/src/modules/projects/ProductionPlanPanel.tsx)                                                                                          | [production-plan.spec.ts](../tests/e2e/production-plan.spec.ts)、[计划表单测试](../tests/production-plan-form.test.mjs)、[计划适配契约](../tests/production-plan-platform.test.mjs)         |
 | 策略官准入考试管理   | 项目准入名单和考试列表；创建多卷、题目、分数、时长及截止时间；人工与模拟自动判卷轮次配置；XLS/XLSX/TXT 导入填表、模板下载、引用附件上传；发布、版本编辑、关闭；考试名单筛选分页；主策略官写权限与协作只读 | [StrategistExamPanel.tsx](../apps/web/src/modules/projects/StrategistExamPanel.tsx)、[StrategistExamEditor.tsx](../apps/web/src/modules/projects/StrategistExamEditor.tsx)、[EntranceExamRosterViews.tsx](../apps/web/src/modules/projects/EntranceExamRosterViews.tsx) | [entrance-exams.spec.ts](../tests/e2e/entrance-exams.spec.ts)、[考试表单测试](../tests/entrance-exam-form.test.mjs)、[考试适配契约](../tests/entrance-exams-platform.test.mjs)              |
 | 策略官阅卷           | 读取应试绑定的历史试卷与答卷；安全正文预览和鉴权附件下载；逐题人工判定、意见及总结、确认提交；模拟自动轮失败重试和有原因的人工补偿；显示各轮与最终准入结果，考试通过不冒充已入项                          | [EntranceExamGradingWorkspace.tsx](../apps/web/src/modules/projects/EntranceExamGradingWorkspace.tsx)、[entrance-exam-grading.ts](../apps/web/src/modules/projects/entrance-exam-grading.ts)                                                                            | [entrance-exams.spec.ts](../tests/e2e/entrance-exams.spec.ts)、[阅卷表单测试](../tests/entrance-exam-grading.test.mjs)                                                                      |
+| 策略官标准与培训     | 标准正文/链接查看与编辑；附件上传、保留、移除及鉴权下载；主策略官可写、协作只读；完整JSON按16KiB校验；未知/冲突显式回读与未保存内容离开保护                                                               | [StandardTrainingPanel.tsx](../apps/web/src/modules/projects/StandardTrainingPanel.tsx)、[standard-training-form.ts](../apps/web/src/modules/projects/standard-training-form.ts)                                                                                        | [standard-training.spec.ts](../tests/e2e/standard-training.spec.ts)、[标准表单测试](../tests/standard-training-form.test.mjs)、[材料适配契约](../tests/project-materials-platform.test.mjs) |
 | 执行专家待办与接拒单 | 组织主管、项目负责人、成员、个人及转入来源待办；搜索、刷新、只读项目详情、接单和拒绝；主管接单时从真实候选选择负责人；未知结果及成功回读失败均锁住旧操作                                                  | [ExpertProjectsPage.tsx](../apps/web/src/modules/projects/ExpertProjectsPage.tsx)、[ExpertTaskResponseDialog.tsx](../apps/web/src/modules/projects/ExpertTaskResponseDialog.tsx)                                                                                        | [workspace-views.spec.ts](../tests/e2e/workspace-views.spec.ts)、[expert-actions.spec.ts](../tests/e2e/expert-actions.spec.ts)、[专家待办适配契约](../tests/expert-tasks-platform.test.mjs) |
+
+2026-11-02标准与培训批次复用既有材料查询/更新和项目附件上传/读取HTTP接口，Web/Electron共用同一UI。本批244项核心测试（含新增3项表单与8项平台契约）、10项新增页面与38项受影响页面回归全部通过；Web/Electron构建及相关类型、变更静态/格式检查通过，375px截图已核对；桌面HTTP的主策略官核验依赖用户工作区已有的阅卷候选来源校验修复。运行配置验证不代表实际Electron、真实HTTP/OSS或部署验收。
+
+执行专家准入考试已接入当前待办：显式入场、恢复原绑定试卷与原截止时间、文字及附件答题、必答与诚信校验、确认交卷、明确取消；关闭弹框保留本页面内存草稿，刷新不恢复临时答案。普通接单与转项来源分别保留，未知写入先核实且不自动重发。个人中心的项目详情可只读查询本人准入聚合状态；`NOT_PASSED`也可能表示答题中或取消，不直接解释为落榜。现有后端没有考生已交答卷或成绩明细读取接口，不开放管理阅卷接口给专家。实现见[专家考试](../apps/web/src/modules/projects/ExpertExamPanel.tsx)，回归见[考生页面](../tests/e2e/exam-candidate.spec.ts)、[考生契约](../tests/exam-candidate-platform.test.mjs)与[答卷校验](../tests/expert-exam-form.test.mjs)。
+
+本期迁移范围按用户2026-11-03决定排除“找回密码”和“多组织选择/切换”，不新增这两个客户端入口；后端已有密码重置与多组织关系不因此删除。
+
+执行专家标准与培训已接入当前培训待办：查看安全正文、HTTP(S)标准链接与鉴权附件，按服务端`canConfirmRead`勾选并确认已阅读。确认前重读完整待办及材料；阅读期间材料改变时须重新核对和勾选。确认仅记录本人阅读事实，不修改项目主流程或版本，材料后续更新也不会清除既有阅读时间。成功或显式核实已有确认时间后，按原来源重读完整待办，继续当前任务或返回列表；写入结果不明时持锁、不自动重发，读取失败只重试读取。`StandardMaterialsContent.tsx`供策略官与专家共用，负责人及未实际入项成员按服务端资格只读。实现见[专家培训](../apps/web/src/modules/projects/ExpertTrainingPanel.tsx)，测试见[培训页面](../tests/e2e/expert-training.spec.ts)与[确认契约](../tests/expert-materials-platform.test.mjs)。
+
+2026-11-03专家培训批次：274项核心测试和12项新增培训页面全部通过，46项受影响页面分批通过（首轮45通过，旧测试同名文本定位修正后剩余1项定向通过）；Web/Electron构建、Electron类型及变更ESLint/Prettier通过，桌面与375px截图已核对。测试使用隔离HTTP夹具，桌面运行配置不代表实际Electron或真实HTTP/OSS验收；未改后端、数据库、迁移或依赖，未提交或发布。
+
+2026-11-03专家考试批次：265项核心测试、14项新增考生页面回归（12项与补充2项分批）及74项受影响页面回归全部通过；Web/Electron构建、Electron类型检查与变更静态/格式检查通过，桌面与375px截图已核对。页面中的桌面运行配置测试不代表实际Electron、真实HTTP/OSS或安装包验收；本批未操作数据库、连接真实阅卷Agent、提交或发布。
 
 ## 独立 Agent 已实现能力
 
@@ -37,25 +50,23 @@ Agent 服务与页面分别位于 `apps/agent` 和 `apps/agent-web`，通过独�
 | 受控工具和 Skill   | 可信宿主显式装配、摘要与版本校验、固定正文进入提示词；原生调用关联、工具过程安全摘要和调用追溯；默认入口不装配演示资源                                                          | [资源装配](../apps/agent/src/pi/resources.ts)、[工具卡](../apps/agent-web/src/components/ToolExecutions.tsx)、[工具测试](../apps/agent/tests/pi-w4.test.ts)、[工具展示测试](../apps/agent-web/tests/tool-display.test.tsx)                   |
 | 持久化与执行保护   | 独立 PostgreSQL 模式保存原生状态、命令裁决、产品事件和预算；模型与工具授权、执行期限、停止竞争及提交不明保护；页面先确认实际存储模式。开发内存模式须显式启用，PG 故障不回退内存 | [应用装配](../apps/agent/src/application.ts)、[PG 运行时](../apps/agent/src/runtime/postgres-runtime.ts)、[预算测试](../apps/agent/tests/persistent-budget.test.ts)、[存储模式测试](../apps/agent-web/tests/storage-mode.test.ts)            |
 
-上述 Agent 能力的历史真实模型、专用数据库及页面验证见 [联合验证记录](AGENT_W4_W5_INTEGRATION.md)；不能用普通隔离单测替代这些专项验收。当前未装配到 Electron，尚未开放公开继续、重试和补充命令，也未接入真实业务自动阅卷或排班写入。多实例、跨主机接管及完整桌面恢复仍属后续范围。
+上述 Agent 能力的历史真实模型、专用数据库及页面验证见 [联合验证记录](archive/AGENT_MILESTONES.md#agent-w4-w5-integration)；不能用普通隔离单测替代这些专项验收。当前未装配到 Electron，尚未开放公开继续、重试和补充命令，也未接入真实业务自动阅卷或排班写入。多实例、跨主机接管及完整桌面恢复仍属后续范围。
 
 ## 仅后端已有能力与页面未开放范围
 
-| 范围                     | 当前边界                                                                                                                                                                                   |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 专家参加考试             | [考生后端](ENTRANCE_EXAM_CANDIDATE.md)已有入场、答卷读取、提交与取消等能力；当前专家页面没有入场、答题或交卷入口。接单成功的“下一步参加准入考试”只是提示文案                               |
-| 领航员后续模块           | [领航员流程](../apps/web/src/modules/projects/ProjectWorkflow.tsx)中的准入考试、标准与培训、生产任务仍显示入口暂未开放；不能因策略官考试页面已实现而算作领航员模块完成                     |
-| 策略官后续模块           | [策略官流程](../apps/web/src/modules/projects/StrategistProjectPage.tsx)已接入生产计划与准入考试；标准与培训、招募执行专家、人员管理、生产任务仍为占位                                     |
-| 标准培训与专家下发       | 后端已有相关服务，当前业务页面未提供完整维护、已读确认和专家招募下发流程；见[标准材料](PROJECT_STANDARD_MATERIALS.md)与[专家分配](EXPERT_ASSIGNMENTS_ACCEPTANCE.md)                        |
-| 打卡、成员入项与生产履约 | 后端已有[打卡](ATTENDANCE_CLOCK.md)、[人员资料](PERSONAL_WORKBENCH.md)、[质量与验收](PRODUCTION_QUALITY_ACCEPTANCE.md)等实现；当前页面没有完整打卡、成员入项、生产报量、质量及验收操作入口 |
-| 人员变动与完整项目看板   | [人员变动](PERSONNEL_MOVEMENTS.md)后端已实现多批能力；页面尚未提供完整汰换、转项和审批操作。剩余看板聚合与跨域卡片仍须按专项任务推进，不能列为整体完成                                     |
-| 账号与组织扩展           | 后端支持密码重置及多组织关系；当前登录页没有找回密码入口，组织页面仍围绕单个组织摘要，没有多组织切换器                                                                                     |
-| 短信、自动阅卷与能力评估 | 短信仍采用受控 mock，业务自动阅卷继续模拟；个人概览的能力评估目前显示暂无数据，没有实际评分功能                                                                                            |
+| 范围                     | 当前边界                                                                                                                                                                                                             |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 领航员后续模块           | [领航员流程](../apps/web/src/modules/projects/ProjectWorkflow.tsx)中的准入考试、标准与培训、生产任务仍显示入口暂未开放；不能因策略官考试页面已实现而算作领航员模块完成                                               |
+| 策略官后续模块           | [策略官流程](../apps/web/src/modules/projects/StrategistProjectPage.tsx)已接入生产计划、准入考试与标准材料维护；招募执行专家、人员管理、生产任务仍为占位                                                             |
+| 标准培训与专家下发       | 策略官已接入标准材料维护，专家已接入阅读确认；领航员标准维护和专家招募下发页面仍未开放；见[标准材料](backend/PROJECT_STANDARD_MATERIALS.md)与[专家分配](archive/ACCEPTANCE_HISTORY.md#expert-assignments-acceptance) |
+| 打卡、成员入项与生产履约 | 后端已有[打卡](backend/ATTENDANCE_CLOCK.md)、[人员资料](backend/PERSONAL_WORKBENCH.md)、[质量与验收](backend/PRODUCTION_QUALITY.md)等实现；当前页面没有完整打卡、成员入项、生产报量、质量及验收操作入口              |
+| 人员变动与完整项目看板   | [人员变动](backend/PERSONNEL_MOVEMENTS.md)后端已实现多批能力；页面尚未提供完整汰换、转项和审批操作。剩余看板聚合与跨域卡片仍须按专项任务推进，不能列为整体完成                                                       |
+| 短信、自动阅卷与能力评估 | 短信仍采用受控 mock，业务自动阅卷继续模拟；个人概览的能力评估目前显示暂无数据，没有实际评分功能                                                                                                                      |
 
 ## 如何理解自动化与真实联调证据
 
 - 业务页面回归使用隔离 HTTP 夹具或本机测试服务，覆盖页面交互、请求契约、权限表现、错误恢复及防重复提交；测试替身不进入产品代码。这类结果不等于真实业务数据库、OSS、部署环境或安装包验收。
 - Web 的开发模式与生产预览分别运行页面回归。“Electron 运行配置”或“桌面适配”用例可能仅在浏览器注入桌面配置，不能统称为实际 Electron 测试；例如[准入考试回归](../tests/e2e/entrance-exams.spec.ts)的第二模式即属于运行配置验证。
 - [frontend.spec.ts](../tests/e2e/frontend.spec.ts)与[organization-electron.spec.ts](../tests/e2e/organization-electron.spec.ts)中通过 `electron.launch` 启动应用的用例，才提供对应范围的实际 Electron 运行证据；开发进程验证仍不等于安装包验证。
-- [三角色非空项目真实联调](WORKBENCH_PROJECTS_ACCEPTANCE.md)保留了 Web 与实际 Electron 的项目列表、详情、任职、生产计划及接拒单历史证据；它不能自动覆盖随后增加的考试管理和阅卷页面。
+- [三角色非空项目真实联调](archive/ACCEPTANCE_HISTORY.md#workbench-projects-acceptance)保留了 Web 与实际 Electron 的项目列表、详情、任职、生产计划及接拒单历史证据；它不能自动覆盖随后增加的考试管理和阅卷页面。
 - 业务数据库集成、真实 HTTP、OSS、Agent 专用 PostgreSQL、真实模型及打包验收各有独立前提；默认功能回归不自动执行这些操作。已有后端接口、页面入口和专项验收应分别核对，不能把跳过或未运行计为通过。

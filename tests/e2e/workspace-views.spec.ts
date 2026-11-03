@@ -499,21 +499,25 @@ for (const [mode, desktop] of [
       .filter({ hasText: '组织负责项目' })
       .getByRole('button', { name: '查看项目', exact: true })
       .click();
+    await page.getByRole('button', { name: '项目资料', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '项目详情', exact: true })).toBeVisible();
     expect(requests.filter((request) => request.path.endsWith('/detail')).at(-1)?.query).toEqual({
       assignmentId: '41',
     });
     await page.getByRole('button', { name: '关闭项目详情', exact: true }).click();
+    await page.getByRole('button', { name: '返回项目卡片', exact: true }).click();
     await page
       .getByRole('article')
       .filter({ hasText: '个人转入项目' })
       .getByRole('button', { name: '查看项目', exact: true })
       .click();
+    await page.getByRole('button', { name: '项目资料', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '项目详情', exact: true })).toBeVisible();
     expect(requests.filter((request) => request.path.endsWith('/detail')).at(-1)?.query).toEqual({
       movementId: '7',
     });
     await page.getByRole('button', { name: '关闭项目详情', exact: true }).click();
+    await page.getByRole('button', { name: '返回项目卡片', exact: true }).click();
     state.tasksStatus = 503;
     await page.getByRole('button', { name: '刷新项目', exact: true }).click();
     await expect(page.getByText('待办读取暂不可用', { exact: true })).toBeVisible();
@@ -539,7 +543,7 @@ for (const [mode, desktop] of [
     const { state, requests, sessionResponses } = await backend(page, desktop);
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${origin}/#/`);
-    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
     const selector = page.getByRole('combobox', { name: '当前角色', exact: true });
     await expect(selector).toContainText('执行专家');
     await expect(
@@ -548,7 +552,7 @@ for (const [mode, desktop] of [
         .getByRole('link', { name: '我的组织', exact: true }),
     ).toBeVisible();
     await chooseDesktop(page, '领航员');
-    await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: /^(我的组织|组织管理|创建组织)$/ })).toHaveCount(0);
     await openProfile(page);
     await expect(
@@ -621,7 +625,7 @@ for (const [mode, desktop] of [
     const expertCount = expertReads(requests).length;
     await page.goto(`${origin}/#/organization`);
     await expect(page).toHaveURL(/#\/$/);
-    await expect(page.getByRole('heading', { name: '我创建的项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
     await page.goto(`${origin}/#/organization/create`);
     await expect(page).toHaveURL(/#\/$/);
     expect(expertReads(requests)).toHaveLength(expertCount);
@@ -633,7 +637,7 @@ for (const [mode, desktop] of [
     await expect(page.getByRole('heading', { name: '我的组织', exact: true })).toBeVisible();
     await chooseDesktop(page, '策略官');
     await expect(page).toHaveURL(/#\/$/);
-    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
     await page.reload();
     await expect(selector).toContainText('策略官');
     const switches = requests.filter((request) => request.path === '/api/v1/auth/switch-role');
@@ -671,7 +675,7 @@ for (const [mode, desktop] of [
     await page.goto(`${origin}/#/`);
     const selector = page.getByRole('combobox', { name: '当前角色', exact: true });
     await expect(selector).toContainText('策略官');
-    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
     await selector.click();
     await expect(page.getByRole('option', { name: '领航员', exact: true })).toHaveCount(0);
     await page.getByRole('option', { name: '执行专家', exact: true }).click();
@@ -741,7 +745,9 @@ for (const [mode, desktop] of [
     await expect(detail.getByRole('heading', { name: '真实分配详情', exact: true })).toBeVisible();
     await expect(detail.getByText('2099-12-31 18:00:00', { exact: true })).toBeVisible();
     await expect(
-      detail.getByText('当前提供只读详情，接单、考试和生产操作尚未接入。', { exact: true }),
+      detail.getByText('项目操作从工作台当前待办进入，此处查看项目资料和准入状态。', {
+        exact: true,
+      }),
     ).toBeVisible();
     await page.getByRole('tab', { name: '排班考勤', exact: true }).click();
     await expect(page.getByText('排班考勤读取暂不可用', { exact: true })).toBeVisible();

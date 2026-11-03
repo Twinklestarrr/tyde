@@ -21,6 +21,7 @@ const stages = [
   'agent-web-build',
   'agent-web-unit',
 ];
+const systemStages = ['typecheck', 'lint', 'format', 'release-build', ...stages];
 const stats = { expected: 2, unexpected: 0, skipped: 0, flaky: 0 };
 const fakePnpm = String.raw`#!/usr/bin/env node
 import { spawn } from 'node:child_process';
@@ -38,12 +39,15 @@ if (worker === 'child' || worker === 'grandchild') {
   setInterval(() => {}, 1000);
 } else {
   const args = process.argv.slice(2);
-  const id = args[0] === 'test:core' ? 'core' : args.includes('@tyde/server') ? 'server-unit'
+  const id = args[0] === 'typecheck' ? 'typecheck' : args[0] === 'lint' ? 'lint'
+    : args[0] === 'format:check' ? 'format' : args[0] === 'build:vercel' ? 'release-build'
+    : args[0] === 'test:core' ? 'core' : args.includes('@tyde/server') ? 'server-unit'
     : args[0] === 'build:web' ? 'web-build' : args.includes('@tyde/electron') ? 'electron-build'
     : args.includes('playwright') ? 'frontend' : args[0] === 'check:agent-contracts' ? 'agent-contracts'
     : args[0] === 'build:agent' ? 'agent-build' : args.includes('@tyde/agent') ? 'agent-unit'
     : args[0] === 'build:agent-web' ? 'agent-web-build' : args.includes('@tyde/agent-web') ? 'agent-web-unit'
     : 'unexpected-command';
+  const failing = (process.env.FIXTURE_FAIL ?? '').split(',').includes(id);
   record('stage', { id, args, databaseConfigured: 'AGENT_TEST_DATABASE_URL' in process.env });
   console.log('fixture stdout ' + id);
   console.error('fixture stderr ' + id);
@@ -51,7 +55,7 @@ if (worker === 'child' || worker === 'grandchild') {
     process.on('SIGINT', () => {});
     spawn(process.execPath, [fileURLToPath(import.meta.url), 'child'], { stdio: 'ignore' });
     setInterval(() => {}, 1000);
-  } else if (process.env.FIXTURE_FAIL === id && process.env.FIXTURE_LEAVE_DESCENDANTS === '1') {
+  } else if (failing && process.env.FIXTURE_LEAVE_DESCENDANTS === '1') {
     spawn(process.execPath, [fileURLToPath(import.meta.url), 'child'], { stdio: 'inherit' });
     // 留给 runner 的进程快照记录后代；显式退出，但后代继续持有 stdout/stderr 管道。
     setTimeout(() => process.exit(7), 600);
@@ -60,7 +64,7 @@ if (worker === 'child' || worker === 'grandchild') {
       writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE,
         JSON.stringify({ stats: process.env.FIXTURE_STATS ? JSON.parse(process.env.FIXTURE_STATS)
           : { expected: 2, unexpected: 0, skipped: 0, flaky: 0 } }));
-    process.exitCode = process.env.FIXTURE_FAIL === id ? 7 : id === 'unexpected-command' ? 9 : 0;
+    process.exitCode = failing ? 7 : id === 'unexpected-command' ? 9 : 0;
   }
 }
 `;
@@ -153,17 +157,17 @@ async function fixture(t, occupied = false) {
     root,
     ports,
     events,
-    async report() {
+    async report(reportDirectory = 'feature-tests') {
       const latest = JSON.parse(
-        await readFile(join(root, 'artifacts/feature-tests/latest.json'), 'utf8'),
+        await readFile(join(root, 'artifacts', reportDirectory, 'latest.json'), 'utf8'),
       );
       const summary = JSON.parse(await readFile(join(root, latest.summary), 'utf8'));
       const markdown = await readFile(join(root, latest.report), 'utf8');
       return { latest, summary, markdown, directory: dirname(join(root, latest.summary)) };
     },
-    launch(extraEnv = {}) {
+    launch(extraEnv = {}, args = []) {
       let output = '';
-      const child = spawn(process.execPath, ['scripts/test-features.mjs'], {
+      const child = spawn(process.execPath, ['scripts/test-features.mjs', ...args], {
         cwd: root,
         env: {
           ...process.env,
@@ -251,6 +255,91 @@ test('feature runner executes ten isolated stages and excludes Agent database te
     assert.ok(log.includes('fixture stdout ' + stage));
     assert.ok(log.includes('fixture stderr ' + stage));
   }
+});
+
+test('system runner executes fourteen stages and keeps its reports separate from feature runs', async (t) => {
+  const local = await fixture(t);
+  const result = await local
+    .launch({ AGENT_TEST_DATABASE_URL: 'postgresql://fixture/never_connect_test' }, ['--system'])
+    .finish();
+  assert.equal(result.code, 0, result.output);
+  const events = await local.events();
+  assert.deepEqual(
+    events.map((row) => row.id),
+    systemStages,
+  );
+  assert.ok(events.every((row) => !row.databaseConfigured));
+  assert.deepEqual(
+    events.slice(0, 4).map((row) => row.args),
+    [['typecheck'], ['lint'], ['format:check'], ['build:vercel']],
+  );
+  const { latest, summary, directory } = await local.report('system-tests');
+  assert.equal(latest.result, 'passed');
+  assert.equal(summary.result, 'passed');
+  assert.equal(summary.database, 'not-accessed');
+  assert.deepEqual(
+    summary.checks.map((row) => row.id),
+    systemStages,
+  );
+  assert.ok(summary.checks.every((row) => row.status === 'passed' && row.code === 0));
+  assert.deepEqual(summary.frontend, stats);
+  assert.deepEqual(summary.notRun, []);
+  assert.equal(dirname(directory), join(local.root, 'artifacts/system-tests'));
+  await assert.rejects(readFile(join(local.root, 'artifacts/feature-tests/latest.json')), {
+    code: 'ENOENT',
+  });
+  for (const stage of systemStages) {
+    const log = await readFile(join(directory, stage + '.log'), 'utf8');
+    assert.ok(log.includes('fixture stdout ' + stage));
+    assert.ok(log.includes('fixture stderr ' + stage));
+  }
+});
+
+test('system static check failures still run every independent check and all feature stages', async (t) => {
+  for (const failed of [['format'], ['typecheck', 'lint', 'format', 'release-build']])
+    await t.test(failed.join(', '), async (t) => {
+      const local = await fixture(t);
+      const result = await local.launch({ FIXTURE_FAIL: failed.join(',') }, ['--system']).finish();
+      assert.equal(result.code, 1, result.output);
+      assert.deepEqual(
+        (await local.events()).map((row) => row.id),
+        systemStages,
+      );
+      const { latest, summary } = await local.report('system-tests');
+      assert.equal(latest.result, 'failed');
+      assert.equal(summary.result, 'failed');
+      assert.deepEqual(summary.notRun, []);
+      assert.deepEqual(
+        summary.checks.filter((row) => row.status === 'failed').map((row) => row.id),
+        failed,
+      );
+      assert.deepEqual(
+        summary.checks.map(({ id, status, code }) => ({ id, status, code })),
+        systemStages.map((id) => ({
+          id,
+          status: failed.includes(id) ? 'failed' : 'passed',
+          code: failed.includes(id) ? 7 : 0,
+        })),
+      );
+      assert.deepEqual(summary.frontend, stats);
+    });
+});
+
+test('system runner still stops later feature stages after a functional failure', async (t) => {
+  const local = await fixture(t);
+  const result = await local.launch({ FIXTURE_FAIL: 'format,web-build' }, ['--system']).finish();
+  assert.equal(result.code, 1, result.output);
+  assert.deepEqual(
+    (await local.events()).map((row) => row.id),
+    systemStages.slice(0, 7),
+  );
+  const { summary } = await local.report('system-tests');
+  assert.equal(summary.result, 'failed');
+  assert.deepEqual(summary.notRun, stages.slice(3));
+  assert.deepEqual(
+    summary.checks.filter((row) => row.status === 'failed').map((row) => row.id),
+    ['format', 'web-build'],
+  );
 });
 
 test('a failed stage prevents every later command and reports its exit code', async (t) => {

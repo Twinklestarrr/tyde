@@ -110,6 +110,8 @@ async function backend(page: Page, desktop = false) {
     user: structuredClone(user),
     current: null as ProjectManagerCandidate | null,
     node: 'RECRUIT_PROJECT_MANAGER',
+    listStatus: 200,
+    listedProjectIds: [detail.id],
     candidateStatus: 200,
     detailStatus: 200,
     writeStatus: 200,
@@ -168,7 +170,17 @@ async function backend(page: Page, desktop = false) {
         createdAt: detail.createdAt,
         updatedAt: detail.updatedAt,
       };
-      return reply([card]);
+      return reply(
+        state.listStatus === 200
+          ? state.listedProjectIds.map((id) => ({
+              ...card,
+              id,
+              projectName: id === detail.id ? card.projectName : '其他待办项目',
+            }))
+          : null,
+        state.listStatus,
+        '项目列表暂时不可用',
+      );
     }
     if (path === `/api/v1/projects/${detail.id}`)
       return reply(
@@ -371,18 +383,19 @@ for (const [mode, desktop] of [
     if (!desktop) await screenshot(page, 'replacement-selected', 'artifacts/project-dialog-audit');
     await section.getByRole('button', { name: '确认更换', exact: true }).click();
     await confirm(page, true);
-    await expect(current).toContainText('策略官乙');
-    expect(calls('manager-recruitments')).toHaveLength(2);
-    expect(state.node).toBe('ENTRANCE_EXAM');
     await expect(workflow.getByText('当前阶段：准入考试', { exact: true })).toBeVisible();
     await expect(tabs.getByRole('tab', { name: '准入考试', exact: true })).toHaveAttribute(
       'aria-current',
       'step',
     );
-    await expect(tabs.getByRole('tab', { name: '招募策略官', exact: true })).toHaveAttribute(
+    await expect(tabs.getByRole('tab', { name: '准入考试', exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
     );
+    await tabs.getByRole('tab', { name: '招募策略官', exact: true }).click();
+    await expect(current).toContainText('策略官乙');
+    expect(calls('manager-recruitments')).toHaveLength(2);
+    expect(state.node).toBe('ENTRANCE_EXAM');
     expect(calls('manager-recruitments')[1]?.body).toEqual({
       projectId: detail.id,
       candidateUserId: uuid(3),
@@ -412,6 +425,11 @@ test('指派409与网络未知结果锁写，显式回读后才可继续', async
   state.node = 'ENTRANCE_EXAM';
   state.writeStatus = 200;
   await section.getByRole('button', { name: '重新读取策略官', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '准入考试', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.getByRole('tab', { name: '招募策略官', exact: true }).click();
   await expect(section.getByRole('region', { name: '当前策略官', exact: true })).toContainText(
     '策略官乙',
   );
@@ -441,6 +459,7 @@ test('指派成功后候选和详情回读失败，只重读且不重放成功�
   await expect(section.getByRole('button', { name: '重新读取策略官', exact: true })).toBeVisible();
   await expect(section.getByText('候选读取暂时不可用', { exact: true })).toBeVisible();
   expect(calls('manager-recruitments')).toHaveLength(1);
+  expect(calls('list')).not.toHaveLength(0);
   state.candidateStatus = 200;
   state.detailStatus = 200;
   state.failReadAfterWrite = false;
@@ -471,4 +490,57 @@ test('候选403隐藏选择与指派操作，非领航员直访不读取招募�
   await expect(page).toHaveURL(/#\/$/);
   expect(calls('manager-candidates')).toHaveLength(before);
   expect(calls('manager-recruitments')).toHaveLength(0);
+});
+
+test('领航员提交后按最新列表ID续接，当前卡片移除后返回其他卡片', async ({ page }) => {
+  const { state, calls } = await backend(page);
+  await page.goto(`${origin}/#/projects`);
+  await page
+    .getByRole('article')
+    .filter({ hasText: detail.projectName! })
+    .click({ position: { x: 24, y: 24 } });
+  const section = page.getByRole('region', { name: '招募策略官', exact: true });
+  await expect(section).toBeVisible();
+  state.listedProjectIds = [999, detail.id];
+  const reads = calls('list').length;
+  await section.getByRole('radio', { name: /策略官甲/ }).check();
+  await section.getByRole('button', { name: '指定策略官', exact: true }).click();
+  await confirm(page);
+  await expect.poll(() => calls('list').length).toBeGreaterThan(reads);
+  await expect(page).toHaveURL(new RegExp(`#/projects/${detail.id}$`));
+  await expect(section.getByRole('region', { name: '当前策略官', exact: true })).toContainText(
+    '策略官甲',
+  );
+  await section.getByRole('button', { name: '更换策略官', exact: true }).click();
+  await section.getByRole('radio', { name: /策略官乙/ }).check();
+  state.listedProjectIds = [999];
+  await section.getByRole('button', { name: '确认更换', exact: true }).click();
+  await confirm(page, true);
+  await expect(page).toHaveURL(/#\/projects$/);
+  await expect(page.getByRole('heading', { name: '其他待办项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: detail.projectName!, exact: true })).toHaveCount(
+    0,
+  );
+  expect(calls('manager-recruitments')).toHaveLength(2);
+});
+
+test('领航员成功提交后列表失败保持详情，只重试列表后返回且不重放指派', async ({ page }) => {
+  const { state, calls } = await backend(page);
+  const section = await openProject(page);
+  state.listStatus = 503;
+  await section.getByRole('radio', { name: /策略官甲/ }).check();
+  await section.getByRole('button', { name: '指定策略官', exact: true }).click();
+  await confirm(page);
+  await expect(page.getByText('项目列表暂时不可用', { exact: true }).first()).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`#/projects/${detail.id}$`));
+  await expect(section.getByRole('region', { name: '当前策略官', exact: true })).toContainText(
+    '策略官甲',
+  );
+  expect(calls('manager-recruitments')).toHaveLength(1);
+  state.listStatus = 200;
+  state.listedProjectIds = [];
+  await section.getByRole('button', { name: '重新读取策略官', exact: true }).click();
+  await expect(page).toHaveURL(/#\/projects$/);
+  await expect(page.getByText('暂无待办项目', { exact: true })).toBeVisible();
+  expect(calls('manager-recruitments')).toHaveLength(1);
 });

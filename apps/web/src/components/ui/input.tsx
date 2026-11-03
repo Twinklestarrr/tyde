@@ -17,7 +17,7 @@ export interface InputProps extends Omit<React.ComponentProps<'input'>, 'size'> 
 
 /**
  * 全站通用文本输入框，保留全部原生输入能力和 ref 透传。
- * 日期和日期时间输入点击主体即可打开原生日历。
+ * 日期、日期时间、月份和时间输入点击主体即可打开原生选择器。
  * 迁移已有页面时可使用 `unstyled`，避免公共默认样式改变原页面视觉。
  */
 export function Input({
@@ -32,7 +32,7 @@ export function Input({
     variant === 'unstyled'
       ? className
       : cn(
-          'w-full min-w-0 rounded-xl border border-input text-foreground shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60',
+          'w-full min-w-0 rounded-lg border border-input text-foreground shadow-none outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60',
           'aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20',
           variant === 'muted' ? 'bg-[var(--color-surface-muted)]' : 'bg-transparent',
           inputSizeClassNames[size],
@@ -51,7 +51,7 @@ export function Input({
         const input = event.currentTarget;
         if (
           event.defaultPrevented ||
-          (type !== 'date' && type !== 'datetime-local') ||
+          !['date', 'datetime-local', 'month', 'time'].includes(type) ||
           input.readOnly ||
           input.matches(':disabled')
         )

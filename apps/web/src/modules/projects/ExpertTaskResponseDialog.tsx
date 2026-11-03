@@ -52,6 +52,7 @@ export function ExpertTaskResponseDialog({
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
+  const written = useRef(false);
   const [error, setError] = useState<unknown>(null);
   const [needsReload, setNeedsReload] = useState(false);
   const [notice, setNotice] = useState('');
@@ -98,7 +99,9 @@ export function ExpertTaskResponseDialog({
       setNeedsReload(false);
       setNotice(
         latest
-          ? '已读取最新任务，请核对后再提交。'
+          ? written.current
+            ? '操作已成功，已读取最新任务。'
+            : '已读取最新任务，请核对后再提交。'
           : '当前任务已处理或已移出待办，请关闭弹窗查看最新列表。',
       );
     } catch (failure) {
@@ -110,7 +113,15 @@ export function ExpertTaskResponseDialog({
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (submitting.current || needsReload || !allowed || !current || !sessionMatches()) return;
+    if (
+      submitting.current ||
+      written.current ||
+      needsReload ||
+      !allowed ||
+      !current ||
+      !sessionMatches()
+    )
+      return;
     setError(null);
     setNotice('');
     if (!accepting && !reason.trim()) {
@@ -145,7 +156,18 @@ export function ExpertTaskResponseDialog({
       if (mounted.current) setBusy(false);
       return;
     }
-    if (sessionMatches()) await onWritten(result);
+    written.current = true;
+    try {
+      if (sessionMatches()) await onWritten(result);
+    } catch {
+      if (sessionMatches()) {
+        setNeedsReload(true);
+        setError(new Error('操作已成功，但后续待办读取失败，请刷新任务状态。'));
+      }
+    } finally {
+      submitting.current = false;
+      if (mounted.current) setBusy(false);
+    }
   }
 
   return (
@@ -265,6 +287,7 @@ export function ExpertTaskResponseDialog({
             loading={busy}
             disabled={
               !allowed ||
+              written.current ||
               needsReload ||
               (ownersRequired && (!candidates.isSuccess || !ownerIds.length))
             }

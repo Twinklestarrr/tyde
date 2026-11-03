@@ -14,6 +14,7 @@ import {
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Dialog } from '@/components/ui/dialog';
 import { FileUploadField } from '@/components/ui/shared/FileUploadField';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { WORKSPACE_ROLE_SWITCH_REQUEST } from '@/layouts/WorkspaceView';
@@ -86,6 +87,7 @@ export function StrategistExamEditor(props: StrategistExamEditorProps) {
   const [verifying, setVerifying] = useState(false);
   const [source, setSource] = useState<File | null>(null);
   const [references, setReferences] = useState<ExamDraftFile[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<unknown>(null);
   const [importNotice, setImportNotice] = useState('');
@@ -246,7 +248,6 @@ export function StrategistExamEditor(props: StrategistExamEditorProps) {
       setImportError(new Error('引用附件名称不能重复，总大小不超过50 MiB。'));
       return;
     }
-    if (dirty && !window.confirm('导入会替换当前未保存的考试配置，确认继续？')) return;
     setImporting(true);
     try {
       const result = await api.parseEntranceExamImport({
@@ -260,12 +261,22 @@ export function StrategistExamEditor(props: StrategistExamEditorProps) {
       });
       if (!sessionMatches()) return;
       change(entranceExamImportedValues(result.config));
-      setImportNotice('试卷已解析到当前表单。请补充截止时间、分数与判卷轮次，核对后再发布或保存。');
+      setImportNotice('试卷已解析到当前表单。请补充截止日期、分数与判卷轮次，核对后再发布或保存。');
+      setImportOpen(false);
+      setSource(null);
+      setReferences([]);
     } catch (failure) {
       if (sessionMatches()) setImportError(failure);
     } finally {
       if (mounted.current) setImporting(false);
     }
+  }
+  function closeImport() {
+    if (working || template !== null) return;
+    setImportOpen(false);
+    setSource(null);
+    setReferences([]);
+    setImportError(null);
   }
   return (
     <EntranceExamDialog
@@ -278,38 +289,6 @@ export function StrategistExamEditor(props: StrategistExamEditorProps) {
           <Button variant="outline" size="account" onClick={close}>
             关闭
           </Button>
-        ) : confirming ? (
-          <section
-            role="alertdialog"
-            aria-label={editing ? '确认保存新版本' : '确认发布考试'}
-            className="w-full space-y-[10px] text-[14px] leading-6"
-          >
-            <h3 className="font-semibold">{editing ? '确认保存新版本' : '确认发布考试'}</h3>
-            <p>
-              {editing
-                ? '保存后将切换为新配置版本，已入场考生绑定的原版本不会改变。'
-                : '确认后将创建进行中的考试，请核对试卷、截止时间与阅卷人。'}
-              确认提交时会再次检查当前上海截止时间。
-            </p>
-            <div className="flex flex-wrap justify-end gap-[10px]">
-              <Button
-                variant="outline"
-                size="account"
-                disabled={working}
-                onClick={() => setConfirming(false)}
-              >
-                继续填写
-              </Button>
-              <Button
-                size="account"
-                loading={working}
-                disabled={locked}
-                onClick={() => void submit()}
-              >
-                {editing ? '确认保存' : '确认发布'}
-              </Button>
-            </div>
-          </section>
         ) : (
           <>
             <Button variant="outline" size="account" disabled={working} onClick={close}>
@@ -333,6 +312,43 @@ export function StrategistExamEditor(props: StrategistExamEditorProps) {
           ? '保存会生成新版本；已经入场的考生继续使用原试卷和原准入线。'
           : '确认发布后考试立即开放；当前填写内容只保存在本次弹框中。'}
       </p>
+      {confirming && !initial.error && (
+        <Dialog
+          role="alertdialog"
+          aria-label={editing ? '确认保存新版本' : '确认发布考试'}
+          title={editing ? '确认保存新版本' : '确认发布考试'}
+          size="sm"
+          busy={working}
+          onClose={() => setConfirming(false)}
+          footer={
+            <>
+              <Button
+                variant="outline"
+                size="account"
+                disabled={working}
+                onClick={() => setConfirming(false)}
+              >
+                继续填写
+              </Button>
+              <Button
+                size="account"
+                loading={working}
+                disabled={locked}
+                onClick={() => void submit()}
+              >
+                {editing ? '确认保存' : '确认发布'}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-[13px] leading-5 text-muted-foreground">
+            {editing
+              ? '保存后将切换为新配置版本，已入场考生绑定的原版本不会改变。'
+              : '确认后将创建进行中的考试，请核对试卷、截止日期与阅卷人。'}
+            确认提交时会再次检查截止日期是否有效。
+          </p>
+        </Dialog>
+      )}
       <ErrorNotice error={initial.error} />
       {locked && <Alert>提交结果或权限需要重新核对，当前禁止再次提交。</Alert>}
       {(locked || Boolean(initial.error)) && (
@@ -348,106 +364,128 @@ export function StrategistExamEditor(props: StrategistExamEditorProps) {
       )}
       {!initial.error && (
         <>
-          <details className="rounded-[12px] border bg-muted/30 p-[16px]">
-            <summary className="cursor-pointer text-[14px] font-medium">导入试卷与下载模板</summary>
-            <div className="mt-[16px] space-y-[16px]">
-              <div className="flex flex-wrap gap-[10px]">
-                {(
-                  [
-                    { type: 'EXCEL', label: 'Excel模板' },
-                    { type: 'TXT', label: 'TXT模板' },
-                    { type: 'REDOC', label: '文档XML模板' },
-                  ] as const
-                ).map((item) => (
+          <Button
+            variant="outline"
+            size="mobileTouch"
+            aria-haspopup="dialog"
+            disabled={disabled}
+            onClick={() => setImportOpen(true)}
+          >
+            <Upload className="size-4" aria-hidden />
+            导入试卷与下载模板
+          </Button>
+          {importNotice && (
+            <p role="status" className="text-[13px] text-primary">
+              {importNotice}
+            </p>
+          )}
+          {importOpen && (
+            <EntranceExamDialog
+              label="导入试卷"
+              title="导入试卷与下载模板"
+              onClose={closeImport}
+              busy={working || template !== null}
+              footer={
+                <>
                   <Button
-                    key={item.type}
                     variant="outline"
-                    size="mobileTouch"
-                    loading={template === item.type}
-                    disabled={disabled || template !== null}
-                    onClick={() => void downloadTemplate(item.type)}
+                    size="account"
+                    disabled={working || template !== null}
+                    onClick={closeImport}
                   >
-                    <Download className="size-4" aria-hidden />
-                    {item.label}
+                    取消
                   </Button>
-                ))}
-              </div>
-              <p className="text-[13px] leading-6 text-muted-foreground">
-                支持XLS、XLSX、UTF-8 TXT，源文件不超过10
-                MiB。远程文档导入暂未开放；本地解析不会创建考试。
-              </p>
-              <FileUploadField
-                aria-label="选择试卷文件"
-                accept=".xls,.xlsx,.txt"
-                disabled={disabled}
-                onFilesSelected={(files) => {
-                  const file = files[0];
-                  if (!file) return;
-                  if (
-                    !['xls', 'xlsx', 'txt'].includes(
-                      file.name.split('.').at(-1)?.toLowerCase() ?? '',
-                    ) ||
-                    file.size <= 0 ||
-                    file.size > ENTRANCE_EXAM_SOURCE_MAX_BYTES
-                  ) {
-                    setImportError(new Error('请选择非空XLS、XLSX或TXT文件，最大10 MiB。'));
-                    return;
-                  }
-                  setSource(file);
-                  setDirty(true);
-                  setImportError(null);
-                }}
-                contentClassName="min-h-[64px] items-center justify-center gap-[10px] rounded-[10px] border border-dashed p-[16px] text-[13px] text-muted-foreground"
-              >
-                <Upload className="size-4" aria-hidden />
-                选择或拖入试卷文件
-              </FileUploadField>
-              {source && (
-                <div className="flex min-w-0 items-center gap-[10px] rounded-[10px] border p-[12px] text-[13px]">
-                  <FileText className="size-4 shrink-0" aria-hidden />
-                  <span className="min-w-0 flex-1 break-all">{source.name}</span>
                   <Button
-                    variant="dangerGhost"
-                    size="iconTouch"
-                    aria-label="移除试卷文件"
-                    disabled={disabled}
-                    onClick={() => {
-                      setSource(null);
-                      setDirty(true);
-                    }}
+                    size="account"
+                    loading={importing}
+                    disabled={disabled || !source || template !== null}
+                    onClick={() => void parse()}
                   >
-                    <X className="size-4" aria-hidden />
+                    确认并解析
                   </Button>
+                </>
+              }
+            >
+              <div className="space-y-[16px]">
+                <div className="flex flex-wrap gap-[10px]">
+                  {(
+                    [
+                      { type: 'EXCEL', label: 'Excel模板' },
+                      { type: 'TXT', label: 'TXT模板' },
+                      { type: 'REDOC', label: '文档XML模板' },
+                    ] as const
+                  ).map((item) => (
+                    <Button
+                      key={item.type}
+                      variant="outline"
+                      size="mobileTouch"
+                      loading={template === item.type}
+                      disabled={disabled || template !== null}
+                      onClick={() => void downloadTemplate(item.type)}
+                    >
+                      <Download className="size-4" aria-hidden />
+                      {item.label}
+                    </Button>
+                  ))}
                 </div>
-              )}
-              <StrategistExamFiles
-                label="导入引用附件"
-                files={references}
-                limit={100}
-                disabled={disabled}
-                user={user}
-                onChange={(update) => {
-                  setReferences(update);
-                  setDirty(true);
-                }}
-              />
-              <Button
-                variant="outline"
-                size="mobileTouch"
-                loading={importing}
-                disabled={disabled || !source}
-                onClick={() => void parse()}
-              >
-                解析并填入表单
-              </Button>
-              <ErrorNotice error={importError} />
-              {importNotice && (
-                <p role="status" className="text-[13px] text-primary">
-                  {importNotice}
+                <p className="text-[13px] leading-6 text-muted-foreground">
+                  支持XLS、XLSX、UTF-8 TXT，源文件不超过10 MiB。远程文档导入暂未开放。
                 </p>
-              )}
-            </div>
-          </details>
+                <p className="text-[13px] leading-6 text-muted-foreground">
+                  确认解析后将替换当前表单中的考试配置。解析完成后请核对内容，再发布或保存考试。
+                </p>
+                <FileUploadField
+                  aria-label="选择试卷文件"
+                  accept=".xls,.xlsx,.txt"
+                  disabled={disabled}
+                  onFilesSelected={(files) => {
+                    const file = files[0];
+                    if (!file) return;
+                    if (
+                      !['xls', 'xlsx', 'txt'].includes(
+                        file.name.split('.').at(-1)?.toLowerCase() ?? '',
+                      ) ||
+                      file.size <= 0 ||
+                      file.size > ENTRANCE_EXAM_SOURCE_MAX_BYTES
+                    ) {
+                      setImportError(new Error('请选择非空XLS、XLSX或TXT文件，最大10 MiB。'));
+                      return;
+                    }
+                    setSource(file);
+                    setImportError(null);
+                  }}
+                  contentClassName="min-h-[64px] items-center justify-center gap-[10px] rounded-[10px] border border-dashed p-[16px] text-[13px] text-muted-foreground"
+                >
+                  <Upload className="size-4" aria-hidden />
+                  选择或拖入试卷文件
+                </FileUploadField>
+                {source && (
+                  <div className="flex min-w-0 items-center gap-[10px] rounded-[10px] border p-[12px] text-[13px]">
+                    <FileText className="size-4 shrink-0" aria-hidden />
+                    <span className="min-w-0 flex-1 break-all">{source.name}</span>
+                    <Button
+                      variant="dangerGhost"
+                      size="iconTouch"
+                      aria-label="移除试卷文件"
+                      disabled={disabled}
+                      onClick={() => setSource(null)}
+                    >
+                      <X className="size-4" aria-hidden />
+                    </Button>
+                  </div>
+                )}
+                <StrategistExamFiles
+                  label="导入引用附件"
+                  files={references}
+                  limit={100}
+                  disabled={disabled}
+                  user={user}
+                  onChange={setReferences}
+                />
+                <ErrorNotice error={importError} />
+              </div>
+            </EntranceExamDialog>
+          )}
           <form
             id={formId}
             noValidate

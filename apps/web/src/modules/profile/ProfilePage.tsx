@@ -34,6 +34,7 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Card, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
@@ -232,22 +233,22 @@ export function ProfilePage({ user }: { user: AuthUser }) {
             />
           )}
           <TabsContent value="profile" className="m-0 flex-col gap-[20px] data-[state=active]:flex">
-            <div className="rounded-[8px] border bg-card p-[20px] sm:p-[24px]">
+            <Card className="p-5 sm:p-6">
               <ProfileDetails
                 user={user}
                 editing={editing}
                 setEditing={setEditing}
                 editButton={editButton}
               />
-            </div>
+            </Card>
           </TabsContent>
           <TabsContent
             value="security"
             className="m-0 flex-col gap-[20px] data-[state=active]:flex"
           >
-            <div className="rounded-[8px] border bg-card p-[20px] sm:p-[24px]">
+            <Card className="p-5 sm:p-6">
               <PasswordSettings user={user} />
-            </div>
+            </Card>
           </TabsContent>
         </div>
       </Tabs>
@@ -399,9 +400,7 @@ function ProfileDetails({
     <section aria-labelledby="profile-details-title" className="flex flex-col gap-[24px]">
       <div className="flex items-center justify-between gap-[16px] border-b border-[var(--color-divider)] pb-[20px]">
         <div>
-          <h2 id="profile-details-title" className="m-0 text-[17px] leading-[26px] font-semibold">
-            基本信息
-          </h2>
+          <CardTitle id="profile-details-title">基本信息</CardTitle>
           <p className="mt-[4px] text-[13px] leading-[22px] text-[var(--color-neutral-strong)]">
             查看和完善你的账户信息。
           </p>
@@ -604,7 +603,7 @@ function ProfileDetails({
             >
               取消
             </Button>
-            <Button type="submit" variant="dark" size="settings" loading={saving}>
+            <Button type="submit" size="settings" loading={saving}>
               保存修改
             </Button>
           </div>
@@ -678,9 +677,7 @@ function PasswordSettings({ user }: { user: AuthUser }) {
   return (
     <section aria-labelledby="security-title" className="flex flex-col gap-[24px]">
       <div className="border-b border-[var(--color-divider)] pb-[20px]">
-        <h2 id="security-title" className="m-0 text-[17px] leading-[26px] font-semibold">
-          登录密码
-        </h2>
+        <CardTitle id="security-title">登录密码</CardTitle>
         <p className="mt-[6px] text-[13px] leading-[22px] text-[var(--color-neutral-strong)]">
           修改成功后，全部设备需重新登录，包括当前设备。
         </p>
@@ -776,7 +773,7 @@ function PasswordSettings({ user }: { user: AuthUser }) {
         </fieldset>
         <ErrorNotice error={error} />
         <div>
-          <Button type="submit" variant="dark" size="settings" loading={saving}>
+          <Button type="submit" size="settings" loading={saving}>
             更新密码
           </Button>
         </div>

@@ -42,6 +42,7 @@ export interface EntranceExamFormValues {
   examName: string;
   durationMode: 'LIMITED' | 'UNLIMITED';
   durationMinutes: string;
+  /** 新选日期使用YYYY-MM-DD；原配置保留完整墙钟时间，未改日期时不改变截止时刻。 */
   registrationDeadline: string;
   fullScore: string;
   passScore: string;
@@ -128,7 +129,7 @@ export function examShanghaiTime(now = new Date()) {
   return new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
 }
 function deadline(value: string) {
-  const wall = value.replace('T', ' ');
+  const wall = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value} 23:59:59` : value.replace('T', ' ');
   const completed = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(wall) ? `${wall}:00` : wall;
   if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(completed)) return null;
   const date = new Date(completed.replace(' ', 'T') + '+08:00');
@@ -168,7 +169,7 @@ export function entranceExamInput(
     errors.durationMinutes = '时限须为1–2147483647的整数分钟';
   const end = deadline(values.registrationDeadline);
   if (!end || end <= examShanghaiTime(options.now))
-    errors.registrationDeadline = '请填写晚于当前时间的有效上海截止时间';
+    errors.registrationDeadline = '请选择尚未截止的有效上海日期';
   const full = examScoreCents(values.fullScore),
     pass = examScoreCents(values.passScore);
   if (full === null) errors.fullScore = '满分须大于0、不超过99999999.99，最多两位小数';

@@ -542,25 +542,23 @@ test('personal transfer applications join only concrete flows and preserve appli
     appliedAt: new Date('2026-10-26T00:00:00Z'),
     finishedAt: null,
   };
-  const movements = vi
-    .fn()
-    .mockResolvedValue([
-      {
-        id: 7,
-        flowId: 'flow',
-        memberId: 2,
-        userId: 'target',
-        sourceProjectId: 1,
-        targetProjectId: 3,
-        status: 'PROCESSING',
-        plannedEffectiveDate: new Date('2099-01-01'),
-        member: {
-          organizationId: null,
-          user: { uid: 'target', displayName: '当前昵称', realName: '姓名' },
-        },
-        targetProject: { projectName: '真实目标' },
+  const movements = vi.fn().mockResolvedValue([
+    {
+      id: 7,
+      flowId: 'flow',
+      memberId: 2,
+      userId: 'target',
+      sourceProjectId: 1,
+      targetProjectId: 3,
+      status: 'PROCESSING',
+      plannedEffectiveDate: new Date('2099-01-01'),
+      member: {
+        organizationId: null,
+        user: { uid: 'target', displayName: '当前昵称', realName: '姓名' },
       },
-    ]);
+      targetProject: { projectName: '真实目标' },
+    },
+  ]);
   const service = new PersonalApplicationService({
     $transaction: async (fn: (tx: unknown) => unknown) =>
       fn({

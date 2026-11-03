@@ -56,12 +56,10 @@ function setup() {
         .mockResolvedValue({ id: 6001, passScore: new Prisma.Decimal(12), gradingRounds: rounds }),
     },
     entranceExamPaper: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({
-          id: 7001,
-          questions: [question, { ...question, id: 8002, sequenceNo: 2 }],
-        }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 7001,
+        questions: [question, { ...question, id: 8002, sequenceNo: 2 }],
+      }),
     },
     entranceExamGradingRecord: {
       findMany: vi.fn().mockResolvedValue([
@@ -86,17 +84,15 @@ function setup() {
       ]),
     },
     entranceExamAnswer: {
-      findMany: vi
-        .fn()
-        .mockResolvedValue([
-          {
-            id: 12001,
-            questionId: 8001,
-            answerContent: '答案',
-            answerFilesJson: [{ objectKey: 'answer-key', custom: '保留' }],
-            answeredFlag: false,
-          },
-        ]),
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 12001,
+          questionId: 8001,
+          answerContent: '答案',
+          answerFilesJson: [{ objectKey: 'answer-key', custom: '保留' }],
+          answeredFlag: false,
+        },
+      ]),
     },
     entranceExamGradingItem: {
       findMany: vi

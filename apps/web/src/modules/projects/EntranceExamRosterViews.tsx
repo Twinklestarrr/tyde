@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type {
   AuthUser,
@@ -10,6 +10,16 @@ import { api } from '@/services/api';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Pagination } from '@/components/ui/pagination';
+import { FormField } from '@/components/ui/shared/FormField';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import {
   Select,
   SelectContent,
@@ -42,21 +52,28 @@ export function ExamSelect({
   disabled?: boolean;
 }) {
   const [portal, setPortal] = useState<HTMLElement | null>(null);
+  const controlId = useId();
   return (
-    <div ref={setPortal} className="min-w-[140px] space-y-2">
-      <p className="text-[13px] font-medium">{label}</p>
-      <Select value={value} onValueChange={onChange} disabled={disabled}>
-        <SelectTrigger aria-label={label} size="profile">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent container={portal}>
-          {options.map(([key, text]) => (
-            <SelectItem key={key} value={key}>
-              {text}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+    <div ref={setPortal} className="min-w-0">
+      <FormField
+        controlId={controlId}
+        label={label}
+        className="gap-2"
+        labelClassName="text-[13px] leading-5"
+      >
+        <Select value={value} onValueChange={onChange} disabled={disabled}>
+          <SelectTrigger id={controlId} aria-label={label} size="profile">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent container={portal}>
+            {options.map(([key, text]) => (
+              <SelectItem key={key} value={key}>
+                {text}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </FormField>
     </div>
   );
 }
@@ -75,29 +92,13 @@ function ExamPagination({
   onPage: (page: number) => void;
 }) {
   return (
-    <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
-      <p>
-        共 {total} 条 · 第 {current} / {Math.max(1, pages)} 页
-      </p>
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          size="mobileTouch"
-          disabled={busy || current <= 1}
-          onClick={() => onPage(current - 1)}
-        >
-          上一页
-        </Button>
-        <Button
-          variant="outline"
-          size="mobileTouch"
-          disabled={busy || current >= pages}
-          onClick={() => onPage(current + 1)}
-        >
-          下一页
-        </Button>
-      </div>
-    </footer>
+    <Pagination
+      current={current}
+      total={total}
+      pages={pages}
+      loading={busy}
+      onPageChange={onPage}
+    />
   );
 }
 
@@ -135,35 +136,38 @@ export function EntranceExamAdmissions({ user, projectId }: { user: AuthUser; pr
         </p>
       </div>
       <form
-        className="flex flex-wrap items-end gap-3"
+        className="grid grid-cols-2 items-end gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(140px,180px)_auto_auto_auto]"
         onSubmit={(event) => {
           event.preventDefault();
           setFilter({ keyword: keyword.trim(), status, current: 1 });
         }}
       >
-        <div className="min-w-0 flex-1 space-y-2">
-          <label htmlFor="exam-admission-keyword" className="text-[13px] font-medium">
-            搜索准入人员
-          </label>
+        <FormField
+          controlId="exam-admission-keyword"
+          label="搜索准入人员"
+          className="col-span-2 gap-2 lg:col-span-1"
+          labelClassName="text-[13px] leading-5"
+        >
           <Input
             id="exam-admission-keyword"
+            size="profile"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
             placeholder="姓名、UID 或组织名称"
           />
-        </div>
+        </FormField>
         <ExamSelect
           label="准入状态"
           value={status}
           onChange={setStatus}
           options={[['ALL', '全部'], ...Object.entries(admissionLabels)]}
         />
-        <Button type="submit" size="account" disabled={query.isFetching}>
+        <Button type="submit" size="settings" disabled={query.isFetching}>
           查询
         </Button>
         <Button
           variant="outline"
-          size="account"
+          size="settings"
           onClick={() => {
             setKeyword('');
             setStatus('ALL');
@@ -174,7 +178,7 @@ export function EntranceExamAdmissions({ user, projectId }: { user: AuthUser; pr
         </Button>
         <Button
           variant="outline"
-          size="account"
+          size="settings"
           loading={query.isFetching}
           onClick={() => void query.refetch()}
         >
@@ -188,47 +192,45 @@ export function EntranceExamAdmissions({ user, projectId }: { user: AuthUser; pr
         query.data && (
           <>
             <div className="overflow-x-auto rounded-xl border">
-              <table className="w-full text-left text-[13px]">
-                <thead className="bg-muted text-xs text-muted-foreground">
-                  <tr>
+              <Table>
+                <TableHeader>
+                  <TableRow>
                     {['考生', '组织 / 人员属性', '考试', '交卷时间', '准入状态'].map((label) => (
-                      <th key={label} className="whitespace-nowrap p-3 font-medium">
-                        {label}
-                      </th>
+                      <TableHead key={label}>{label}</TableHead>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {query.data.records.map((row) => (
-                    <tr key={row.attemptId} className="border-t">
-                      <td className="p-3">
+                    <TableRow key={row.attemptId}>
+                      <TableCell>
                         <p>{row.candidateName}</p>
                         <p className="mt-1 text-xs text-muted-foreground">
                           UID：{row.candidateUid}
                         </p>
-                      </td>
-                      <td className="p-3">
+                      </TableCell>
+                      <TableCell>
                         {row.organizationName || '个人'} /{' '}
                         {row.employmentType === 'FULL_TIME'
                           ? '全职'
                           : row.employmentType === 'PART_TIME'
                             ? '兼职'
                             : '未设置'}
-                      </td>
-                      <td className="p-3">{row.examName}</td>
-                      <td className="p-3">{row.examDate}</td>
-                      <td className="p-3">{admissionLabels[row.admissionStatus]}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>{row.examName}</TableCell>
+                      <TableCell>{row.examDate}</TableCell>
+                      <TableCell>{admissionLabels[row.admissionStatus]}</TableCell>
+                    </TableRow>
                   ))}
                   {query.data.records.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="p-8 text-center text-muted-foreground">
+                    <TableRow>
+                      <TableCell colSpan={5} className="p-[32px] text-center text-muted-foreground">
                         暂无符合条件的准入记录
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   )}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
             <ExamPagination
               {...query.data}
@@ -280,35 +282,38 @@ export function EntranceExamRoster({
         轮次成绩来自考生实际绑定的历史版本。未交卷与待最终阅卷分别展示。
       </p>
       <form
-        className="flex flex-wrap items-end gap-3"
+        className="grid grid-cols-2 items-end gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(140px,180px)_auto_auto_auto]"
         onSubmit={(event) => {
           event.preventDefault();
           setFilter({ keyword: keyword.trim(), status, current: 1 });
         }}
       >
-        <div className="min-w-0 flex-1 space-y-2">
-          <label htmlFor="exam-roster-keyword" className="text-[13px] font-medium">
-            搜索考试人员
-          </label>
+        <FormField
+          controlId="exam-roster-keyword"
+          label="搜索考试人员"
+          className="col-span-2 gap-2 lg:col-span-1"
+          labelClassName="text-[13px] leading-5"
+        >
           <Input
             id="exam-roster-keyword"
+            size="profile"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
             placeholder="姓名、UID 或组织名称"
           />
-        </div>
+        </FormField>
         <ExamSelect
           label="考试结果"
           value={status}
           onChange={setStatus}
           options={[['ALL', '全部'], ...Object.entries(examFinalLabels)]}
         />
-        <Button type="submit" size="account" disabled={query.isFetching}>
+        <Button type="submit" size="settings" disabled={query.isFetching}>
           查询
         </Button>
         <Button
           variant="outline"
-          size="account"
+          size="settings"
           onClick={() => {
             setKeyword('');
             setStatus('ALL');
@@ -319,7 +324,7 @@ export function EntranceExamRoster({
         </Button>
         <Button
           variant="outline"
-          size="account"
+          size="settings"
           loading={query.isFetching}
           onClick={() => void query.refetch()}
         >
@@ -333,30 +338,28 @@ export function EntranceExamRoster({
         query.data && (
           <>
             <div className="overflow-x-auto rounded-xl border">
-              <table className="w-full text-left text-[13px]">
-                <thead className="bg-muted text-xs text-muted-foreground">
-                  <tr>
+              <Table>
+                <TableHeader>
+                  <TableRow>
                     {['考生', '组织', '轮次成绩', '最终结果', '入场 / 交卷时间', '操作'].map(
                       (label) => (
-                        <th key={label} className="whitespace-nowrap p-3 font-medium">
-                          {label}
-                        </th>
+                        <TableHead key={label}>{label}</TableHead>
                       ),
                     )}
-                  </tr>
-                </thead>
-                <tbody>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {query.data.records.map((row) => (
-                    <tr key={row.attemptId} className="border-t">
-                      <td className="p-3">
+                    <TableRow key={row.attemptId}>
+                      <TableCell>
                         <p>{row.candidateName}</p>
                         <p className="mt-1 text-xs text-muted-foreground">
                           UID：{row.candidateUid}
                         </p>
                         <p className="mt-1 text-xs text-muted-foreground">{row.attemptNo}</p>
-                      </td>
-                      <td className="p-3">{row.organizationName || '个人'}</td>
-                      <td className="p-3">
+                      </TableCell>
+                      <TableCell>{row.organizationName || '个人'}</TableCell>
+                      <TableCell>
                         {row.roundScores.length
                           ? row.roundScores.map((round) => (
                               <p key={round.roundNo}>
@@ -367,19 +370,19 @@ export function EntranceExamRoster({
                               </p>
                             ))
                           : '暂无成绩'}
-                      </td>
-                      <td className="p-3">
+                      </TableCell>
+                      <TableCell>
                         {row.finalResult
                           ? examFinalLabels[row.finalResult]
                           : row.enteredAt
                             ? '未交卷'
                             : '未入场'}
-                      </td>
-                      <td className="p-3">
+                      </TableCell>
+                      <TableCell>
                         <p>{row.enteredAt || '未入场'}</p>
                         <p className="mt-1">{row.submittedAt || '未交卷'}</p>
-                      </td>
-                      <td className="p-3">
+                      </TableCell>
+                      <TableCell>
                         <Button
                           variant="ghost"
                           size="mobileTouch"
@@ -388,18 +391,18 @@ export function EntranceExamRoster({
                         >
                           查看阅卷
                         </Button>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
                   {query.data.records.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="p-8 text-center text-muted-foreground">
+                    <TableRow>
+                      <TableCell colSpan={6} className="p-[32px] text-center text-muted-foreground">
                         暂无符合条件的考生
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   )}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
             <ExamPagination
               {...query.data}

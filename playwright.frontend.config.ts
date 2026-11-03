@@ -4,6 +4,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: [
+    'ui-consistency.spec.ts',
     'frontend.spec.ts',
     'profile.spec.ts',
     'profile-attendance.spec.ts',
@@ -16,7 +17,10 @@ export default defineConfig({
     'project-manager.spec.ts',
     'production-plan.spec.ts',
     'expert-actions.spec.ts',
+    'exam-candidate.spec.ts',
+    'expert-training.spec.ts',
     'entrance-exams.spec.ts',
+    'standard-training.spec.ts',
   ],
   workers: 1,
   timeout: 30_000,

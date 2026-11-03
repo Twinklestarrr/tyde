@@ -4,6 +4,7 @@ import type {
   AuthUser,
   ProjectProductionPlan,
   ProjectProductionPlanInput,
+  ProjectStandardMaterials,
   StrategistProjectCard,
   WorkbenchProjectDetail,
 } from '../../packages/shared/src/index';
@@ -210,6 +211,8 @@ async function backend(page: Page, desktop = false) {
     plan: initialPlan(),
     primary: true,
     listStatus: 200,
+    listedProjectIds: [projectId],
+    listNode: null as string | null,
     planStatus: 200,
     confirmStatus: 200,
     networkFailure: false,
@@ -254,7 +257,7 @@ async function backend(page: Page, desktop = false) {
         categoryDisplayName: '内容分类',
         status: 'PUBLISHED',
         statusDescription: '已发布',
-        currentNodeCode: state.plan.currentNodeCode ?? 'PRODUCTION_PLAN',
+        currentNodeCode: state.listNode ?? state.plan.currentNodeCode ?? 'PRODUCTION_PLAN',
         branchNodeCode: null,
         workbenchStatus: 'PROCESSING',
         workbenchStatusDescription: '处理中',
@@ -277,13 +280,34 @@ async function backend(page: Page, desktop = false) {
         updatedAt: detail.updatedAt,
       };
       return reply(
-        state.listStatus === 200 ? [card] : null,
+        state.listStatus === 200
+          ? state.listedProjectIds.map((id) => ({
+              ...card,
+              id,
+              projectName: id === projectId ? card.projectName : '其他待办项目',
+              currentNodeCode: id === projectId ? card.currentNodeCode : 'ENTRANCE_EXAM',
+            }))
+          : null,
         state.listStatus,
         '项目列表暂时不可用',
       );
     }
     if (path === `/api/v1/projects/${projectId}`)
       return reply({ ...detail, currentNodeCode: state.plan.currentNodeCode });
+    if (path === '/api/v1/entrance-exams/reviewers') return reply([]);
+    if (path === '/api/v1/projects/standard-materials/detail')
+      return reply({
+        projectId,
+        standardContent: detail.standardContent,
+        standardLink: null,
+        attachments: [],
+        currentNodeCode: state.plan.currentNodeCode,
+        stateTransitioned: false,
+        canConfirmRead: false,
+        confirmedReadAt: null,
+        readConfirmationTransitioned: false,
+        versionNo: 2,
+      } satisfies ProjectStandardMaterials);
     if (path === '/api/v1/projects/production-plan')
       return reply(
         state.planStatus === 200 ? state.plan : null,
@@ -388,7 +412,16 @@ for (const [mode, desktop] of [
     page.on('pageerror', (error) => pageErrors.push(error.message));
     const { state, calls, releaseConfirm } = await backend(page, desktop);
     await page.goto(`${origin}/#/`);
-    await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: detail.projectName!, exact: true }),
+    ).toBeVisible();
+    if (!desktop)
+      await page.screenshot({
+        path: 'artifacts/project-cards-desktop.png',
+        fullPage: true,
+        animations: 'disabled',
+      });
     await page.getByLabel('筛选当前待办', { exact: true }).fill('不存在的项目');
     await expect(page.getByText('没有匹配的待办项目', { exact: true })).toBeVisible();
     await page.getByLabel('筛选当前待办', { exact: true }).fill('PLAN-PROJECT-701');
@@ -464,14 +497,15 @@ for (const [mode, desktop] of [
     expect(write.headers.cookie).toContain('plan_session=active');
     expect(write.headers['idempotency-key']).toBeUndefined();
     await releaseConfirm();
-    await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
-    await expect(panel.getByRole('button', { name: '确认生产计划', exact: true })).toHaveCount(0);
-    await expect(panel).toContainText('533');
     await expect(workflow.getByText('当前阶段：标准与培训', { exact: true })).toBeVisible();
-    await expect(tabs.getByRole('tab', { name: '生产计划', exact: true })).toHaveAttribute(
+    await expect(tabs.getByRole('tab', { name: '标准与培训', exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
     );
+    await tabs.getByRole('tab', { name: '生产计划', exact: true }).click();
+    await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
+    await expect(panel.getByRole('button', { name: '确认生产计划', exact: true })).toHaveCount(0);
+    await expect(panel).toContainText('533');
     expect(calls('production-plan/confirm')).toHaveLength(1);
     if (!desktop) await screenshot(page, 'confirmed');
     await page.reload();
@@ -487,7 +521,7 @@ test('协作负责人及已确认计划只读，不以列表身份代替接口ed
   state.primary = false;
   state.plan.editable = false;
   await page.goto(`${origin}/#/`);
-  await expect(page.getByText('招募协作负责人', { exact: true })).toBeVisible();
+  await expect(page.getByRole('article')).toContainText('招募协作负责人');
   await page.getByRole('link', { name: '生产计划', exact: true }).click();
   let panel = page.getByRole('region', { name: '生产计划', exact: true });
   await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
@@ -512,6 +546,11 @@ test('协作负责人及已确认计划只读，不以列表身份代替接口ed
   state.planStatus = 200;
   page.once('dialog', (dialog) => dialog.accept());
   await panel.getByRole('button', { name: '重新读取生产计划', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '生产任务', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.getByRole('tab', { name: '生产计划', exact: true }).click();
   panel = page.getByRole('region', { name: '生产计划', exact: true });
   await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toHaveValue('4');
   await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
@@ -577,6 +616,7 @@ test('计划409和未知网络结果锁写，仅显式重读后才可继续', as
 test('确认成功而回读失败保留成功状态，恢复仅GET不重发确认', async ({ page }) => {
   const { state, calls } = await backend(page);
   state.failReadAfterConfirm = true;
+  state.listNode = 'PRODUCTION_PLAN';
   await openPlan(page);
   const panel = await fillPlan(page);
   await panel.getByRole('button', { name: '确认生产计划', exact: true }).click();
@@ -586,8 +626,15 @@ test('确认成功而回读失败保留成功状态，恢复仅GET不重发确�
   ).toBeVisible();
   await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
   expect(calls('production-plan/confirm')).toHaveLength(1);
+  expect(calls('manager/list')).not.toHaveLength(0);
   state.planStatus = 200;
+  state.listNode = null;
   await panel.getByRole('button', { name: '重新读取生产计划', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '标准与培训', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.getByRole('tab', { name: '生产计划', exact: true }).click();
   await expect(
     panel.getByText('生产计划已确认，但最新资料读取失败。请重新读取。', { exact: true }),
   ).toHaveCount(0);
@@ -606,18 +653,31 @@ test('真实角色切换隔离PM接口，375布局和项目详情弹框不丢计
   expect(calls('production-plan')).toHaveLength(0);
   await page.getByRole('combobox', { name: '当前角色', exact: true }).click();
   await page.getByRole('option', { name: '策略官', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
   await page.getByRole('link', { name: '生产计划', exact: true }).click();
   const panel = await fillPlan(page);
-  await page.setViewportSize({ width: 375, height: 812 });
+  await page.setViewportSize({ width: 375, height: 640 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
   await screenshot(page, 'mobile-form');
+  const workflow = page.getByRole('region', { name: '策略官项目流程', exact: true });
+  const toolbar = workflow.getByRole('toolbar', { name: '项目操作', exact: true });
+  await expect(toolbar.getByRole('link', { name: '返回我的项目', exact: true })).toBeInViewport();
+  await expect(toolbar.getByRole('button', { name: '刷新详情', exact: true })).toBeInViewport();
+  await expect(page.getByRole('heading', { name: detail.projectName!, exact: true })).toHaveCount(
+    0,
+  );
+  await expect(page.getByText(detail.projectNo, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(detail.projectDescription!, { exact: true })).toHaveCount(0);
   const before = requests.length;
   const details = page.getByRole('button', { name: '查看项目详情', exact: true });
   await details.click();
   const dialog = page.getByRole('dialog', { name: '项目详情', exact: true });
+  await expect(dialog.getByText(detail.projectNo, { exact: true })).toBeVisible();
+  const basicInfo = dialog.getByRole('region', { name: '基础信息', exact: true });
+  await expect(basicInfo).toContainText(detail.projectName!);
+  await expect(basicInfo).toContainText(detail.projectDescription!);
   await expect(dialog.getByRole('region', { name: '基础信息', exact: true })).toContainText(
     '500 条',
   );
@@ -651,4 +711,93 @@ test('真实角色切换隔离PM接口，375布局和项目详情弹框不丢计
       .filter((request) => request.path === '/api/v1/auth/switch-role')
       .map((request) => request.body),
   ).toEqual([{ role: 'PM' }, { role: 'EXPERT' }]);
+});
+
+test('策略官提交后从重排的完整列表找到当前卡片并续接下一模块', async ({ page }) => {
+  const { state, calls, requests } = await backend(page);
+  await page.goto(`${origin}/#/strategist/projects`);
+  await page
+    .getByRole('article')
+    .filter({ hasText: detail.projectName! })
+    .click({ position: { x: 24, y: 24 } });
+  const panel = await fillPlan(page);
+  state.listedProjectIds = [999, projectId];
+  state.failReadAfterConfirm = true;
+  const reads = calls('manager/list').length;
+  await panel.getByRole('button', { name: '确认生产计划', exact: true }).click();
+  await confirm(page);
+  await expect.poll(() => calls('manager/list').length).toBeGreaterThan(reads);
+  await expect(page).toHaveURL(new RegExp(`#/strategist/projects/${projectId}(?:\\?|$)`));
+  await expect(page.getByRole('tab', { name: '标准与培训', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('region', { name: '标准与培训', exact: true })).toContainText(
+    detail.standardContent!,
+  );
+  expect(calls('production-plan/confirm')).toHaveLength(1);
+  const submitted = requests.findIndex((request) =>
+    request.path.endsWith('/production-plan/confirm'),
+  );
+  const nextRead = requests
+    .slice(submitted + 1)
+    .find(
+      (request) =>
+        request.path.endsWith('/manager/list') || request.path.endsWith('/production-plan'),
+    );
+  expect(nextRead?.path).toBe('/api/v1/projects/manager/list');
+  expect(calls('manager/list').at(-1)?.query).toEqual({});
+});
+
+test('策略官提交后当前卡片不在列表则返回列表，不进入其他项目', async ({ page }) => {
+  const { state, calls } = await backend(page);
+  await openPlan(page);
+  const panel = await fillPlan(page);
+  state.listedProjectIds = [999];
+  await panel.getByRole('button', { name: '确认生产计划', exact: true }).click();
+  await confirm(page);
+  await expect(page).toHaveURL(/#\/strategist\/projects$/);
+  await expect(page.getByRole('heading', { name: '其他待办项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: detail.projectName!, exact: true })).toHaveCount(
+    0,
+  );
+  expect(calls('production-plan/confirm')).toHaveLength(1);
+});
+
+test('策略官成功提交后列表失败留在详情，恢复后只回读并续接下一模块', async ({ page }) => {
+  const { state, calls } = await backend(page);
+  await openPlan(page);
+  const panel = await fillPlan(page);
+  state.listStatus = 503;
+  await panel.getByRole('button', { name: '确认生产计划', exact: true }).click();
+  await confirm(page);
+  await expect(panel.getByText('项目列表暂时不可用', { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`#/strategist/projects/${projectId}(?:\\?|$)`));
+  await expect(panel.getByRole('spinbutton', { name: '作业人数', exact: true })).toBeDisabled();
+  expect(calls('production-plan/confirm')).toHaveLength(1);
+  state.listStatus = 200;
+  await panel.getByRole('button', { name: '重新读取生产计划', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '标准与培训', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  expect(calls('production-plan/confirm')).toHaveLength(1);
+});
+
+test('精简项目卡片在375宽度可搜索与键盘打开，并遵循减少动态效果', async ({ page }) => {
+  await backend(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${origin}/#/strategist/projects`);
+  await expect(page.getByRole('article')).toContainText(detail.projectName!);
+  await expect(page.locator('.project-card-transition')).toHaveCSS('animation-name', 'none');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ path: 'artifacts/project-cards-mobile.png', fullPage: true });
+  const entry = page.getByRole('link', { name: '生产计划', exact: true });
+  await entry.focus();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`#/strategist/projects/${projectId}(?:\\?|$)`));
+  await expect(page.locator('.project-card-transition')).toHaveCSS('animation-name', 'none');
 });

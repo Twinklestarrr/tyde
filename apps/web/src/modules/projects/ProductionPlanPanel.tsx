@@ -12,6 +12,9 @@ import {
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { CardTitle } from '@/components/ui/card';
+import { Dialog } from '@/components/ui/dialog';
+import { LoadingState } from '@/components/ui/empty-state';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { WORKSPACE_ROLE_SWITCH_REQUEST } from '@/layouts/WorkspaceView';
 import { api } from '@/services/api';
@@ -49,7 +52,7 @@ export function ProductionPlanPanel({ user, projectId, onConfirmed }: Production
   if (query.isError && !query.data)
     return (
       <section aria-label="生产计划" className="space-y-[16px] p-[20px]">
-        <h2 className="text-[18px] font-semibold">生产计划</h2>
+        <CardTitle>生产计划</CardTitle>
         <ErrorNotice error={query.error} />
         <Button
           variant="outline"
@@ -61,12 +64,7 @@ export function ProductionPlanPanel({ user, projectId, onConfirmed }: Production
         </Button>
       </section>
     );
-  if (!query.data || query.isFetching)
-    return (
-      <p role="status" className="p-[24px] text-[14px] text-muted-foreground">
-        正在读取生产计划…
-      </p>
-    );
+  if (!query.data || query.isFetching) return <LoadingState>正在读取生产计划…</LoadingState>;
   return (
     <ProductionPlanEditor
       key={`${user.id}:${projectId}`}
@@ -172,18 +170,21 @@ function ProductionPlanEditor({
   }
 
   /** 恢复动作只有 GET，不自动再次确认；服务端只读结果取代本地待确认输入。 */
-  async function reread(discard = true) {
-    if (reading || writing.current) return;
+  async function reread(discard = true, knownSuccess = lock === 'success') {
+    if (reading || writing.current || !sessionMatches()) return;
     if (discard && dirty && !window.confirm('重新读取将替换未确认的生产计划内容，确认继续？'))
       return;
     setReading(true);
     setReadError(null);
     try {
+      // 已确认写入先核对项目列表；本域读取失败不能阻止卡片续接或返回。
+      if (knownSuccess && onConfirmed) await onConfirmed();
+      if (!sessionMatches()) return;
       const result = await api.getProjectProductionPlan(projectId);
       if (!sessionMatches()) return;
       cache.setQueryData(['project-production-plan', user.id, 'PM', projectId], result);
       form.reset(productionPlanValues(result));
-      if (result.hasPlan && onConfirmed) await onConfirmed();
+      if (!knownSuccess && result.hasPlan && onConfirmed) await onConfirmed();
       if (!sessionMatches()) return;
       setLock(null);
       setError(null);
@@ -239,7 +240,7 @@ function ProductionPlanEditor({
     form.reset(productionPlanValues(result));
     setNotice('生产计划已确认，不能再次修改。');
     setLock('success');
-    await reread(false);
+    await reread(false, true);
   }
 
   const stages = form.watch('stages');
@@ -251,18 +252,16 @@ function ProductionPlanEditor({
     ? estimates.reduce<number>((sum, value) => sum + (value ?? 0), 0)
     : null;
   return (
-    <section aria-label="生产计划" className="space-y-[20px] p-[16px] sm:p-[24px]">
-      <header className="flex flex-wrap items-start justify-between gap-[16px]">
+    <section aria-label="生产计划" className="space-y-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="production-plan-title" className="text-[20px] font-semibold">
-            生产计划
-          </h2>
-          <p className="mt-[6px] text-[13px] leading-6 text-muted-foreground">
+          <CardTitle id="production-plan-title">生产计划</CardTitle>
+          <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
             {plan.hasPlan
               ? `已确认${plan.confirmedAt ? ` · ${plan.confirmedAt}（上海时间）` : ''}，计划内容仅可查看。`
               : readOnly
                 ? '当前生产计划仅可查看，由主策略官确认。'
-                : '设置人数产能、人群与阶段。确认后计划将锁定，不能修改。'}
+                : '确认后计划将锁定，不能修改。'}
           </p>
         </div>
         <Button
@@ -291,7 +290,7 @@ function ProductionPlanEditor({
         <fieldset disabled={disabled} aria-label={readOnly ? '只读生产计划' : '生产计划配置'}>
           <ProductionPlanFields form={form} plan={plan} readOnly={readOnly} />
         </fieldset>
-        <div className="mt-[24px] rounded-[12px] border bg-muted p-[16px] text-[13px] leading-6">
+        <div className="mt-4 rounded-xl border bg-muted p-3 text-[13px] leading-5">
           <p>
             {plan.hasPlan ? '服务端已确认预计产出' : '合计预计产出（估算）'}：
             <strong>
@@ -313,7 +312,7 @@ function ProductionPlanEditor({
               </p>
             )}
         </div>
-        <div className="mt-[20px] space-y-[12px]">
+        <div className="mt-3 space-y-3">
           <ErrorNotice error={error} />
           {lock && (lock !== 'success' || (!reading && Boolean(readError))) && (
             <Alert>
@@ -332,7 +331,7 @@ function ProductionPlanEditor({
           )}
           <ErrorNotice error={readError} />
         </div>
-        <footer className="mt-[24px] flex flex-wrap items-center justify-between gap-[16px] border-t pt-[20px]">
+        <footer className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
           <p className="text-[13px] leading-6 text-muted-foreground">
             {plan.hasPlan
               ? '当前结果已锁定为只读。'
@@ -374,41 +373,32 @@ function ProductionPlanConfirmation({
   onClose: () => void;
   onConfirm: () => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const node = dialog.current;
-    node?.showModal();
-    return () => node?.close();
-  }, []);
   return (
-    <dialog
-      ref={dialog}
+    <Dialog
+      title="确认生产计划"
       aria-label="确认生产计划"
       aria-describedby="production-plan-confirm-description"
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!busy) onClose();
-      }}
-      className="fixed inset-0 m-auto w-[calc(100%-32px)] max-w-[520px] rounded-[12px] border bg-card p-[24px] text-foreground shadow-xl backdrop:bg-black/40"
+      size="sm"
+      busy={busy}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" size="account" disabled={busy} onClick={onClose}>
+            继续填写
+          </Button>
+          <Button size="account" loading={busy} onClick={onConfirm}>
+            确认提交
+          </Button>
+        </>
+      }
     >
-      <h2 id="production-plan-confirm-title" className="text-[18px] font-semibold">
-        确认生产计划
-      </h2>
       <p
         id="production-plan-confirm-description"
-        className="mt-[12px] text-[14px] leading-6 text-muted-foreground"
+        className="text-[13px] leading-[22px] text-muted-foreground"
       >
         确认后本计划不能再次编辑。计划目标为{written ? '准入考试' : '标准与培训'}
         ，实际项目进度不会回退。各阶段开始日期须不早于确认当日，当前上海日期为 {today}。
       </p>
-      <div className="mt-[24px] flex flex-wrap justify-end gap-[10px]">
-        <Button variant="outline" size="account" disabled={busy} onClick={onClose}>
-          继续填写
-        </Button>
-        <Button size="account" loading={busy} onClick={onConfirm}>
-          确认提交
-        </Button>
-      </div>
-    </dialog>
+    </Dialog>
   );
 }

@@ -14,6 +14,14 @@ import {
 } from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
@@ -143,7 +151,7 @@ function OrganizationCreateForm({ user }: { user: AuthUser }) {
   }
 
   return (
-    <div className="mx-auto max-w-[1040px] space-y-[16px]">
+    <div className="mx-auto max-w-[1200px] space-y-[20px]">
       <OrganizationPageHeader
         title="创建组织"
         description="先填写组织名称，其余资料按需补充。创建成功后，你会成为组织主管。"
@@ -151,215 +159,222 @@ function OrganizationCreateForm({ user }: { user: AuthUser }) {
       />
 
       {created ? (
-        <section className="rounded-[12px] border bg-card p-[24px] sm:p-[32px]">
-          <div className="mb-[16px] grid size-[48px] place-items-center rounded-full bg-[var(--color-primary-soft)] text-[var(--color-primary-strong)]">
-            <Check className="size-[24px]" aria-hidden />
-          </div>
-          <h2 className="m-0 text-[20px] font-semibold">组织已创建</h2>
-          <p className="mt-[8px] text-[14px] leading-[22px] text-[var(--color-neutral-strong)]">
-            {created.name} 已创建成功。读取最新账户资料后即可进入组织管理。
-          </p>
-          <ErrorNotice error={refreshError} />
-          <Button
-            size="account"
-            className="mt-[20px]"
-            onClick={() => void openCreatedOrganization(created.id)}
-          >
-            进入组织管理
-          </Button>
-        </section>
+        <Card asChild>
+          <section className="p-[20px]">
+            <div className="mb-[16px] grid size-[48px] place-items-center rounded-full bg-[var(--color-primary-soft)] text-[var(--color-primary-strong)]">
+              <Check className="size-[24px]" aria-hidden />
+            </div>
+            <CardTitle>组织已创建</CardTitle>
+            <CardDescription className="mt-[8px]">
+              {created.name} 已创建成功。读取最新账户资料后即可进入组织管理。
+            </CardDescription>
+            <ErrorNotice error={refreshError} />
+            <Button
+              size="account"
+              className="mt-[20px]"
+              onClick={() => void openCreatedOrganization(created.id)}
+            >
+              进入组织管理
+            </Button>
+          </section>
+        </Card>
       ) : (
-        <div className="grid min-w-0 gap-[16px] lg:grid-cols-[minmax(0,1fr)_240px]">
-          <form
-            className="min-w-0 rounded-[12px] border bg-card p-[20px] sm:p-[28px] [&_[data-slot=field-description]]:text-[13px] [&_[data-slot=field-label]]:text-[14px] [&_[data-slot=input]]:text-[14px]"
-            onSubmit={form.handleSubmit(create)}
-            noValidate
-          >
-            <div className="mb-[24px] flex items-start gap-[12px] border-b pb-[20px]">
-              <div className="grid size-[40px] shrink-0 place-items-center rounded-[10px] bg-[var(--color-primary-soft)] text-[var(--color-primary-strong)]">
-                <Building2 className="size-[20px]" aria-hidden />
-              </div>
-              <div>
-                <h2 className="m-0 text-[18px] font-semibold">组织资料</h2>
-                <p className="mt-[4px] text-[13px] leading-[20px] text-[var(--color-neutral-strong)]">
-                  名称必填，其他资料可根据实际情况填写。
-                </p>
-              </div>
-            </div>
+        <div className="grid min-w-0 gap-[20px] lg:grid-cols-[minmax(0,1fr)_240px]">
+          <Card asChild>
+            <form onSubmit={form.handleSubmit(create)} noValidate>
+              <CardHeader className="flex-row items-start gap-[12px]">
+                <div className="grid size-[40px] shrink-0 place-items-center rounded-[10px] bg-[var(--color-primary-soft)] text-[var(--color-primary-strong)]">
+                  <Building2 className="size-[20px]" aria-hidden />
+                </div>
+                <div>
+                  <CardTitle>组织资料</CardTitle>
+                  <CardDescription className="mt-[4px]">
+                    名称必填，其他资料可根据实际情况填写。
+                  </CardDescription>
+                </div>
+              </CardHeader>
 
-            <fieldset disabled={busy} className="space-y-[22px]">
-              <FormField
-                controlId="create-org-name"
-                label="组织名称"
-                required
-                error={form.formState.errors.name?.message}
-                description="组织名称创建后暂不能在此修改，请确认填写准确。"
-              >
-                {({ invalid, describedBy }) => (
-                  <Input
-                    id="create-org-name"
-                    size="profile"
-                    autoComplete="organization"
-                    maxLength={128}
-                    placeholder="例如：潮汐标注团队"
-                    aria-invalid={invalid || undefined}
-                    aria-describedby={describedBy}
-                    {...form.register('name', {
-                      validate: (value) =>
-                        (value.trim().length > 0 && value.trim().length <= 128) ||
-                        '请填写 1–128 字的组织名称',
-                    })}
-                  />
-                )}
-              </FormField>
-              <FormField
-                controlId="create-org-credit"
-                label="统一社会信用代码（选填）"
-                error={form.formState.errors.unifiedCreditCode?.message}
-              >
-                {({ invalid, describedBy }) => (
-                  <Input
-                    id="create-org-credit"
-                    size="profile"
-                    maxLength={32}
-                    placeholder="有则填写"
-                    aria-invalid={invalid || undefined}
-                    aria-describedby={describedBy}
-                    {...form.register('unifiedCreditCode', {
-                      validate: (value) => value.trim().length <= 32 || '最多 32 字符',
-                    })}
-                  />
-                )}
-              </FormField>
-              <FormField
-                controlId="create-org-description"
-                label="组织简介（选填）"
-                error={form.formState.errors.description?.message}
-                description="介绍团队擅长的工作与合作方式，最多 1024 字。"
-              >
-                {({ invalid, describedBy }) => (
-                  <Textarea
-                    id="create-org-description"
-                    rows={4}
-                    maxLength={1024}
-                    aria-invalid={invalid || undefined}
-                    aria-describedby={describedBy}
-                    {...form.register('description', {
-                      validate: (value) => value.trim().length <= 1024 || '最多 1024 字',
-                    })}
-                  />
-                )}
-              </FormField>
-
-              <div className="border-t pt-[22px]">
-                <h3 className="text-[15px] font-semibold">补充资料</h3>
-                <p className="mt-[4px] text-[13px] leading-[20px] text-[var(--color-neutral-strong)]">
-                  以下信息均可跳过，不影响创建组织。
-                </p>
-              </div>
-              <FormField
-                controlId="create-org-tags"
-                label="擅长领域（选填）"
-                error={form.formState.errors.expertiseTags?.message}
-                description="多个领域用逗号分隔，每项最多 128 字。"
-              >
-                {({ invalid, describedBy }) => (
-                  <Input
-                    id="create-org-tags"
-                    size="profile"
-                    maxLength={1024}
-                    placeholder="例如：图像标注，质量检查"
-                    aria-invalid={invalid || undefined}
-                    aria-describedby={describedBy}
-                    {...form.register('expertiseTags', {
-                      validate: (value) =>
-                        tagsFrom(value).every((tag) => tag.length <= 128) || '每个领域最多 128 字',
-                    })}
-                  />
-                )}
-              </FormField>
-              <OrganizationLogoField logo={logo} disabled={busy} />
-              <FormField
-                controlId="create-org-license"
-                label="营业执照（选填）"
-                error={fileError}
-                description="支持 JPG、PNG、GIF、BMP、WebP，最大 10 MiB。创建时上传并关联，仅有权限的组织主管或管理员可读取。"
-              >
-                {({ invalid, describedBy }) => (
-                  <div className="flex min-w-0 flex-wrap items-center gap-[10px]">
-                    <FileUploadField
-                      id="create-org-license"
-                      accept={AVATAR_ACCEPT}
-                      disabled={busy}
-                      aria-invalid={invalid || undefined}
-                      aria-describedby={describedBy}
-                      contentClassName="rounded-[8px]"
-                      onFilesSelected={(files) => chooseFile(files[0])}
-                    >
-                      <Button asChild variant="outline" size="account" disabled={busy}>
-                        <span>
-                          <FileImage className="size-[16px]" aria-hidden />
-                          选择营业执照
-                        </span>
-                      </Button>
-                    </FileUploadField>
-                    {(license || fileError) && (
-                      <span className="flex max-w-full min-w-0 items-center rounded-[8px] border bg-muted pl-[10px]">
-                        <span
-                          className="min-w-0 max-w-[180px] truncate text-[12px] text-[var(--color-neutral-strong)]"
-                          title={license?.name}
-                        >
-                          {license?.name ?? '未选择有效文件'}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="iconTouch"
-                          disabled={busy}
-                          aria-label="清除营业执照选择"
-                          onClick={() => {
-                            setLicense(null);
-                            uploaded.current = null;
-                            setFileError('');
-                          }}
-                        >
-                          <X className="size-[16px]" aria-hidden />
-                        </Button>
-                      </span>
+              <CardContent>
+                <fieldset disabled={busy} className="space-y-[20px]">
+                  <FormField
+                    controlId="create-org-name"
+                    label="组织名称"
+                    required
+                    error={form.formState.errors.name?.message}
+                    description="组织名称创建后暂不能在此修改，请确认填写准确。"
+                  >
+                    {({ invalid, describedBy }) => (
+                      <Input
+                        id="create-org-name"
+                        size="profile"
+                        autoComplete="organization"
+                        maxLength={128}
+                        placeholder="例如：潮汐标注团队"
+                        aria-invalid={invalid || undefined}
+                        aria-describedby={describedBy}
+                        {...form.register('name', {
+                          validate: (value) =>
+                            (value.trim().length > 0 && value.trim().length <= 128) ||
+                            '请填写 1–128 字的组织名称',
+                        })}
+                      />
                     )}
+                  </FormField>
+                  <FormField
+                    controlId="create-org-credit"
+                    label="统一社会信用代码（选填）"
+                    error={form.formState.errors.unifiedCreditCode?.message}
+                  >
+                    {({ invalid, describedBy }) => (
+                      <Input
+                        id="create-org-credit"
+                        size="profile"
+                        maxLength={32}
+                        placeholder="有则填写"
+                        aria-invalid={invalid || undefined}
+                        aria-describedby={describedBy}
+                        {...form.register('unifiedCreditCode', {
+                          validate: (value) => value.trim().length <= 32 || '最多 32 字符',
+                        })}
+                      />
+                    )}
+                  </FormField>
+                  <FormField
+                    controlId="create-org-description"
+                    label="组织简介（选填）"
+                    error={form.formState.errors.description?.message}
+                    description="介绍团队擅长的工作与合作方式，最多 1024 字。"
+                  >
+                    {({ invalid, describedBy }) => (
+                      <Textarea
+                        id="create-org-description"
+                        rows={4}
+                        maxLength={1024}
+                        aria-invalid={invalid || undefined}
+                        aria-describedby={describedBy}
+                        {...form.register('description', {
+                          validate: (value) => value.trim().length <= 1024 || '最多 1024 字',
+                        })}
+                      />
+                    )}
+                  </FormField>
+
+                  <div className="border-t pt-[22px]">
+                    <h3 className="text-[15px] font-semibold">补充资料</h3>
+                    <p className="mt-[4px] text-[13px] leading-[20px] text-[var(--color-neutral-strong)]">
+                      以下信息均可跳过，不影响创建组织。
+                    </p>
                   </div>
-                )}
-              </FormField>
-            </fieldset>
+                  <FormField
+                    controlId="create-org-tags"
+                    label="擅长领域（选填）"
+                    error={form.formState.errors.expertiseTags?.message}
+                    description="多个领域用逗号分隔，每项最多 128 字。"
+                  >
+                    {({ invalid, describedBy }) => (
+                      <Input
+                        id="create-org-tags"
+                        size="profile"
+                        maxLength={1024}
+                        placeholder="例如：图像标注，质量检查"
+                        aria-invalid={invalid || undefined}
+                        aria-describedby={describedBy}
+                        {...form.register('expertiseTags', {
+                          validate: (value) =>
+                            tagsFrom(value).every((tag) => tag.length <= 128) ||
+                            '每个领域最多 128 字',
+                        })}
+                      />
+                    )}
+                  </FormField>
+                  <OrganizationLogoField logo={logo} disabled={busy} />
+                  <FormField
+                    controlId="create-org-license"
+                    label="营业执照（选填）"
+                    error={fileError}
+                    description="支持 JPG、PNG、GIF、BMP、WebP，最大 10 MiB。创建时上传并关联，仅有权限的组织主管或管理员可读取。"
+                  >
+                    {({ invalid, describedBy }) => (
+                      <div className="flex min-w-0 flex-wrap items-center gap-[10px]">
+                        <FileUploadField
+                          id="create-org-license"
+                          accept={AVATAR_ACCEPT}
+                          disabled={busy}
+                          aria-invalid={invalid || undefined}
+                          aria-describedby={describedBy}
+                          contentClassName="rounded-[8px]"
+                          onFilesSelected={(files) => chooseFile(files[0])}
+                        >
+                          <Button asChild variant="outline" size="account" disabled={busy}>
+                            <span>
+                              <FileImage className="size-[16px]" aria-hidden />
+                              选择营业执照
+                            </span>
+                          </Button>
+                        </FileUploadField>
+                        {(license || fileError) && (
+                          <span className="flex max-w-full min-w-0 items-center rounded-[8px] border bg-muted pl-[10px]">
+                            <span
+                              className="min-w-0 max-w-[180px] truncate text-[12px] text-[var(--color-neutral-strong)]"
+                              title={license?.name}
+                            >
+                              {license?.name ?? '未选择有效文件'}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="iconTouch"
+                              disabled={busy}
+                              aria-label="清除营业执照选择"
+                              onClick={() => {
+                                setLicense(null);
+                                uploaded.current = null;
+                                setFileError('');
+                              }}
+                            >
+                              <X className="size-[16px]" aria-hidden />
+                            </Button>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </FormField>
+                </fieldset>
 
-            <ErrorNotice error={error} />
-            <div className="mt-[28px] flex flex-wrap justify-end gap-[10px] border-t pt-[20px]">
-              <Button asChild variant="outline" size="account" disabled={busy}>
-                <Link to="/organization" onClick={(event) => busy && event.preventDefault()}>
-                  取消
-                </Link>
-              </Button>
-              <Button
-                type="submit"
-                size="account"
-                loading={busy}
-                disabled={!canCreate || !!fileError}
-              >
-                <Plus className="size-[16px]" aria-hidden />
-                创建组织
-              </Button>
-            </div>
-          </form>
+                <ErrorNotice error={error} />
+              </CardContent>
+              <CardFooter className="justify-end">
+                <Button asChild variant="outline" size="account" disabled={busy}>
+                  <Link to="/organization" onClick={(event) => busy && event.preventDefault()}>
+                    取消
+                  </Link>
+                </Button>
+                <Button
+                  type="submit"
+                  size="account"
+                  loading={busy}
+                  disabled={!canCreate || !!fileError}
+                >
+                  <Plus className="size-[16px]" aria-hidden />
+                  创建组织
+                </Button>
+              </CardFooter>
+            </form>
+          </Card>
 
-          <aside className="h-fit rounded-[12px] border bg-card p-[20px] text-[13px] leading-[21px] text-[var(--color-neutral-strong)]">
-            <h2 className="m-0 text-[15px] font-semibold text-foreground">创建后可以做什么</h2>
-            <ul className="mt-[12px] list-inside list-disc space-y-[8px]">
-              <li>作为组织主管查看组织资料</li>
-              <li>导入和管理团队成员</li>
-              <li>处理成员退出审批</li>
-            </ul>
-            <p className="mt-[16px] border-t pt-[14px]">创建不会自动加入项目或授予其他业务权限。</p>
-          </aside>
+          <Card asChild>
+            <aside className="h-fit p-[20px] text-[13px] leading-[21px] text-[var(--color-neutral-strong)]">
+              <CardTitle className="text-foreground">创建后可以做什么</CardTitle>
+              <ul className="mt-[12px] list-inside list-disc space-y-[8px]">
+                <li>作为组织主管查看组织资料</li>
+                <li>导入和管理团队成员</li>
+                <li>处理成员退出审批</li>
+              </ul>
+              <p className="mt-[16px] border-t pt-[14px]">
+                创建不会自动加入项目或授予其他业务权限。
+              </p>
+            </aside>
+          </Card>
         </div>
       )}
     </div>

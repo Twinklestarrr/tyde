@@ -4,7 +4,7 @@
 
 ## W5 启动与运行边界
 
-W4／W5 已在 `integration/agent-w4-w5` 合并，用户确认后工程检查、专用 PG 测试和真实工具页面正在分项验收。以下 W2／W3／W4／W5 独立证据保留，不代替本轮结果；当前通过、跳过与未完成项见 [联合记录](../../docs/AGENT_W4_W5_INTEGRATION.md)，逐文件交付见 [清单](../../docs/AGENT_W4_W5_DELIVERY.md)。
+W4／W5 已在 `integration/agent-w4-w5` 合并，用户确认后工程检查、专用 PG 测试和真实工具页面正在分项验收。以下 W2／W3／W4／W5 独立证据保留，不代替本轮结果；当前通过、跳过与未完成项见 [联合记录](../../docs/archive/AGENT_MILESTONES.md#agent-w4-w5-integration)，逐文件交付见 [清单](../../docs/archive/AGENT_MILESTONES.md#agent-w4-w5-delivery)。
 
 实际切换并核实 Node.js **24.19.0**、pnpm **11.23.0**；worktree 的 shell 可能覆盖 PATH，`.nvmrc` 不能替代实测。保留原服务端 `.env`，不打印模型/身份凭据。并行窗口使用独立 worktree、端口和 Agent 数据库；W5 独立验收的 PG 55435／页面 35153／服务 35152 保留为历史；本轮新 Agent 专用 PG 为 55436，具体本机工具演示使用页面 3103／服务 3102。
 
@@ -28,7 +28,7 @@ pnpm test:agent-budget-realtime  # 显式执行真实600000ms；不加入快速�
 
 同一 Agent 数据库只运行一个服务进程，启动持专用连接的协调锁；该锁不是旧进程失效证明。活动 Attempt 遗留时不自动接管或重跑。私有 `recoverInterruptedAttempt` 只在同机原 PID 明确 ESRCH、完整 owner/generation/head 匹配后记录 interrupted；存活/复用 PID、远端主机、EPERM、锁断开或心跳过期都不能放行。公开继续、重试、补充和恢复按钮仍未开放，跨主机/多实例与 Electron 留给后续。
 
-数据库异常先取消在途执行再核实，保存未知时保留未决状态，不伪造 completed/stopped/failed。可靠事件永久补读水位不因重启换流；本轮默认不做产品删除/保留裁剪，活动/待核实授权证据不能提前清除。单机恢复、实际 PG 连接故障、受控工具、真实时钟和真实供应商的证据分开记在 [W5 验收记录](../../docs/AGENT_W5_VALIDATION.md)。
+数据库异常先取消在途执行再核实，保存未知时保留未决状态，不伪造 completed/stopped/failed。可靠事件永久补读水位不因重启换流；本轮默认不做产品删除/保留裁剪，活动/待核实授权证据不能提前清除。单机恢复、实际 PG 连接故障、受控工具、真实时钟和真实供应商的证据分开记在 [W5 验收记录](../../docs/archive/AGENT_MILESTONES.md#agent-w5-validation)。
 
 ## W1—W3 基础与兼容说明
 
@@ -163,7 +163,7 @@ pnpm --filter @tyde/agent smoke:maas --stop-after-ms 2000
 
 `--check-config` 加载配置并调用身份模块，随后退出；不会发送模型请求，也不表示平台路由已通过。模块加载、首次授权和会话装配共用一个准备预算，取配置的总预算；超时或 SIGINT／SIGTERM 以非零状态退出，迟到解析不会启动模型请求。独立 CLI 在结局输出和本地 Session 清理后最多再保留 1 秒退出窗口，防止身份模块遗留活动句柄；作为库使用的适配器不会退出服务进程。默认冒烟发起两轮真实模型请求，用随机口令验证原生上下文连续性，输出临时流式文字和结构化结果。停止计时从 prompt 开始；仅已收到真实文字、HTTP 200 的模型流取消且本地结果为 stopped 时通过。停止发生在准备阶段、尚无文字进展或远端已完成时均失败，提示调整停止时机，不能据此宣称执行中流式停止已验通。执行中的 SIGINT／SIGTERM 请求本地停止。命令失败不回退为模拟回答。
 
-隔离测试使用受控本机接口替身核对 SDK 真实路径、请求／响应、停止和故障。用户已提供 DeepSeek Flash 的 W2 真实两轮召回、流式与本地停止通过日志；DeepSeek V4 Pro 仅配置检查，可选平台路径尚未真实联调。W3 页面已接通同一模型入口，真实浏览器结果见 [W3 验证记录](../../docs/AGENT_W3_VALIDATION.md)。正式平台身份仍待后续工作包；PostgreSQL 已由 W5 单独接入，W4／W5 联合路径已有本轮独立工程／PG 与部分真实页面证据，剩余场景见联合记录。
+隔离测试使用受控本机接口替身核对 SDK 真实路径、请求／响应、停止和故障。用户已提供 DeepSeek Flash 的 W2 真实两轮召回、流式与本地停止通过日志；DeepSeek V4 Pro 仅配置检查，可选平台路径尚未真实联调。W3 页面已接通同一模型入口，真实浏览器结果见 [W3 验证记录](../../docs/archive/AGENT_MILESTONES.md#agent-w3-validation)。正式平台身份仍待后续工作包；PostgreSQL 已由 W5 单独接入，W4／W5 联合路径已有本轮独立工程／PG 与部分真实页面证据，剩余场景见联合记录。
 
 协作边界及后续工作见 [Agent 开发说明](../../docs/AGENT_DEVELOPMENT.md)。
 
@@ -181,7 +181,7 @@ Skill 采用 `host-preloaded-system-prompt`：将已校验的固定正文放入�
 
 PG 可信装配由 `storage/pi-deployment.ts` 的 `createTrustedPiDeployment`、`prepareTrustedPiDeployment` 和 `publishTrustedPiDeploymentSnapshot` 连接 W4 冻结资源与 W5 资源发布：核对固定成员、实际代码导出／字节，使用数据库规范化得到的 `resourceManifestHash`；执行快照的 `tool_manifest.host_resources` 保留同一 W4 manifest。运行清单改变后需生成并发布新配置，旧快照不可改写。启用资源的发布须使用该适配器，默认 `publish:agent-config` 仍只发布默认无工具配置；HTTP 不自动发布。
 
-本机演示包在 `.local/agent-w4-demo/`，不提交。仅拉取通用代码不能直接复现该演示，普通聊天、测试和构建完全不依赖它。原 W4 包启动入口只证明过独立 memory 路径，不能直接用作本轮 PG 演示：PG 入口须显式提供同一可信资源和部署声明，完成新运行清单／Agent 迁移／资源及执行快照发布后再启动。本轮已按新清单／迁移／快照完成实际启动，工具回答、追问、普通问题、运行中停止、刷新／切换及重启重连通过；默认无演示 PG 普通聊天为真实产品 HTTP 验证，未声称 clean 页面浏览器验通。原 `.env` 仅由进程读取，不覆盖、不复制到 worktree。既有真实证据见 [W4 验收记录](../../docs/AGENT_W4_VALIDATION.md)，本轮接入待验说明见 [合流记录](../../docs/AGENT_W4_W5_INTEGRATION.md)。
+本机演示包在 `.local/agent-w4-demo/`，不提交。仅拉取通用代码不能直接复现该演示，普通聊天、测试和构建完全不依赖它。原 W4 包启动入口只证明过独立 memory 路径，不能直接用作本轮 PG 演示：PG 入口须显式提供同一可信资源和部署声明，完成新运行清单／Agent 迁移／资源及执行快照发布后再启动。本轮已按新清单／迁移／快照完成实际启动，工具回答、追问、普通问题、运行中停止、刷新／切换及重启重连通过；默认无演示 PG 普通聊天为真实产品 HTTP 验证，未声称 clean 页面浏览器验通。原 `.env` 仅由进程读取，不覆盖、不复制到 worktree。既有真实证据见 [W4 验收记录](../../docs/archive/AGENT_MILESTONES.md#agent-w4-validation)，本轮接入待验说明见 [合流记录](../../docs/archive/AGENT_MILESTONES.md#agent-w4-w5-integration)。
 
 ## 本轮本机工具演示入口
 
