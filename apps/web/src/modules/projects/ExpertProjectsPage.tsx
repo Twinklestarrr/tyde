@@ -17,6 +17,7 @@ import { projectNodeLabel } from './ProjectWorkflow';
 import { ProjectDetailsDialog } from './ProjectDetailsDialog';
 import { ExpertTaskResponseDialog } from './ExpertTaskResponseDialog';
 import { ExpertExamPanel, EXPERT_EXAM_LEAVE_REQUEST } from './ExpertExamPanel';
+import { ExpertTrainingPanel, EXPERT_TRAINING_LEAVE_REQUEST } from './ExpertTrainingPanel';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { ProjectCardTransition } from './ProjectCardTransition';
 
@@ -167,27 +168,13 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
     // 缓存本身锁住来源；关闭弹窗或切换页面不能用旧待办重放未知/已成功操作。
     setSelected((current) =>
       current?.sourceBizType === task.sourceBizType && current.sourceBizId === task.sourceBizId
-        ? {
-            ...current,
-            operations: {
-              ...current.operations,
-              canAccept: false,
-              canReject: false,
-            },
-          }
+        ? { ...current, operations: { ...current.operations, canAccept: false, canReject: false } }
         : current,
     );
     cache.setQueriesData<ExpertTask[]>({ queryKey: ['expert-projects', user.id] }, (tasks) =>
       tasks?.map((item) =>
         item.sourceBizType === task.sourceBizType && item.sourceBizId === task.sourceBizId
-          ? {
-              ...item,
-              operations: {
-                ...item.operations,
-                canAccept: false,
-                canReject: false,
-              },
-            }
+          ? { ...item, operations: { ...item.operations, canAccept: false, canReject: false } }
           : item,
       ),
     );
@@ -273,6 +260,8 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
   async function refreshCurrentTask(task: ExpertTask) {
     if (refreshing || !sessionMatches()) return;
     if (!window.dispatchEvent(new Event(EXPERT_EXAM_LEAVE_REQUEST, { cancelable: true }))) return;
+    if (!window.dispatchEvent(new Event(EXPERT_TRAINING_LEAVE_REQUEST, { cancelable: true })))
+      return;
     setRefreshing(true);
     setRefreshError(null);
     try {
@@ -294,6 +283,25 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
     setRefreshError(null);
     setDirection('forward');
     setTransitionStep((step) => step + 1);
+  }
+  async function trainingConfirmed(task: ExpertTask) {
+    if (!sessionMatches()) return;
+    setRefreshRequired(true);
+    setRefreshing(true);
+    setRefreshError(null);
+    setNotice('阅读已确认，正在读取后续待办。');
+    try {
+      await readCurrentTask(task);
+      if (sessionMatches()) setNotice('已确认阅读，后续待办已更新。');
+    } catch (failure) {
+      if (sessionMatches()) {
+        setRefreshError(failure);
+        setNotice('阅读已确认，最新待办读取失败，请重试读取项目。');
+      }
+      throw failure;
+    } finally {
+      if (sessionMatches()) setRefreshing(false);
+    }
   }
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -317,6 +325,12 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
               onClick={() => {
                 if (
                   !window.dispatchEvent(new Event(EXPERT_EXAM_LEAVE_REQUEST, { cancelable: true }))
+                )
+                  return;
+                if (
+                  !window.dispatchEvent(
+                    new Event(EXPERT_TRAINING_LEAVE_REQUEST, { cancelable: true }),
+                  )
                 )
                   return;
                 setSelected(null);
@@ -403,6 +417,15 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
                 user={user}
                 task={selected}
                 onChanged={() => refreshCurrentTask(selected)}
+              />
+            )}
+          {selected.acceptanceStatus === 'ACCEPTED' &&
+            selected.branchNodeCode === 'STANDARD_TRAINING' && (
+              <ExpertTrainingPanel
+                key={`${selected.sourceBizType}:${selected.sourceBizId}`}
+                user={user}
+                task={selected}
+                onConfirmed={() => trainingConfirmed(selected)}
               />
             )}
           {detail.isError && (

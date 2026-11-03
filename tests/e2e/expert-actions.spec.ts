@@ -42,11 +42,7 @@ test('专家未知响应关闭弹窗仍锁定来源，已成功但回读失败�
     const reply = (data: unknown, status = 200) =>
       route.fulfill({
         status,
-        json: {
-          code: status,
-          message: status === 200 ? '操作成功' : '待办读取暂不可用',
-          data,
-        },
+        json: { code: status, message: status === 200 ? '操作成功' : '待办读取暂不可用', data },
       });
     if (path === '/api/v1/users/me') return reply(user);
     if (path === '/api/v1/expert-assignments/detail') return reply(assignmentDetailExample);
@@ -56,11 +52,7 @@ test('专家未知响应关闭弹窗仍锁定来源，已成功但回读失败�
             ...expertTaskExample,
             acceptanceStatus: 'ACCEPTED',
             branchNodeCode: 'STANDARD_TRAINING',
-            operations: {
-              canAccept: false,
-              canReject: false,
-              canReportOutput: false,
-            },
+            operations: { canAccept: false, canReject: false, canReportOutput: false },
           }
         : expertTaskExample;
       return reply(state.readStatus === 200 ? [task] : null, state.readStatus);
@@ -137,10 +129,7 @@ for (const remains of [true, false]) {
     await page.route('**/api/v1/**', async (route) => {
       const path = new URL(route.request().url()).pathname;
       const reply = (data: unknown, status = 200) =>
-        route.fulfill({
-          status,
-          json: { code: status, message: '操作成功', data },
-        });
+        route.fulfill({ status, json: { code: status, message: '操作成功', data } });
       if (path === '/api/v1/users/me') return reply(user);
       if (path === '/api/v1/expert-assignments/detail') return reply(assignmentDetailExample);
       if (path === '/api/v1/expert-assignments/my-tasks') {
@@ -149,17 +138,10 @@ for (const remains of [true, false]) {
         readsAfterWrite.push(input);
         const next = {
           ...expertTaskExample,
-          basicInfo: {
-            ...expertTaskExample.basicInfo,
-            projectName: '当前卡片下一待办',
-          },
+          basicInfo: { ...expertTaskExample.basicInfo, projectName: '当前卡片下一待办' },
           acceptanceStatus: 'ACCEPTED',
           branchNodeCode: 'STANDARD_TRAINING',
-          operations: {
-            canAccept: false,
-            canReject: false,
-            canReportOutput: false,
-          },
+          operations: { canAccept: false, canReject: false, canReportOutput: false },
         };
         const otherSource = {
           ...next,
@@ -203,6 +185,7 @@ for (const remains of [true, false]) {
           .getByRole('article', { name: '当前项目待办', exact: true })
           .getByText('标准与培训', { exact: true }),
       ).toBeVisible();
+      await expect(page.getByRole('button', { name: '查看标准与培训', exact: true })).toBeVisible();
       await expect(page.getByText('同项目另一个来源', { exact: true })).toHaveCount(0);
       await expect(page.getByRole('button', { name: '接单', exact: true })).toHaveCount(0);
     } else {
