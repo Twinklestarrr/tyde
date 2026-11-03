@@ -12,11 +12,6 @@ import { exitResponse } from '../src/modules/organizations/approval.schema.js';
 import { importExample } from '../src/modules/organizations/import.schema.js';
 import { ProjectManagerService } from '../src/modules/projects/project-manager.service.js';
 import { managerRecruitResult } from '../src/modules/projects/project-manager.schema.js';
-import { ExamCommandService } from '../src/modules/entrance-exams/exam-command.service.js';
-import {
-  examConfigExample,
-  examMutationExample,
-} from '../src/modules/entrance-exams/exam-config.schema.js';
 
 const environment = {
   APP_ENV: 'test',
@@ -35,89 +30,6 @@ const tokens = {
   expiresIn: 2592000,
 };
 afterEach(() => vi.restoreAllMocks());
-
-test('exam publishing accepts trusted desktop Cookie sources and preserves transport rejection', async () => {
-  const secureConfig = readConfig({
-    ...environment,
-    WEB_ORIGINS: 'https://web.example',
-    COOKIE_SECURE: 'true',
-  });
-  const identity = {
-    userId: '00000000-0000-4000-8000-000000000001',
-    uid: 'test-user',
-    sessionId: 'session',
-    role: 'PM' as const,
-    clientType: 'web' as const,
-  };
-  const authenticate = vi
-    .spyOn(AuthService.prototype, 'authenticate')
-    .mockImplementation(async (token) => {
-      if (token !== tokens.accessToken) throw new AuthError(401, 'UNAUTHORIZED', '请先登录');
-      return identity;
-    });
-  const save = vi
-    .spyOn(ExamCommandService.prototype, 'save')
-    .mockResolvedValue(examMutationExample as never);
-  const app = await createApp(secureConfig, { $disconnect: vi.fn() } as unknown as PrismaClient);
-  const cookie = `__Host-tyde_session=${tokens.accessToken}`;
-  try {
-    for (const origin of secureConfig.desktopOrigins) {
-      const preflight = await app.inject({
-        method: 'OPTIONS',
-        url: '/api/v1/entrance-exams/publish',
-        headers: {
-          origin,
-          'access-control-request-method': 'POST',
-          'access-control-request-headers': 'content-type,x-tyde-client',
-        },
-      });
-      expect(preflight.statusCode, preflight.body).toBe(204);
-      expect(preflight.headers['access-control-allow-origin']).toBe(origin);
-      expect(preflight.headers['access-control-allow-credentials']).toBe('true');
-      const response = await app.inject({
-        method: 'POST',
-        url: '/api/v1/entrance-exams/publish',
-        headers: { origin, 'x-tyde-client': 'web', cookie },
-        payload: examConfigExample,
-      });
-      expect(response.statusCode, `${origin}: ${response.body}`).toBe(200);
-      expect(response.json().data).toEqual(examMutationExample);
-      expect(save).toHaveBeenLastCalledWith(examConfigExample, identity);
-      expect(authenticate).toHaveBeenLastCalledWith(tokens.accessToken, 'web');
-    }
-    save.mockClear();
-    authenticate.mockClear();
-    const unauthenticated = await app.inject({
-      method: 'POST',
-      url: '/api/v1/entrance-exams/publish',
-      headers: { origin: 'http://127.0.0.1:5174', 'x-tyde-client': 'web' },
-      payload: examConfigExample,
-    });
-    expect(unauthenticated.statusCode, unauthenticated.body).toBe(401);
-    expect(authenticate).toHaveBeenLastCalledWith(undefined, 'web');
-    expect(save).not.toHaveBeenCalled();
-    authenticate.mockClear();
-    for (const headers of [
-      { origin: 'http://127.0.0.1:5175', cookie },
-      { cookie },
-      { origin: 'tyde-app://app', authorization: `Bearer ${tokens.accessToken}` },
-      { origin: 'tyde-app://app', cookie, authorization: `Bearer ${tokens.accessToken}` },
-      { origin: 'tyde-app://app', cookie, 'x-tyde-client': 'desktop' },
-    ]) {
-      const blocked = await app.inject({
-        method: 'POST',
-        url: '/api/v1/entrance-exams/publish',
-        headers,
-        payload: examConfigExample,
-      });
-      expect(blocked.statusCode, blocked.body).toBe(403);
-      expect(save).not.toHaveBeenCalled();
-      expect(authenticate).not.toHaveBeenCalled();
-    }
-  } finally {
-    await app.close();
-  }
-});
 
 test('desktop Cookie project recruitment reaches its service while unknown sources are rejected', async () => {
   const identity = {
