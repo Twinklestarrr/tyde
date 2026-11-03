@@ -19,10 +19,10 @@ export function FormSection({
   return (
     <section className="mb-[12px]">
       <div className="mb-[8px] flex items-center gap-[9px]">
-        <span className="grid h-[21px] w-[21px] place-items-center rounded-full bg-[#dff4f7] text-[12px] leading-none text-[#149cb3]">
+        <span className="grid h-[21px] w-[21px] place-items-center rounded-full bg-accent text-[12px] leading-none text-[var(--color-primary-strong)]">
           {number}
         </span>
-        <b className="text-[12px] text-[#294554]">{title}</b>
+        <b className="text-[12px] text-foreground">{title}</b>
         <i className="ml-[7px] h-px flex-1 bg-[var(--color-divider)]" />
       </div>
       <div className="grid grid-cols-2 gap-[12px] max-[360px]:grid-cols-1">{children}</div>
@@ -62,7 +62,7 @@ export function ConfirmPasswordField({
           </span>
           {validationStatus && (
             <span
-              className={`grid h-[16px] w-[16px] place-items-center rounded-full text-[12px] leading-none font-[750] text-white ${validationStatus === 'match' ? 'bg-[#52c41a]' : 'bg-[#ff4d4f]'}`}
+              className={`grid h-[16px] w-[16px] place-items-center rounded-full text-[12px] leading-none font-semibold text-white ${validationStatus === 'match' ? 'bg-[var(--color-success)]' : 'bg-destructive'}`}
               role="status"
               aria-label={validationStatus === 'match' ? '两次密码一致' : '两次密码不一致'}
             >

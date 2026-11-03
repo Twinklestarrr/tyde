@@ -11,6 +11,8 @@ import {
 } from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import { EmptyState, LoadingState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
@@ -186,260 +188,257 @@ function ApprovalPanel({ orgId, user, position, onSessionChanged }: Organization
   }
 
   return (
-    <section
-      aria-label="组织审批"
-      className="min-w-0 space-y-[20px] rounded-[12px] border bg-card p-[16px] text-[13px] sm:p-[20px]"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-[12px] border-b pb-[16px]">
-        <div>
-          <h2 className="m-0 text-[16px] font-semibold">组织退出审批</h2>
-          <p className="mt-[4px] text-[13px] text-[var(--color-neutral-strong)]">
-            当前展示退出组织的待办与处理记录。
-          </p>
-        </div>
-        <Button
-          size="formCompactMobileTouch"
-          variant="outline"
-          disabled={active.isFetching || busy || Boolean(rangeError)}
-          onClick={() => void active.refetch()}
-        >
-          <RefreshCw className="size-[14px]" aria-hidden />
-          刷新审批列表
-        </Button>
-      </div>
-      <SegmentedControl
-        variant="soft"
-        className="w-fit"
-        name="organization-approval-view"
-        ariaLabel="组织审批视图"
-        value={view}
-        options={[
-          { value: 'pending', label: '待审批' },
-          { value: 'history', label: '审批记录' },
-        ]}
-        onValueChange={(value) => {
-          setView(value);
-          setCurrent(1);
-        }}
-        disabled={busy}
-      />
-      {view === 'history' && (
-        <div className="grid gap-[12px] rounded-[8px] bg-[var(--color-surface-muted)] p-[12px] sm:grid-cols-3 lg:max-w-[760px]">
-          <FormField controlId="organization-approval-status" label="处理状态">
-            <select
-              id="organization-approval-status"
-              className={orgControlClass}
-              value={status}
-              disabled={busy}
-              onChange={(event) => {
-                const value = historyStatuses.find((item) => item === event.target.value) ?? '';
-                setStatus(value);
-                setCurrent(1);
-              }}
-            >
-              <option value="">全部状态</option>
-              {historyStatuses.map((value) => (
-                <option key={value} value={value}>
-                  {nodeLabels[value]}
-                </option>
-              ))}
-            </select>
-          </FormField>
-          <FormField
-            controlId="organization-approval-start"
-            label="处理开始日期"
-            error={rangeError}
-          >
-            {({ invalid, describedBy }) => (
-              <Input
-                size="profile"
-                id="organization-approval-start"
-                type="date"
-                value={startDate}
-                aria-invalid={invalid || undefined}
-                aria-describedby={describedBy}
-                disabled={busy}
-                onChange={(event) => {
-                  setStartDate(event.target.value);
-                  setCurrent(1);
-                }}
-              />
-            )}
-          </FormField>
-          <FormField controlId="organization-approval-end" label="处理结束日期">
-            <Input
-              size="profile"
-              id="organization-approval-end"
-              type="date"
-              value={endDate}
-              disabled={busy}
-              onChange={(event) => {
-                setEndDate(event.target.value);
-                setCurrent(1);
-              }}
-            />
-          </FormField>
-        </div>
-      )}
-      {notice && (
-        <p role="status" className="rounded-[8px] bg-[var(--color-primary-soft)] p-[12px]">
-          {notice}
-        </p>
-      )}
-      {error != null && <ErrorNotice error={error} />}
-      {active.isError && <ErrorNotice error={active.error} />}
-      {rangeError ? null : active.isPending ? (
-        <p role="status">正在读取审批列表…</p>
-      ) : active.isError ? null : (
-        <>
-          {active.data?.records.length === 0 && (
-            <div className="flex min-h-[220px] flex-col items-center justify-center gap-[10px] py-[32px] text-center">
-              <span className="grid size-[44px] place-items-center rounded-full bg-[var(--color-surface-muted)] text-[var(--color-neutral-strong)]">
-                <ClipboardCheck className="size-[22px]" aria-hidden />
-              </span>
-              <p className="font-medium">
-                {view === 'pending' ? '暂无待审批事项' : '暂无审批记录'}
-              </p>
-              <p className="text-[13px] text-[var(--color-neutral-strong)]">
-                {view === 'pending'
-                  ? '新的组织退出申请会显示在这里。'
-                  : '处理后的组织退出申请会显示在这里。'}
-              </p>
-            </div>
-          )}
-          <div className="space-y-[12px]">
-            {view === 'pending'
-              ? pending.data?.records.map((record) => (
-                  <article
-                    key={`${record.flowNo}:${record.nodeId}`}
-                    className="space-y-[16px] rounded-[10px] border p-[16px]"
-                  >
-                    <div className="flex items-start justify-between gap-[12px]">
-                      <h3 className="min-w-0 break-words text-[14px] font-semibold">
-                        {record.title}
-                      </h3>
-                      <ApprovalStatus status="PENDING" />
-                    </div>
-                    <ApprovalDetails record={record} />
-                    <div className="flex flex-wrap items-center justify-between gap-[12px] border-t pt-[12px]">
-                      <p className="text-[13px] text-[var(--color-neutral-strong)]">
-                        审批节点：{record.nodeName} · 待审批
-                      </p>
-                      {position === 'OWNER' && (
-                        <div className="ml-auto flex flex-wrap gap-[8px]">
-                          <Button
-                            size="formCompactMobileTouch"
-                            disabled={busy}
-                            onClick={() => openApproval(record, 'APPROVE')}
-                          >
-                            同意通过
-                          </Button>
-                          <Button
-                            size="formCompactMobileTouch"
-                            variant="destructiveOutline"
-                            disabled={busy}
-                            onClick={() => openApproval(record, 'REJECT')}
-                          >
-                            驳回请求
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </article>
-                ))
-              : history.data?.records.map((record) => (
-                  <article
-                    key={`${record.flowNo}:${record.nodeId}`}
-                    className="space-y-[16px] rounded-[10px] border p-[16px]"
-                  >
-                    <div className="flex items-start justify-between gap-[12px]">
-                      <h3 className="min-w-0 break-words text-[14px] font-semibold">
-                        {record.title}
-                      </h3>
-                      <ApprovalStatus status={record.nodeStatus} />
-                    </div>
-                    <ApprovalDetails record={record} />
-                    <div className="space-y-[10px] border-t pt-[12px]">
-                      <div className="flex flex-wrap gap-x-[24px] gap-y-[6px] text-[13px] text-[var(--color-neutral-strong)]">
-                        <p>审批人：{record.operatorName || '—'}</p>
-                        <p>审批时间：{organizationTime(record.actionAt)}</p>
-                      </div>
-                      {record.actionComment && (
-                        <p className="whitespace-pre-wrap break-words text-[13px] leading-[22px]">
-                          <span className="text-[var(--color-neutral-strong)]">审批意见：</span>
-                          {record.actionComment}
-                        </p>
-                      )}
-                    </div>
-                  </article>
-                ))}
+    <Card asChild>
+      <section aria-label="组织审批" className="text-[13px]">
+        <CardHeader className="flex-row flex-wrap items-center justify-between">
+          <div>
+            <CardTitle>组织退出审批</CardTitle>
+            <CardDescription className="mt-[4px]">
+              当前展示退出组织的待办与处理记录。
+            </CardDescription>
           </div>
-          {active.data && (
-            <OrganizationPagination
-              current={active.data.current}
-              size={active.data.size}
-              total={active.data.total}
-              loading={active.isFetching || busy}
-              onPageChange={setCurrent}
-            />
-          )}
-        </>
-      )}
-      {selection && (
-        <OrganizationDialog
-          title={selection.action === 'APPROVE' ? '确认通过退出申请' : '驳回退出申请'}
-          busy={busy}
-          onClose={() => setSelection(null)}
-        >
-          <form className="space-y-[16px]" onSubmit={(event) => void submitApproval(event)}>
-            <p>申请人：{selection.record.applicantName || '—'}</p>
-            <p className="whitespace-pre-wrap break-words">
-              申请原因：{selection.record.applyReason || '—'}
-            </p>
-            <FormField
-              controlId="organization-approval-comment"
-              label="审批意见"
-              required={selection.action === 'REJECT'}
-              error={commentError}
-            >
-              {({ invalid, describedBy }) => (
-                <Textarea
-                  id="organization-approval-comment"
-                  value={comment}
-                  maxLength={1000}
+          <Button
+            size="formCompactMobileTouch"
+            variant="outline"
+            disabled={active.isFetching || busy || Boolean(rangeError)}
+            onClick={() => void active.refetch()}
+          >
+            <RefreshCw className="size-[14px]" aria-hidden />
+            刷新审批列表
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-[20px]">
+          <SegmentedControl
+            variant="soft"
+            className="w-fit"
+            name="organization-approval-view"
+            ariaLabel="组织审批视图"
+            value={view}
+            options={[
+              { value: 'pending', label: '待审批' },
+              { value: 'history', label: '审批记录' },
+            ]}
+            onValueChange={(value) => {
+              setView(value);
+              setCurrent(1);
+            }}
+            disabled={busy}
+          />
+          {view === 'history' && (
+            <div className="grid gap-[12px] rounded-[8px] bg-[var(--color-surface-muted)] p-[12px] sm:grid-cols-3 lg:max-w-[760px]">
+              <FormField controlId="organization-approval-status" label="处理状态">
+                <select
+                  id="organization-approval-status"
+                  className={orgControlClass}
+                  value={status}
                   disabled={busy}
-                  aria-invalid={invalid || undefined}
-                  aria-describedby={describedBy}
                   onChange={(event) => {
-                    setComment(event.target.value);
-                    setCommentError('');
+                    const value = historyStatuses.find((item) => item === event.target.value) ?? '';
+                    setStatus(value);
+                    setCurrent(1);
+                  }}
+                >
+                  <option value="">全部状态</option>
+                  {historyStatuses.map((value) => (
+                    <option key={value} value={value}>
+                      {nodeLabels[value]}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField
+                controlId="organization-approval-start"
+                label="处理开始日期"
+                error={rangeError}
+              >
+                {({ invalid, describedBy }) => (
+                  <Input
+                    size="profile"
+                    id="organization-approval-start"
+                    type="date"
+                    value={startDate}
+                    aria-invalid={invalid || undefined}
+                    aria-describedby={describedBy}
+                    disabled={busy}
+                    onChange={(event) => {
+                      setStartDate(event.target.value);
+                      setCurrent(1);
+                    }}
+                  />
+                )}
+              </FormField>
+              <FormField controlId="organization-approval-end" label="处理结束日期">
+                <Input
+                  size="profile"
+                  id="organization-approval-end"
+                  type="date"
+                  value={endDate}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setEndDate(event.target.value);
+                    setCurrent(1);
                   }}
                 />
-              )}
-            </FormField>
-            {error != null && <ErrorNotice error={error} />}
-            <div className="flex justify-end gap-[8px]">
-              <Button
-                variant="ghost"
-                size="mobileTouch"
-                disabled={busy}
-                onClick={() => setSelection(null)}
-              >
-                取消
-              </Button>
-              <Button
-                type="submit"
-                size="mobileTouch"
-                variant={selection.action === 'APPROVE' ? 'default' : 'destructive'}
-                loading={busy}
-              >
-                确认{selection.action === 'APPROVE' ? '通过' : '驳回'}
-              </Button>
+              </FormField>
             </div>
-          </form>
-        </OrganizationDialog>
-      )}
-    </section>
+          )}
+          {notice && (
+            <p role="status" className="rounded-[8px] bg-[var(--color-primary-soft)] p-[12px]">
+              {notice}
+            </p>
+          )}
+          {error != null && <ErrorNotice error={error} />}
+          {active.isError && <ErrorNotice error={active.error} />}
+          {rangeError ? null : active.isPending ? (
+            <LoadingState>正在读取审批列表…</LoadingState>
+          ) : active.isError ? null : (
+            <>
+              {active.data?.records.length === 0 && (
+                <EmptyState
+                  icon={<ClipboardCheck className="size-[22px]" aria-hidden />}
+                  title={view === 'pending' ? '暂无待审批事项' : '暂无审批记录'}
+                  description={
+                    view === 'pending'
+                      ? '新的组织退出申请会显示在这里。'
+                      : '处理后的组织退出申请会显示在这里。'
+                  }
+                />
+              )}
+              <div className="space-y-[12px]">
+                {view === 'pending'
+                  ? pending.data?.records.map((record) => (
+                      <Card asChild key={`${record.flowNo}:${record.nodeId}`}>
+                        <article className="space-y-[16px] p-[20px]">
+                          <div className="flex items-start justify-between gap-[12px]">
+                            <h3 className="min-w-0 break-words text-[14px] font-semibold">
+                              {record.title}
+                            </h3>
+                            <ApprovalStatus status="PENDING" />
+                          </div>
+                          <ApprovalDetails record={record} />
+                          <div className="flex flex-wrap items-center justify-between gap-[12px] border-t pt-[12px]">
+                            <p className="text-[13px] text-[var(--color-neutral-strong)]">
+                              审批节点：{record.nodeName} · 待审批
+                            </p>
+                            {position === 'OWNER' && (
+                              <div className="ml-auto flex flex-wrap gap-[8px]">
+                                <Button
+                                  size="formCompactMobileTouch"
+                                  disabled={busy}
+                                  onClick={() => openApproval(record, 'APPROVE')}
+                                >
+                                  同意通过
+                                </Button>
+                                <Button
+                                  size="formCompactMobileTouch"
+                                  variant="destructiveOutline"
+                                  disabled={busy}
+                                  onClick={() => openApproval(record, 'REJECT')}
+                                >
+                                  驳回请求
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        </article>
+                      </Card>
+                    ))
+                  : history.data?.records.map((record) => (
+                      <Card asChild key={`${record.flowNo}:${record.nodeId}`}>
+                        <article className="space-y-[16px] p-[20px]">
+                          <div className="flex items-start justify-between gap-[12px]">
+                            <h3 className="min-w-0 break-words text-[14px] font-semibold">
+                              {record.title}
+                            </h3>
+                            <ApprovalStatus status={record.nodeStatus} />
+                          </div>
+                          <ApprovalDetails record={record} />
+                          <div className="space-y-[10px] border-t pt-[12px]">
+                            <div className="flex flex-wrap gap-x-[24px] gap-y-[6px] text-[13px] text-[var(--color-neutral-strong)]">
+                              <p>审批人：{record.operatorName || '—'}</p>
+                              <p>审批时间：{organizationTime(record.actionAt)}</p>
+                            </div>
+                            {record.actionComment && (
+                              <p className="whitespace-pre-wrap break-words text-[13px] leading-[22px]">
+                                <span className="text-[var(--color-neutral-strong)]">
+                                  审批意见：
+                                </span>
+                                {record.actionComment}
+                              </p>
+                            )}
+                          </div>
+                        </article>
+                      </Card>
+                    ))}
+              </div>
+              {active.data && (
+                <OrganizationPagination
+                  current={active.data.current}
+                  size={active.data.size}
+                  total={active.data.total}
+                  loading={active.isFetching || busy}
+                  onPageChange={setCurrent}
+                />
+              )}
+            </>
+          )}
+          {selection && (
+            <OrganizationDialog
+              title={selection.action === 'APPROVE' ? '确认通过退出申请' : '驳回退出申请'}
+              busy={busy}
+              onClose={() => setSelection(null)}
+            >
+              <form className="space-y-[16px]" onSubmit={(event) => void submitApproval(event)}>
+                <p>申请人：{selection.record.applicantName || '—'}</p>
+                <p className="whitespace-pre-wrap break-words">
+                  申请原因：{selection.record.applyReason || '—'}
+                </p>
+                <FormField
+                  controlId="organization-approval-comment"
+                  label="审批意见"
+                  required={selection.action === 'REJECT'}
+                  error={commentError}
+                >
+                  {({ invalid, describedBy }) => (
+                    <Textarea
+                      id="organization-approval-comment"
+                      value={comment}
+                      maxLength={1000}
+                      disabled={busy}
+                      aria-invalid={invalid || undefined}
+                      aria-describedby={describedBy}
+                      onChange={(event) => {
+                        setComment(event.target.value);
+                        setCommentError('');
+                      }}
+                    />
+                  )}
+                </FormField>
+                {error != null && <ErrorNotice error={error} />}
+                <div className="flex justify-end gap-[8px]">
+                  <Button
+                    variant="ghost"
+                    size="mobileTouch"
+                    disabled={busy}
+                    onClick={() => setSelection(null)}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="mobileTouch"
+                    variant={selection.action === 'APPROVE' ? 'default' : 'destructive'}
+                    loading={busy}
+                  >
+                    确认{selection.action === 'APPROVE' ? '通过' : '驳回'}
+                  </Button>
+                </div>
+              </form>
+            </OrganizationDialog>
+          )}
+        </CardContent>
+      </section>
+    </Card>
   );
 }
 

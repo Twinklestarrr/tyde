@@ -2,6 +2,14 @@ import { useId, useState, type ClipboardEvent } from 'react';
 import type { OrganizationImportRowError } from '@tyde/shared';
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -147,7 +155,7 @@ export function OrganizationImportTable({
         tabIndex={0}
         className="max-h-[320px] overflow-auto rounded-[10px] border border-border focus-visible:outline-2 focus-visible:outline-ring"
       >
-        <table className="w-full min-w-[790px] table-fixed border-collapse text-left text-[13px]">
+        <Table className="min-w-[790px] table-fixed">
           <colgroup>
             <col className="w-[40px]" />
             <col className="w-[140px]" />
@@ -157,38 +165,45 @@ export function OrganizationImportTable({
             <col className="w-[136px]" />
             <col className="w-[44px]" />
           </colgroup>
-          <thead className="sticky top-0 z-10 bg-[var(--color-surface-muted)] text-muted-foreground">
-            <tr>
-              <th scope="col" className="p-[10px] text-center font-medium">
+          <TableHeader className="sticky top-0 z-10 bg-[var(--color-surface-muted)] text-muted-foreground">
+            <TableRow>
+              <TableHead scope="col" className="p-[10px] text-center font-medium">
                 #
-              </th>
+              </TableHead>
               {columns.map((column, index) => (
-                <th scope="col" key={column.field} className="px-[12px] py-[10px] font-medium">
+                <TableHead
+                  scope="col"
+                  key={column.field}
+                  className="px-[12px] py-[10px] font-medium"
+                >
                   {column.label}
                   {index < 3 && <span className="ml-[4px] text-destructive">*</span>}
-                </th>
+                </TableHead>
               ))}
-              <th scope="col">
+              <TableHead scope="col">
                 <span className="sr-only">操作</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((row, rowIndex) => {
               const errors = rowNumbers[rowIndex]
                 ? rowErrors.filter((error) => error.rowNo === rowNumbers[rowIndex])
                 : [];
               return (
-                <tr
+                <TableRow
                   key={rowIndex}
                   className={cn(
                     'border-t border-border',
                     errors.length > 0 && 'bg-[var(--color-danger-soft)]',
                   )}
                 >
-                  <th scope="row" className="text-center font-normal text-muted-foreground">
+                  <TableHead
+                    scope="row"
+                    className="p-0 text-center font-normal text-muted-foreground"
+                  >
                     {rowIndex + 1}
-                  </th>
+                  </TableHead>
                   {columns.map((column, columnIndex) => {
                     const messages = errors.filter((error) => error.field === column.field);
                     const errorId = `${id}-${rowIndex}-${column.field}-error`;
@@ -199,7 +214,10 @@ export function OrganizationImportTable({
                       'aria-describedby': messages.length ? errorId : undefined,
                     };
                     return (
-                      <td key={column.field} className="border-l border-border align-top">
+                      <TableCell
+                        key={column.field}
+                        className="border-l border-border p-0 align-top"
+                      >
                         {columnIndex === 2 || columnIndex === 3 ? (
                           <Select
                             value={row[columnIndex] || (columnIndex === 3 ? '成员' : '')}
@@ -251,10 +269,10 @@ export function OrganizationImportTable({
                             {messages.map((message) => message.message).join('；')}
                           </p>
                         )}
-                      </td>
+                      </TableCell>
                     );
                   })}
-                  <td className="border-l border-border text-center align-top">
+                  <TableCell className="border-l border-border p-0 text-center align-top">
                     <Button
                       variant="ghost"
                       size="iconMobileTouch"
@@ -270,12 +288,12 @@ export function OrganizationImportTable({
                     >
                       <Trash2 className="size-[15px]" aria-hidden />
                     </Button>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
       <Button
         variant="primaryGhost"

@@ -25,11 +25,11 @@ export default function RegisterFormPanel({ controller }: { controller: Register
         <AccountFields controller={controller} inputNameSuffix={inputNameSuffix} />
         <IdentityFields controller={controller} inputNameSuffix={inputNameSuffix} />
       </fieldset>
-      <div className="flex-none border-t border-[#eef2f4] bg-white pt-[16px] max-[900px]:mt-[16px] max-[900px]:border-t-0 max-[900px]:pt-0">
+      <div className="flex-none border-t bg-card pt-[16px] max-[900px]:mt-[16px] max-[900px]:border-t-0 max-[900px]:pt-0">
         <Button
           type="submit"
           size="authSubmit"
-          className={`${submitButtonClassName} !bg-[#202020] ![font-family:inherit] !shadow-none hover:!bg-[#080808]`}
+          className={submitButtonClassName}
           disabled={registering}
         >
           {registering ? '注册中...' : '提交'}

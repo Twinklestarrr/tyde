@@ -12,6 +12,16 @@ import {
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import { EmptyState, LoadingState } from '@/components/ui/empty-state';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
@@ -38,11 +48,11 @@ const emptyFilters = {
   leftEndDate: '',
   projectId: '',
 };
-const shanghaiTime = (value: string | null) => {
+const shanghaiDate = (value: string | null) => {
   if (!value) return '';
   const date = new Date(value);
   return Number.isFinite(date.getTime())
-    ? new Date(date.getTime() + 8 * 3_600_000).toISOString().slice(0, 19)
+    ? new Date(date.getTime() + 8 * 3_600_000).toISOString().slice(0, 10)
     : '';
 };
 const displayName = (member: OrganizationMember) =>
@@ -141,387 +151,376 @@ function OrganizationMembersPanel({
   }
 
   return (
-    <section
-      className="min-w-0 overflow-hidden rounded-[10px] border bg-card text-[13px]"
-      aria-labelledby="organization-members-title"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-[12px] px-[20px] pt-[20px] pb-[16px] max-[640px]:px-[16px]">
-        <div className="flex flex-wrap items-center gap-[10px]">
-          <h2 id="organization-members-title" className="m-0 text-[15px] font-semibold">
-            组织人员
-          </h2>
-          {members.data && (
-            <span className="rounded-[5px] bg-muted px-[7px] py-[2px] text-[12px] tabular-nums text-[var(--color-neutral-strong)]">
-              {members.data.total} 人
-            </span>
-          )}
-          <span className="text-[12px] text-[var(--color-neutral-strong)]">时间均为上海时间</span>
-        </div>
-        <Button
-          variant="ghost"
-          size="formCompactMobileTouch"
-          loading={members.isFetching}
-          onClick={() => void members.refetch()}
-        >
-          {!members.isFetching && <RotateCw className="size-[14px]" aria-hidden />}
-          刷新人员
-        </Button>
-      </div>
-      <form onSubmit={search} className="px-[20px] pb-[16px] max-[640px]:px-[16px]">
-        <div className="grid grid-cols-2 items-center gap-[8px] min-[641px]:flex min-[641px]:flex-wrap">
-          <div className="relative col-span-2 min-w-0 min-[641px]:min-w-[220px] min-[641px]:flex-1">
-            <label htmlFor="org-member-keyword" className="sr-only">
-              姓名 / UID / 完整手机号
-            </label>
-            <Search
-              className="pointer-events-none absolute top-1/2 left-[12px] size-[15px] -translate-y-1/2 text-[var(--color-neutral-strong)]"
-              aria-hidden
-            />
-            <Input
-              size="profile"
-              id="org-member-keyword"
-              className="rounded-[8px] bg-card pl-[36px] shadow-none"
-              placeholder="搜索真实姓名 / UID / 完整手机号"
-              value={filters.keyword}
-              maxLength={100}
-              onChange={(event) => setFilter('keyword', event.target.value)}
-            />
+    <Card asChild>
+      <section className="overflow-hidden text-[13px]" aria-labelledby="organization-members-title">
+        <CardHeader className="flex-row flex-wrap items-center justify-between">
+          <div className="flex flex-wrap items-center gap-[10px]">
+            <CardTitle id="organization-members-title">组织人员</CardTitle>
+            {members.data && (
+              <span className="rounded-[5px] bg-muted px-[7px] py-[2px] text-[12px] tabular-nums text-[var(--color-neutral-strong)]">
+                {members.data.total} 人
+              </span>
+            )}
+            <span className="text-[12px] text-[var(--color-neutral-strong)]">时间均为上海时间</span>
           </div>
-          {(
-            [
-              ['position', '组织角色', '全部角色', positionLabels],
-              ['joinStatus', '成员状态', '全部状态', joinStatusLabels],
-            ] as const
-          ).map(([key, label, placeholder, options]) => (
-            <div key={key} className="min-w-0 min-[641px]:w-[140px]">
-              <label htmlFor={`org-member-${key}`} className="sr-only">
-                {label}
-              </label>
-              <select
-                id={`org-member-${key}`}
-                className={orgControlClass}
-                value={filters[key]}
-                onChange={(event) => setFilter(key, event.target.value)}
-              >
-                <option value="">{placeholder}</option>
-                {Object.entries(options).map(([value, text]) => (
-                  <option key={value} value={value}>
-                    {text}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ))}
-          <Button type="submit" size="settings">
-            查询
-          </Button>
           <Button
-            variant={moreFiltersOpen ? 'soft' : 'outline'}
-            size="settings"
-            aria-expanded={moreFiltersOpen}
-            aria-controls="org-member-more-filters"
-            onClick={() => setMoreFiltersOpen((open) => !open)}
+            variant="ghost"
+            size="formCompactMobileTouch"
+            loading={members.isFetching}
+            onClick={() => void members.refetch()}
           >
-            <SlidersHorizontal className="size-[14px] shrink-0" aria-hidden />
-            更多筛选
-            <ChevronDown
-              className={`size-[14px] shrink-0 transition-transform ${moreFiltersOpen ? 'rotate-180' : ''}`}
-              aria-hidden
-            />
+            {!members.isFetching && <RotateCw className="size-[14px]" aria-hidden />}
+            刷新人员
           </Button>
-        </div>
-        {moreFiltersOpen && (
-          <div
-            id="org-member-more-filters"
-            className="mt-[12px] grid min-w-0 grid-cols-1 gap-[12px] rounded-[8px] border bg-muted/30 p-[16px] min-[540px]:grid-cols-2 min-[960px]:grid-cols-3"
-          >
-            <FormField controlId="org-member-employmentType" label="人员属性">
-              <select
-                id="org-member-employmentType"
-                className={orgControlClass}
-                value={filters.employmentType}
-                onChange={(event) => setFilter('employmentType', event.target.value)}
-              >
-                <option value="">全部属性</option>
-                {Object.entries(employmentLabels).map(([value, text]) => (
-                  <option key={value} value={value}>
-                    {text}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-            {(
-              [
-                ['joinedStartDate', '入组日期起'],
-                ['joinedEndDate', '入组日期止'],
-                ['leftStartDate', '离组日期起'],
-                ['leftEndDate', '离组日期止'],
-              ] as const
-            ).map(([key, label]) => (
-              <FormField key={key} controlId={`org-member-${key}`} label={label}>
-                <Input
-                  size="profile"
-                  type="date"
-                  id={`org-member-${key}`}
-                  className="rounded-[8px] bg-card shadow-none"
-                  value={filters[key]}
-                  onChange={(event) => setFilter(key, event.target.value)}
-                />
-              </FormField>
-            ))}
-            <FormField
-              controlId="org-member-project"
-              label="项目 ID"
-              description="仅筛选成员，不影响在项数统计。"
-            >
+        </CardHeader>
+        <form onSubmit={search} className="p-[20px]">
+          <div className="grid grid-cols-2 items-center gap-[8px] min-[641px]:flex min-[641px]:flex-wrap">
+            <div className="relative col-span-2 min-w-0 min-[641px]:min-w-[220px] min-[641px]:flex-1">
+              <label htmlFor="org-member-keyword" className="sr-only">
+                姓名 / UID / 完整手机号
+              </label>
+              <Search
+                className="pointer-events-none absolute top-1/2 left-[12px] size-[15px] -translate-y-1/2 text-[var(--color-neutral-strong)]"
+                aria-hidden
+              />
               <Input
                 size="profile"
-                id="org-member-project"
-                className="rounded-[8px] bg-card shadow-none"
-                type="number"
-                step="1"
-                min={-2147483648}
-                max={2147483647}
-                value={filters.projectId}
-                onChange={(event) => setFilter('projectId', event.target.value)}
+                id="org-member-keyword"
+                className="rounded-[8px] bg-card pl-[36px] shadow-none"
+                placeholder="搜索真实姓名 / UID / 完整手机号"
+                value={filters.keyword}
+                maxLength={100}
+                onChange={(event) => setFilter('keyword', event.target.value)}
               />
-            </FormField>
+            </div>
+            {(
+              [
+                ['position', '组织角色', '全部角色', positionLabels],
+                ['joinStatus', '成员状态', '全部状态', joinStatusLabels],
+              ] as const
+            ).map(([key, label, placeholder, options]) => (
+              <div key={key} className="min-w-0 min-[641px]:w-[140px]">
+                <label htmlFor={`org-member-${key}`} className="sr-only">
+                  {label}
+                </label>
+                <select
+                  id={`org-member-${key}`}
+                  className={orgControlClass}
+                  value={filters[key]}
+                  onChange={(event) => setFilter(key, event.target.value)}
+                >
+                  <option value="">{placeholder}</option>
+                  {Object.entries(options).map(([value, text]) => (
+                    <option key={value} value={value}>
+                      {text}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+            <Button type="submit" size="settings">
+              查询
+            </Button>
+            <Button
+              variant={moreFiltersOpen ? 'soft' : 'outline'}
+              size="settings"
+              aria-expanded={moreFiltersOpen}
+              aria-controls="org-member-more-filters"
+              onClick={() => setMoreFiltersOpen((open) => !open)}
+            >
+              <SlidersHorizontal className="size-[14px] shrink-0" aria-hidden />
+              更多筛选
+              <ChevronDown
+                className={`size-[14px] shrink-0 transition-transform ${moreFiltersOpen ? 'rotate-180' : ''}`}
+                aria-hidden
+              />
+            </Button>
+          </div>
+          {moreFiltersOpen && (
+            <div
+              id="org-member-more-filters"
+              className="mt-[12px] grid min-w-0 grid-cols-1 gap-[12px] rounded-[8px] border bg-muted/30 p-[16px] min-[540px]:grid-cols-2 min-[960px]:grid-cols-3"
+            >
+              <FormField controlId="org-member-employmentType" label="人员属性">
+                <select
+                  id="org-member-employmentType"
+                  className={orgControlClass}
+                  value={filters.employmentType}
+                  onChange={(event) => setFilter('employmentType', event.target.value)}
+                >
+                  <option value="">全部属性</option>
+                  {Object.entries(employmentLabels).map(([value, text]) => (
+                    <option key={value} value={value}>
+                      {text}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              {(
+                [
+                  ['joinedStartDate', '入组日期起'],
+                  ['joinedEndDate', '入组日期止'],
+                  ['leftStartDate', '离组日期起'],
+                  ['leftEndDate', '离组日期止'],
+                ] as const
+              ).map(([key, label]) => (
+                <FormField key={key} controlId={`org-member-${key}`} label={label}>
+                  <Input
+                    size="profile"
+                    type="date"
+                    id={`org-member-${key}`}
+                    className="rounded-[8px] bg-card shadow-none"
+                    value={filters[key]}
+                    onChange={(event) => setFilter(key, event.target.value)}
+                  />
+                </FormField>
+              ))}
+              <FormField
+                controlId="org-member-project"
+                label="项目 ID"
+                description="仅筛选成员，不影响在项数统计。"
+              >
+                <Input
+                  size="profile"
+                  id="org-member-project"
+                  className="rounded-[8px] bg-card shadow-none"
+                  type="number"
+                  step="1"
+                  min={-2147483648}
+                  max={2147483647}
+                  value={filters.projectId}
+                  onChange={(event) => setFilter('projectId', event.target.value)}
+                />
+              </FormField>
+            </div>
+          )}
+          <div className="mt-[10px] flex min-h-[24px] flex-wrap items-center gap-[8px] text-[12px]">
+            <span className="text-[var(--color-neutral-strong)]" role="status">
+              {appliedFilterCount ? `已应用 ${appliedFilterCount} 项筛选` : '显示全部成员'}
+            </span>
+            <Button
+              variant="link"
+              size="formCompactMobileTouch"
+              onClick={() => {
+                setFilters(emptyFilters);
+                setFilterError(undefined);
+                setQuery({ orgId, current: 1, size: 20 });
+              }}
+            >
+              重置筛选
+            </Button>
+          </div>
+        </form>
+        {filterError && (
+          <div className="px-[20px] pb-[16px] max-[640px]:px-[16px]">
+            <ErrorNotice error={filterError} />
           </div>
         )}
-        <div className="mt-[10px] flex min-h-[24px] flex-wrap items-center gap-[8px] text-[12px]">
-          <span className="text-[var(--color-neutral-strong)]" role="status">
-            {appliedFilterCount ? `已应用 ${appliedFilterCount} 项筛选` : '显示全部成员'}
-          </span>
-          <Button
-            variant="link"
-            size="formCompactMobileTouch"
-            onClick={() => {
-              setFilters(emptyFilters);
-              setFilterError(undefined);
-              setQuery({ orgId, current: 1, size: 20 });
-            }}
+        {notice && (
+          <p
+            role="status"
+            className="mx-[20px] mb-[16px] rounded-[8px] bg-accent px-[12px] py-[10px] max-[640px]:mx-[16px]"
           >
-            重置筛选
-          </Button>
-        </div>
-      </form>
-      {filterError && (
-        <div className="px-[20px] pb-[16px] max-[640px]:px-[16px]">
-          <ErrorNotice error={filterError} />
-        </div>
-      )}
-      {notice && (
-        <p
-          role="status"
-          className="mx-[20px] mb-[16px] rounded-[8px] bg-accent px-[12px] py-[10px] max-[640px]:mx-[16px]"
-        >
-          {notice}
-        </p>
-      )}
-      {members.error && (
-        <div className="px-[20px] pb-[16px] max-[640px]:px-[16px]">
-          <ErrorNotice error={members.error} />
-        </div>
-      )}
-      {members.isPending && (
-        <p
-          role="status"
-          className="border-t px-[20px] py-[40px] text-center text-[var(--color-neutral-strong)]"
-        >
-          正在读取组织人员…
-        </p>
-      )}
-      {members.data && (
-        <>
-          <div
-            tabIndex={0}
-            role="region"
-            aria-label="组织人员表格，可左右滚动"
-            className="min-w-0 overflow-x-auto border-t focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
-          >
-            <table className="w-full min-w-[1040px] border-collapse text-left text-[13px]">
-              <caption className="sr-only">组织人员列表，时间均为上海时间</caption>
-              <thead className="bg-muted/60 text-foreground">
-                <tr>
-                  {[
-                    '成员',
-                    '人员属性',
-                    '组织角色',
-                    '成员状态',
-                    '入组 / 离组时间',
-                    '在项数',
-                    '操作',
-                  ].map((label) => (
-                    <th
-                      key={label}
-                      scope="col"
-                      className={`px-[16px] py-[12px] whitespace-nowrap text-[12px] font-medium ${label === '操作' ? 'border-l bg-[var(--color-surface-muted)] min-[960px]:sticky min-[960px]:right-0 min-[960px]:z-10' : ''}`}
-                    >
-                      {label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {members.data.records.map((member) => {
-                  const self = member.userId === user.id;
-                  const canEdit =
-                    canWrite && (position === 'OWNER' || member.position === 'MEMBER' || self);
-                  const canRole =
-                    canEdit && member.joinStatus === 'ACTIVE' && !(position === 'OWNER' && self);
-                  const canExit =
-                    canWrite &&
-                    member.joinStatus === 'ACTIVE' &&
-                    member.position !== 'OWNER' &&
-                    (position === 'OWNER' || member.position === 'MEMBER' || self);
-                  return (
-                    <tr key={member.memberId} className="group bg-card hover:bg-muted/30">
-                      <th
-                        scope="row"
-                        className="w-[300px] min-w-[260px] max-w-[300px] px-[16px] py-[16px] font-normal"
+            {notice}
+          </p>
+        )}
+        {members.error && (
+          <div className="px-[20px] pb-[16px] max-[640px]:px-[16px]">
+            <ErrorNotice error={members.error} />
+          </div>
+        )}
+        {members.isPending && <LoadingState className="border-t">正在读取组织人员…</LoadingState>}
+        {members.data && (
+          <>
+            <div
+              tabIndex={0}
+              role="region"
+              aria-label="组织人员表格，可左右滚动"
+              className="min-w-0 overflow-x-auto border-t focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+            >
+              <Table className="min-w-[1040px]">
+                <caption className="sr-only">组织人员列表，时间均为上海时间</caption>
+                <TableHeader>
+                  <TableRow>
+                    {[
+                      '成员',
+                      '人员属性',
+                      '组织角色',
+                      '成员状态',
+                      '入组 / 离组时间',
+                      '在项数',
+                      '操作',
+                    ].map((label) => (
+                      <TableHead
+                        key={label}
+                        scope="col"
+                        className={`${label === '操作' ? 'border-l bg-[var(--color-surface-muted)] min-[960px]:sticky min-[960px]:right-0 min-[960px]:z-10' : ''}`}
                       >
-                        <div className="flex items-center gap-[10px]">
-                          <UserAvatar
-                            url={member.avatarUrl}
-                            name={displayName(member)}
-                            className="size-[32px] text-[14px]"
-                          />
-                          <div className="min-w-0">
-                            <p className="truncate font-medium" title={displayName(member)}>
-                              {displayName(member)}
-                              {self && (
-                                <span className="ml-[6px] text-[12px] font-normal text-[var(--color-neutral-strong)]">
-                                  （我）
-                                </span>
-                              )}
-                            </p>
-                            <div className="mt-[5px] flex min-w-0 items-center gap-[8px] text-[12px] text-[var(--color-neutral-strong)]">
-                              <span className="shrink-0 tabular-nums">{member.phoneMasked}</span>
-                              <span aria-hidden className="h-[10px] border-l" />
-                              <span className="truncate" title={`UID：${member.uid}`}>
-                                UID：{member.uid}
-                              </span>
-                            </div>
-                            {member.userStatus !== 'ACTIVE' && (
-                              <p className="mt-[3px] text-destructive">
-                                {member.userStatus === 'FROZEN' ? '账号冻结' : '账号封禁'}
+                        {label}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {members.data.records.map((member) => {
+                    const self = member.userId === user.id;
+                    const canEdit =
+                      canWrite && (position === 'OWNER' || member.position === 'MEMBER' || self);
+                    const canRole =
+                      canEdit && member.joinStatus === 'ACTIVE' && !(position === 'OWNER' && self);
+                    const canExit =
+                      canWrite &&
+                      member.joinStatus === 'ACTIVE' &&
+                      member.position !== 'OWNER' &&
+                      (position === 'OWNER' || member.position === 'MEMBER' || self);
+                    return (
+                      <TableRow key={member.memberId} className="group bg-card">
+                        <TableHead
+                          scope="row"
+                          className="w-[300px] min-w-[260px] max-w-[300px] bg-card py-[14px] text-[13px] font-normal text-foreground group-hover:bg-muted/30"
+                        >
+                          <div className="flex items-center gap-[10px]">
+                            <UserAvatar
+                              url={member.avatarUrl}
+                              name={displayName(member)}
+                              className="size-[32px] text-[14px]"
+                            />
+                            <div className="min-w-0">
+                              <p className="truncate font-medium" title={displayName(member)}>
+                                {displayName(member)}
+                                {self && (
+                                  <span className="ml-[6px] text-[12px] font-normal text-[var(--color-neutral-strong)]">
+                                    （我）
+                                  </span>
+                                )}
                               </p>
+                              <div className="mt-[5px] flex min-w-0 items-center gap-[8px] text-[12px] text-[var(--color-neutral-strong)]">
+                                <span className="shrink-0 tabular-nums">{member.phoneMasked}</span>
+                                <span aria-hidden className="h-[10px] border-l" />
+                                <span className="truncate" title={`UID：${member.uid}`}>
+                                  UID：{member.uid}
+                                </span>
+                              </div>
+                              {member.userStatus !== 'ACTIVE' && (
+                                <p className="mt-[3px] text-destructive">
+                                  {member.userStatus === 'FROZEN' ? '账号冻结' : '账号封禁'}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </TableHead>
+                        <TableCell className="whitespace-nowrap">
+                          {member.employmentType
+                            ? employmentLabels[member.employmentType]
+                            : '未设置'}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          {positionLabels[member.position]}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          <span
+                            className={`inline-flex items-center rounded-[5px] px-[7px] py-[3px] text-[12px] leading-[18px] ${
+                              member.joinStatus === 'ACTIVE'
+                                ? 'bg-[var(--color-success-soft)] text-[var(--color-success-hover)]'
+                                : member.joinStatus === 'LEFT' || member.joinStatus === 'REMOVED'
+                                  ? 'bg-muted text-[var(--color-neutral-strong)]'
+                                  : 'bg-[var(--color-warning-soft)] text-[var(--color-neutral-strong)]'
+                            }`}
+                          >
+                            {member.joinStatus ? joinStatusLabels[member.joinStatus] : '未设置'}
+                          </span>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-[12px] tabular-nums">
+                          <p>
+                            <span className="mr-[6px] text-[var(--color-neutral-strong)]">
+                              入组
+                            </span>
+                            {organizationTime(member.joinedAt)}
+                          </p>
+                          {(member.leftAt || member.plannedLeaveDate) && (
+                            <p className="mt-[5px]">
+                              <span className="mr-[6px] text-[var(--color-neutral-strong)]">
+                                {member.leftAt ? '离组' : '拟离组'}
+                              </span>
+                              {member.leftAt
+                                ? organizationTime(member.leftAt)
+                                : member.plannedLeaveDate}
+                            </p>
+                          )}
+                        </TableCell>
+                        <TableCell className="tabular-nums">{member.activeProjectCount}</TableCell>
+                        <TableCell className="border-l bg-card group-hover:bg-[var(--color-surface-muted)] min-[960px]:sticky min-[960px]:right-0">
+                          <div className="flex flex-nowrap items-center gap-[4px] whitespace-nowrap">
+                            {canEdit && (
+                              <Button
+                                variant="link"
+                                size="formCompactMobileTouch"
+                                onClick={() => setAction({ kind: 'edit', member })}
+                              >
+                                编辑成员
+                              </Button>
+                            )}
+                            {canRole && (
+                              <Button
+                                variant="link"
+                                size="formCompactMobileTouch"
+                                onClick={() => setAction({ kind: 'role', member })}
+                              >
+                                变更角色
+                              </Button>
+                            )}
+                            {canExit && (
+                              <Button
+                                variant="dangerGhost"
+                                size="formCompactMobileTouch"
+                                onClick={() => setAction({ kind: 'exit', member })}
+                              >
+                                {self ? '申请退出' : '移出组织'}
+                              </Button>
+                            )}
+                            {!canEdit && !canRole && !canExit && (
+                              <span className="text-[var(--color-neutral-strong)]">—</span>
                             )}
                           </div>
-                        </div>
-                      </th>
-                      <td className="px-[16px] py-[16px] whitespace-nowrap">
-                        {member.employmentType ? employmentLabels[member.employmentType] : '未设置'}
-                      </td>
-                      <td className="px-[16px] py-[16px] whitespace-nowrap">
-                        {positionLabels[member.position]}
-                      </td>
-                      <td className="px-[16px] py-[16px] whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center rounded-[5px] px-[7px] py-[3px] text-[12px] leading-[18px] ${
-                            member.joinStatus === 'ACTIVE'
-                              ? 'bg-[var(--color-success-soft)] text-[var(--color-success-hover)]'
-                              : member.joinStatus === 'LEFT' || member.joinStatus === 'REMOVED'
-                                ? 'bg-muted text-[var(--color-neutral-strong)]'
-                                : 'bg-[var(--color-warning-soft)] text-[var(--color-neutral-strong)]'
-                          }`}
-                        >
-                          {member.joinStatus ? joinStatusLabels[member.joinStatus] : '未设置'}
-                        </span>
-                      </td>
-                      <td className="px-[16px] py-[16px] whitespace-nowrap text-[12px] tabular-nums">
-                        <p>
-                          <span className="mr-[6px] text-[var(--color-neutral-strong)]">入组</span>
-                          {organizationTime(member.joinedAt)}
-                        </p>
-                        {(member.leftAt || member.plannedLeaveDate) && (
-                          <p className="mt-[5px]">
-                            <span className="mr-[6px] text-[var(--color-neutral-strong)]">
-                              {member.leftAt ? '离组' : '拟离组'}
-                            </span>
-                            {member.leftAt
-                              ? organizationTime(member.leftAt)
-                              : member.plannedLeaveDate}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-[16px] py-[16px] tabular-nums">
-                        {member.activeProjectCount}
-                      </td>
-                      <td className="border-l bg-card px-[12px] py-[16px] group-hover:bg-[var(--color-surface-muted)] min-[960px]:sticky min-[960px]:right-0">
-                        <div className="flex flex-nowrap items-center gap-[4px] whitespace-nowrap">
-                          {canEdit && (
-                            <Button
-                              variant="link"
-                              size="formCompactMobileTouch"
-                              onClick={() => setAction({ kind: 'edit', member })}
-                            >
-                              编辑成员
-                            </Button>
-                          )}
-                          {canRole && (
-                            <Button
-                              variant="link"
-                              size="formCompactMobileTouch"
-                              onClick={() => setAction({ kind: 'role', member })}
-                            >
-                              变更角色
-                            </Button>
-                          )}
-                          {canExit && (
-                            <Button
-                              variant="dangerGhost"
-                              size="formCompactMobileTouch"
-                              onClick={() => setAction({ kind: 'exit', member })}
-                            >
-                              {self ? '申请退出' : '移出组织'}
-                            </Button>
-                          )}
-                          {!canEdit && !canRole && !canExit && (
-                            <span className="text-[var(--color-neutral-strong)]">—</span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {members.data.records.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={7}
-                      className="px-[16px] py-[64px] text-center text-[var(--color-neutral-strong)]"
-                    >
-                      暂无符合条件的人员
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-[20px] pb-[12px] max-[640px]:px-[16px]">
-            <OrganizationPagination
-              current={members.data.current}
-              size={members.data.size}
-              total={members.data.total}
-              loading={members.isFetching}
-              onPageChange={(current) => setQuery((value) => ({ ...value, current }))}
-            />
-          </div>
-        </>
-      )}
-      {action && canWrite && (
-        <MemberDialog
-          key={`${action.kind}:${action.member.memberId}`}
-          action={action}
-          orgId={orgId}
-          position={position}
-          userId={user.id}
-          departureKeys={departureKeys.current}
-          onClose={() => setAction(undefined)}
-          onSaved={saved}
-        />
-      )}
-    </section>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {members.data.records.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="p-0">
+                        <EmptyState title="暂无符合条件的人员" />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+            <CardFooter className="block border-t-0">
+              <OrganizationPagination
+                current={members.data.current}
+                size={members.data.size}
+                total={members.data.total}
+                loading={members.isFetching}
+                onPageChange={(current) => setQuery((value) => ({ ...value, current }))}
+              />
+            </CardFooter>
+          </>
+        )}
+        {action && canWrite && (
+          <MemberDialog
+            key={`${action.kind}:${action.member.memberId}`}
+            action={action}
+            orgId={orgId}
+            position={position}
+            userId={user.id}
+            departureKeys={departureKeys.current}
+            onClose={() => setAction(undefined)}
+            onSaved={saved}
+          />
+        )}
+      </section>
+    </Card>
   );
 }
 
@@ -543,7 +542,7 @@ function MemberDialog({
   onSaved: (message: string) => Promise<void>;
 }) {
   const { member, kind } = action;
-  const [joinedAt, setJoinedAt] = useState(shanghaiTime(member.joinedAt));
+  const [joinedAt, setJoinedAt] = useState(shanghaiDate(member.joinedAt));
   const [employment, setEmployment] = useState(member.employmentType || '');
   const [role, setRole] = useState<OrganizationPosition>(member.position);
   const [confirmed, setConfirmed] = useState(false);
@@ -576,11 +575,11 @@ function MemberDialog({
           memberId: member.memberId,
           versionNo: member.versionNo,
         };
-        if (joinedAt && joinedAt !== shanghaiTime(member.joinedAt))
-          input.joinedAt = joinedAt.replace('T', ' ') + (joinedAt.length === 16 ? ':00' : '');
+        if (joinedAt && joinedAt !== shanghaiDate(member.joinedAt))
+          input.joinedAt = `${joinedAt} 00:00:00`;
         if (employment && employment !== member.employmentType)
           input.employmentType = employment as 'FULL_TIME' | 'PART_TIME';
-        if (!input.joinedAt && !input.employmentType) throw new Error('请先修改入组时间或人员属性');
+        if (!input.joinedAt && !input.employmentType) throw new Error('请先修改入组日期或人员属性');
         await api.updateOrganizationMember(input);
         message = '成员资料已保存';
       } else if (kind === 'role') {
@@ -628,15 +627,14 @@ function MemberDialog({
             <>
               <FormField
                 controlId="org-edit-joined-at"
-                label="入组时间（上海）"
-                description="留空保持原值，不支持清空。不得晚于当前时间。"
+                label="入组日期（上海）"
+                description="留空或日期不变保持原值，不支持清空。不能选择未来日期。"
               >
                 <Input
                   size="profile"
                   id="org-edit-joined-at"
-                  type="datetime-local"
-                  step="1"
-                  max={shanghaiTime(new Date().toISOString())}
+                  type="date"
+                  max={shanghaiToday()}
                   value={joinedAt}
                   onChange={(event) => setJoinedAt(event.target.value)}
                 />

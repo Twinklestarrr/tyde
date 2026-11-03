@@ -548,7 +548,10 @@ for (const [mode, origin, desktop] of [
     const row = page.getByRole('row').filter({ hasText: '联调成员甲' });
     await row.getByRole('button', { name: '编辑成员', exact: true }).click();
     const memberEdit = page.getByRole('dialog', { name: '编辑组织成员', exact: true });
-    await expectPickerOnBodyClick(memberEdit.getByLabel('入组时间（上海）', { exact: true }));
+    const joinedDate = memberEdit.getByLabel('入组日期（上海）', { exact: true });
+    await expect(joinedDate).toHaveAttribute('type', 'date');
+    await expect(joinedDate).toHaveValue(timestamp.slice(0, 10));
+    await expectPickerOnBodyClick(joinedDate);
     await memberEdit.getByLabel('人员属性', { exact: true }).selectOption('PART_TIME');
     state.memberUpdateStatus = 409;
     await memberEdit.getByRole('button', { name: '保存成员资料', exact: true }).click();
@@ -566,12 +569,14 @@ for (const [mode, origin, desktop] of [
     await page.getByRole('button', { name: '刷新人员', exact: true }).click();
     await expect(page.getByRole('button', { name: '刷新人员', exact: true })).toBeEnabled();
     await row.getByRole('button', { name: '编辑成员', exact: true }).click();
+    await memberEdit.getByLabel('入组日期（上海）', { exact: true }).fill('2026-10-01');
     await memberEdit.getByLabel('人员属性', { exact: true }).selectOption('PART_TIME');
     await memberEdit.getByRole('button', { name: '保存成员资料', exact: true }).click();
     await expect(memberEdit).not.toBeVisible();
     await expect(row.getByText('兼职', { exact: true })).toBeVisible();
     expect(calls(requests, writePaths.member)).toHaveLength(2);
     expect(calls(requests, writePaths.member).at(-1)?.body?.versionNo).toBe(5);
+    expect(calls(requests, writePaths.member).at(-1)?.body?.joinedAt).toBe('2026-10-01 00:00:00');
     state.departureStatus = 503;
     const removal = page.getByRole('dialog', { name: '移出组织', exact: true });
     for (const count of [1, 2]) {
