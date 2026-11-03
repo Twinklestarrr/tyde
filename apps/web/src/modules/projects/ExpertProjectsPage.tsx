@@ -16,6 +16,7 @@ import { SearchInput } from '@/components/ui/search-input';
 import { projectNodeLabel } from './ProjectWorkflow';
 import { ProjectDetailsDialog } from './ProjectDetailsDialog';
 import { ExpertTaskResponseDialog } from './ExpertTaskResponseDialog';
+import { ExpertExamPanel, EXPERT_EXAM_LEAVE_REQUEST } from './ExpertExamPanel';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { ProjectCardTransition } from './ProjectCardTransition';
 
@@ -271,6 +272,7 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
   }
   async function refreshCurrentTask(task: ExpertTask) {
     if (refreshing || !sessionMatches()) return;
+    if (!window.dispatchEvent(new Event(EXPERT_EXAM_LEAVE_REQUEST, { cancelable: true }))) return;
     setRefreshing(true);
     setRefreshError(null);
     try {
@@ -313,6 +315,10 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
               size="mobileTouch"
               disabled={refreshing}
               onClick={() => {
+                if (
+                  !window.dispatchEvent(new Event(EXPERT_EXAM_LEAVE_REQUEST, { cancelable: true }))
+                )
+                  return;
                 setSelected(null);
                 setDetailsOpen(false);
                 setDirection('back');
@@ -390,6 +396,15 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
             </article>
           </Card>
           {detail.isFetching && <LoadingState>正在读取项目详情…</LoadingState>}
+          {selected.acceptanceStatus === 'ACCEPTED' &&
+            selected.branchNodeCode === 'ENTRANCE_EXAM' && (
+              <ExpertExamPanel
+                key={`${selected.sourceBizType}:${selected.sourceBizId}`}
+                user={user}
+                task={selected}
+                onChanged={() => refreshCurrentTask(selected)}
+              />
+            )}
           {detail.isError && (
             <div className="space-y-3">
               <ErrorNotice error={detail.error} />

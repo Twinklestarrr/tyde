@@ -25,6 +25,7 @@ import { ProfileAttendance } from './ProfileAttendance';
 import { ProfileOverview } from './ProfileOverview';
 import { ProfileApplicationWithdrawal } from './ProfileApplicationWithdrawal';
 import { api } from '@/services/api';
+import { ExpertExamStatus } from '@/modules/projects/ExpertExamPanel';
 
 const panelClass = 'space-y-5 p-5 sm:p-6';
 const quietClass = 'text-[13px] leading-[22px] text-[var(--color-neutral-strong)]';
@@ -46,7 +47,7 @@ const nodeLabels: Record<string, string> = {
 const admissionLabels = {
   PASSED: '已通过准入',
   PENDING: '待阅卷',
-  NOT_PASSED: '未通过准入',
+  NOT_PASSED: '尚未取得通过结果',
   NOT_EXAMINED: '未参加考试',
 };
 const profileScope = (user: AuthUser) => [
@@ -278,7 +279,12 @@ function ExpertProjects({
                     </dd>
                   </div>
                 </dl>
-                <p className={quietClass}>当前提供只读详情，接单、考试和生产操作尚未接入。</p>
+                {selectedProject.needWrittenExam && (
+                  <ExpertExamStatus user={user} projectId={selectedProject.projectId} />
+                )}
+                <p className={quietClass}>
+                  项目操作从工作台当前待办进入，此处查看项目资料和准入状态。
+                </p>
               </>
             )}
           </section>
@@ -373,9 +379,7 @@ function ExpertApplications({ user }: { user: AuthUser }) {
     if (cache.getQueryData<AuthUser | null>(SESSION_KEY)?.id !== user.id) return;
     await Promise.all([
       cache.cancelQueries({ queryKey: organizationKey }),
-      cache.cancelQueries({
-        queryKey: ['organization', user.id, orgId, 'detail'],
-      }),
+      cache.cancelQueries({ queryKey: ['organization', user.id, orgId, 'detail'] }),
       cache.cancelQueries({ queryKey: SESSION_KEY }),
     ]);
     if (cache.getQueryData<AuthUser | null>(SESSION_KEY)?.id !== user.id) return;

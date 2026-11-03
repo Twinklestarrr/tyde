@@ -17,6 +17,7 @@ export default defineConfig({
     'project-manager.spec.ts',
     'production-plan.spec.ts',
     'expert-actions.spec.ts',
+    'exam-candidate.spec.ts',
     'entrance-exams.spec.ts',
     'standard-training.spec.ts',
   ],

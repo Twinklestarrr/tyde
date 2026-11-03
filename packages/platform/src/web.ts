@@ -7,6 +7,7 @@ import {
   AVATAR_EXTENSIONS,
   PROJECT_ATTACHMENT_MAX_BYTES,
   PROJECT_ATTACHMENT_EXTENSIONS,
+  ENTRANCE_EXAM_ANSWER_MAX_BYTES,
   BUSINESS_ROLES,
   type AuthApi,
   type ApiFailure,
@@ -83,7 +84,10 @@ export function createHttpAuth(
   }
 
   function invalidResponse(): never {
-    throw new ApiError(502, { code: 'INVALID_RESPONSE', message: '服务响应格式异常，请稍后重试' });
+    throw new ApiError(502, {
+      code: 'INVALID_RESPONSE',
+      message: '服务响应格式异常，请稍后重试',
+    });
   }
   function record(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -141,7 +145,10 @@ export function createHttpAuth(
       });
     } catch (error) {
       if (error instanceof ApiError) throw error;
-      throw new ApiError(0, { code: 'NETWORK_ERROR', message: '连接服务失败，请检查网络后重试' });
+      throw new ApiError(0, {
+        code: 'NETWORK_ERROR',
+        message: '连接服务失败，请检查网络后重试',
+      });
     }
   }
   async function read(response: Response, wrapped = true): Promise<unknown> {
@@ -170,7 +177,10 @@ export function createHttpAuth(
     )
       invalidResponse();
     if (generation !== expectedGeneration)
-      throw new ApiError(409, { code: 'SESSION_CHANGED', message: '登录状态已变化，请重新操作' });
+      throw new ApiError(409, {
+        code: 'SESSION_CHANGED',
+        message: '登录状态已变化，请重新操作',
+      });
     // Web 使用 HttpOnly Cookie，刷新令牌仅留在适配器内存中。
     refreshToken = value.refreshToken;
   }
@@ -213,7 +223,10 @@ export function createHttpAuth(
     const response = await send(path, body, method, options);
     const ensureCurrentSession = () => {
       if (authenticated && current !== generation)
-        throw new ApiError(401, { code: 'SESSION_CHANGED', message: '登录状态已变化，请重新登录' });
+        throw new ApiError(401, {
+          code: 'SESSION_CHANGED',
+          message: '登录状态已变化，请重新登录',
+        });
     };
     ensureCurrentSession();
     if (response.status === 401 && authenticated) {
@@ -270,7 +283,10 @@ export function createHttpAuth(
       !BUSINESS_ROLES.every((availableRole) => (value.roles as unknown[]).includes(availableRole))
     )
       invalidResponse();
-    return value as unknown as { selectedRole: BusinessRole; roles: BusinessRole[] };
+    return value as unknown as {
+      selectedRole: BusinessRole;
+      roles: BusinessRole[];
+    };
   }
   const positions = ['OWNER', 'ADMIN', 'MEMBER'];
   const employments = ['FULL_TIME', 'PART_TIME'];
@@ -1248,7 +1264,10 @@ export function createHttpAuth(
       (input.orgId !== undefined &&
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.orgId))
     )
-      throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的月份和组织 ID' });
+      throw new ApiError(400, {
+        code: 'VALIDATION_ERROR',
+        message: '请提供有效的月份和组织 ID',
+      });
     return new URLSearchParams({
       month: input.month,
       ...(input.orgId ? { orgId: input.orgId } : {}),
@@ -1593,7 +1612,10 @@ export function createHttpAuth(
       declaredType !== 'application/octet-stream' &&
       declaredType !== avatarMime[extension]
     )
-      throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '图片类型与扩展名不匹配' });
+      throw new ApiError(400, {
+        code: 'VALIDATION_ERROR',
+        message: '图片类型与扩展名不匹配',
+      });
     const body = new FormData();
     body.append('bizType', bizType);
     body.append('category', 'IMAGE');
@@ -1636,7 +1658,10 @@ export function createHttpAuth(
   }
   function idempotencyHeaders(key: string): Record<string, string> {
     if (typeof key !== 'string' || !key.trim() || key.length > 128 || /[\r\n]/.test(key))
-      throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的操作幂等键' });
+      throw new ApiError(400, {
+        code: 'VALIDATION_ERROR',
+        message: '请提供有效的操作幂等键',
+      });
     return { 'Idempotency-Key': key };
   }
   async function readImport(response: Response): Promise<unknown> {
@@ -1690,7 +1715,10 @@ export function createHttpAuth(
     return changeSession(async () => {
       await refreshing?.catch(() => undefined);
       if (current !== generation)
-        throw new ApiError(401, { code: 'SESSION_CHANGED', message: '登录状态已变化，请重新登录' });
+        throw new ApiError(401, {
+          code: 'SESSION_CHANGED',
+          message: '登录状态已变化，请重新登录',
+        });
       const data = await request('/users/me/update', input, 'POST', true);
       // 改密已由后端撤销全部会话；使迟到查询/刷新失效，再允许后续登录。
       generation++;
@@ -1706,7 +1734,10 @@ export function createHttpAuth(
       // 等待既有轮换完成，避免旧刷新响应覆盖新登录的 Cookie。
       await refreshing?.catch(() => undefined);
       if (generation !== current)
-        throw new ApiError(409, { code: 'SESSION_CHANGED', message: '登录状态已变化，请重新操作' });
+        throw new ApiError(409, {
+          code: 'SESSION_CHANGED',
+          message: '登录状态已变化，请重新操作',
+        });
       const data = await request(path, body);
       if (generation !== current) {
         // Cookie 已随响应生效；在下一次登录前撤销被取代的成功登录。
@@ -1724,7 +1755,10 @@ export function createHttpAuth(
             );
           }
         }
-        throw new ApiError(409, { code: 'SESSION_CHANGED', message: '登录状态已变化，请重新操作' });
+        throw new ApiError(409, {
+          code: 'SESSION_CHANGED',
+          message: '登录状态已变化，请重新操作',
+        });
       }
       if (record(data) && data.status === 'registration_required') {
         if (
@@ -1889,7 +1923,10 @@ export function createHttpAuth(
   }
   function examGradingDetail(
     value: unknown,
-    input: Exam.EntranceExamLocator & { attemptId: number; roundNo?: number | null },
+    input: Exam.EntranceExamLocator & {
+      attemptId: number;
+      roundNo?: number | null;
+    },
   ): Exam.EntranceExamGradingDetail {
     if (
       !record(value) ||
@@ -2183,7 +2220,165 @@ export function createHttpAuth(
       examInputError();
   }
 
+  function candidateInputError(): never {
+    throw new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: '考试作答参数不合法，请核对应试记录、诚信承诺和答案附件。',
+    });
+  }
+  function candidatePaper(value: unknown, projectId: number): Exam.EntranceExamCandidatePaper {
+    if (
+      !record(value) ||
+      !onlyKeys(value, [
+        'projectId',
+        'attemptId',
+        'examId',
+        'examVersionId',
+        'paperId',
+        'examName',
+        'paperName',
+        'durationMinutes',
+        'fullScore',
+        'enteredAt',
+        'answerDeadlineAt',
+        'questions',
+      ]) ||
+      value.projectId !== projectId ||
+      !['attemptId', 'examId', 'examVersionId', 'paperId'].every((key) =>
+        projectPlanId(value[key]),
+      ) ||
+      !strings(value, ['examName']) ||
+      !(value.paperName === null || typeof value.paperName === 'string') ||
+      !(value.durationMinutes === null || projectPlanId(value.durationMinutes)) ||
+      !examScore(value.fullScore, true) ||
+      !attendanceTime(value.enteredAt) ||
+      !(value.answerDeadlineAt === null || attendanceTime(value.answerDeadlineAt)) ||
+      !Array.isArray(value.questions) ||
+      !value.questions.length ||
+      value.questions.length > 500 ||
+      !value.questions.every(
+        (question) =>
+          record(question) &&
+          onlyKeys(question, [
+            'questionId',
+            'sequenceNo',
+            'questionContent',
+            'questionFiles',
+            'requiredFlag',
+            'score',
+          ]) &&
+          projectPlanId(question.questionId) &&
+          projectPlanId(question.sequenceNo) &&
+          (question.questionContent === null || typeof question.questionContent === 'string') &&
+          Object.hasOwn(question, 'questionFiles') &&
+          typeof question.requiredFlag === 'boolean' &&
+          examScore(question.score, true),
+      ) ||
+      new Set(value.questions.map((question) => question.questionId)).size !==
+        value.questions.length ||
+      new Set(value.questions.map((question) => question.sequenceNo)).size !==
+        value.questions.length
+    )
+      invalidResponse();
+    return value as unknown as Exam.EntranceExamCandidatePaper;
+  }
+  function candidateAttemptInput(value: unknown, submit = false) {
+    if (
+      !record(value) ||
+      !onlyKeys(value, [
+        'projectId',
+        'attemptId',
+        ...(submit ? ['integritySigned', 'answers'] : []),
+      ]) ||
+      !projectPlanId(value.projectId) ||
+      !projectPlanId(value.attemptId)
+    )
+      candidateInputError();
+  }
+  function candidateSubmitInput(input: Exam.EntranceExamCandidateSubmitInput) {
+    candidateAttemptInput(input, true);
+    if (
+      input.integritySigned !== true ||
+      !Array.isArray(input.answers) ||
+      input.answers.length > 500 ||
+      !input.answers.every(
+        (answer) =>
+          record(answer) &&
+          onlyKeys(answer, ['questionId', 'answerContent', 'answerFiles']) &&
+          projectPlanId(answer.questionId) &&
+          examText(answer.answerContent, 100000) &&
+          (answer.answerFiles == null ||
+            (Array.isArray(answer.answerFiles) &&
+              answer.answerFiles.length <= 10 &&
+              answer.answerFiles.every(
+                (file) =>
+                  examFileInput(file) &&
+                  record(file) &&
+                  file.uploadedFileId == null &&
+                  typeof file.uploadToken === 'string' &&
+                  !!file.uploadToken.trim(),
+              ))),
+      ) ||
+      new Set(input.answers.map((answer) => answer.questionId)).size !== input.answers.length
+    )
+      candidateInputError();
+    const keys = input.answers.flatMap((answer) =>
+      (answer.answerFiles ?? []).map((file) => file.objectKey),
+    );
+    if (new Set(keys).size !== keys.length) candidateInputError();
+    if (new TextEncoder().encode(JSON.stringify(input)).byteLength > ENTRANCE_EXAM_ANSWER_MAX_BYTES)
+      throw new ApiError(413, {
+        code: 'PAYLOAD_TOO_LARGE',
+        message: '答卷超过当前可提交大小，请缩短文字答案后重试。',
+      });
+  }
+
   return {
+    getEntranceExamCandidateCurrent: async (projectId) => {
+      if (!projectPlanId(projectId)) candidateInputError();
+      const data = await request(
+        `/entrance-exams/current?projectId=${projectId}`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (
+        !record(data) ||
+        data.projectId !== projectId ||
+        !inEnum(data.status, ['PASSED', 'PENDING', 'NOT_PASSED', 'NOT_EXAMINED'])
+      )
+        invalidResponse();
+      return data as unknown as Exam.EntranceExamCandidateCurrent;
+    },
+    enterEntranceExam: async (projectId) => {
+      if (!projectPlanId(projectId)) candidateInputError();
+      return candidatePaper(
+        await request('/entrance-exams/enter', { projectId }, 'POST', true),
+        projectId,
+      );
+    },
+    submitEntranceExam: async (input) => {
+      candidateSubmitInput(input);
+      const data = await request('/entrance-exams/submit', input, 'POST', true);
+      if (
+        !record(data) ||
+        data.attemptId !== input.attemptId ||
+        !projectPlanId(data.answerCount) ||
+        Number(data.answerCount) < input.answers.length ||
+        !projectPlanId(data.gradingRoundCount) ||
+        data.gradingStatus !== 'PENDING' ||
+        !attendanceTime(data.submittedAt)
+      )
+        invalidResponse();
+      return data as unknown as Exam.EntranceExamCandidateSubmitResult;
+    },
+    cancelEntranceExam: async (input) => {
+      candidateAttemptInput(input);
+      const data = await request('/entrance-exams/cancel', input, 'POST', true);
+      if (!record(data) || data.attemptId !== input.attemptId || !attendanceTime(data.cancelledAt))
+        invalidResponse();
+      return data as unknown as Exam.EntranceExamCandidateCancelResult;
+    },
     getEntranceExamManagement: async (projectId) => {
       if (!projectPlanId(projectId)) examInputError();
       return examManagement(
@@ -2413,7 +2608,10 @@ export function createHttpAuth(
       if (input.file && (!/\.(xls|xlsx|txt)$/i.test(input.file.name) || !input.file.size))
         examInputError();
       if (input.file && input.file.size > 10 * 1024 * 1024)
-        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '题目文件最大 10 MiB' });
+        throw new ApiError(413, {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: '题目文件最大 10 MiB',
+        });
       if (
         input.attachmentRefs &&
         new Set(input.attachmentRefs.map((ref) => ref.name.trim())).size !==
@@ -2451,13 +2649,18 @@ export function createHttpAuth(
       if (!(PROJECT_ATTACHMENT_EXTENSIONS as readonly string[]).includes(extension) || !file.size)
         examInputError();
       if (file.size > PROJECT_ATTACHMENT_MAX_BYTES)
-        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '考试附件最大 50 MiB' });
+        throw new ApiError(413, {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: '考试附件最大 50 MiB',
+        });
       const body = new FormData();
       body.append('bizType', 'ENTRANCE_EXAM_ATTACHMENT');
       body.append('category', 'PROJECT_ATTACHMENT');
       body.append('file', file);
       return projectUploaded(
-        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+        await request('/files/upload', body, 'POST', true, {
+          timeoutMs: 60_000,
+        }),
         file,
         extension,
         'entrance-exam-attachment',
@@ -2689,7 +2892,10 @@ export function createHttpAuth(
         (input.categoryLevel !== undefined && ![1, 2, 3].includes(input.categoryLevel)) ||
         (input.keyword !== undefined && typeof input.keyword !== 'string')
       )
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目分类条件' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目分类条件',
+        });
       const query = new URLSearchParams({
         ...(input.categoryLevel !== undefined
           ? { categoryLevel: String(input.categoryLevel) }
@@ -2707,7 +2913,10 @@ export function createHttpAuth(
     },
     getCurrentProjectRequester: async (userId) => {
       if (!uuid(userId))
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的本人用户 ID' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的本人用户 ID',
+        });
       const data = await request(
         `/project-requesters/INDIVIDUAL/${encodeURIComponent(userId)}/backfill`,
         undefined,
@@ -2744,7 +2953,10 @@ export function createHttpAuth(
     },
     getProjectDetail: async (projectId) => {
       if (!integer(projectId, 1) || projectId > 2147483647)
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目 ID',
+        });
       const data = workbenchProjectDetail(
         await request(`/projects/${projectId}`, undefined, 'GET', true),
       );
@@ -2753,7 +2965,10 @@ export function createHttpAuth(
     },
     getProjectProductionPlan: async (projectId) => {
       if (!projectPlanId(projectId))
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目 ID',
+        });
       return productionPlan(
         await request(`/projects/production-plan?projectId=${projectId}`, undefined, 'GET', true),
         projectId,
@@ -2761,7 +2976,10 @@ export function createHttpAuth(
     },
     getProjectStandardMaterials: async (projectId) => {
       if (!projectPlanId(projectId))
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目 ID',
+        });
       return projectStandardMaterials(
         await request(
           `/projects/standard-materials/detail?projectId=${projectId}`,
@@ -2781,7 +2999,10 @@ export function createHttpAuth(
     },
     confirmProjectProductionPlan: async (projectId, input) => {
       if (!projectPlanId(projectId))
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目 ID',
+        });
       validateProductionPlanInput(input);
       // 此确认只能执行一次；只沿用明确401后的刷新，不重放网络/5xx/409结果。
       return productionPlan(
@@ -2841,13 +3062,18 @@ export function createHttpAuth(
           message: '请选择支持类型的非空项目附件',
         });
       if (file.size > PROJECT_ATTACHMENT_MAX_BYTES)
-        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '项目附件最大 50 MiB' });
+        throw new ApiError(413, {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: '项目附件最大 50 MiB',
+        });
       const body = new FormData();
       body.append('bizType', 'PROJECT_ATTACHMENT');
       body.append('category', 'PROJECT_ATTACHMENT');
       body.append('file', file);
       return projectUploaded(
-        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+        await request('/files/upload', body, 'POST', true, {
+          timeoutMs: 60_000,
+        }),
         file,
         extension,
       );
@@ -2905,14 +3131,20 @@ export function createHttpAuth(
           input.status != null &&
           input.acceptanceStatus !== input.status)
       )
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目筛选条件' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的项目筛选条件',
+        });
       const data = await request('/expert-assignments/my-tasks', input, 'POST', true);
       if (!Array.isArray(data)) invalidResponse();
       return data.map(expertTask);
     },
     getExpertProjectOwnerCandidates: async (assignmentId) => {
       if (!integer(assignmentId, 1) || assignmentId > 2147483647)
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配 ID' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的分配 ID',
+        });
       const data = await request(
         `/expert-assignments/project-owner-candidates?${new URLSearchParams({ assignmentId: String(assignmentId) })}`,
         undefined,
@@ -2988,7 +3220,10 @@ export function createHttpAuth(
     },
     getMyExpertProjects: async (keyword) => {
       if (keyword !== undefined && keyword.length > 100)
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '项目关键字最多 100 字符' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '项目关键字最多 100 字符',
+        });
       const query = keyword === undefined ? '' : `?${new URLSearchParams({ keyword })}`;
       const data = await request(`/expert-assignments/my-projects${query}`, undefined, 'GET', true);
       if (!Array.isArray(data)) invalidResponse();
@@ -2997,7 +3232,10 @@ export function createHttpAuth(
     getExpertAssignmentDetail: async (input) => {
       const source = typeof input === 'number' ? { assignmentId: input, movementId: null } : input;
       if (!workbenchProjectSource(source))
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配或转项 ID' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '请提供有效的分配或转项 ID',
+        });
       const query = new URLSearchParams(
         source.assignmentId === null
           ? { movementId: String(source.movementId) }
@@ -3043,7 +3281,9 @@ export function createHttpAuth(
       )
         invalidAttendanceInput();
       try {
-        new Intl.DateTimeFormat('en', { timeZone: input.timezone?.trim() || 'Asia/Shanghai' });
+        new Intl.DateTimeFormat('en', {
+          timeZone: input.timezone?.trim() || 'Asia/Shanghai',
+        });
       } catch {
         invalidAttendanceInput();
       }
@@ -3206,20 +3446,28 @@ export function createHttpAuth(
           message: '请选择 JPG、JPEG、PNG、GIF、BMP 或 WebP 图片',
         });
       if (file.size > AVATAR_MAX_BYTES)
-        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '营业执照图片最大 10 MiB' });
+        throw new ApiError(413, {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: '营业执照图片最大 10 MiB',
+        });
       const declaredType = file.type.split(';')[0]?.trim().toLowerCase();
       if (
         declaredType &&
         declaredType !== 'application/octet-stream' &&
         declaredType !== avatarMime[extension]
       )
-        throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '图片类型与扩展名不匹配' });
+        throw new ApiError(400, {
+          code: 'VALIDATION_ERROR',
+          message: '图片类型与扩展名不匹配',
+        });
       const body = new FormData();
       body.append('bizType', 'BUSINESS_LICENSE');
       body.append('category', 'IMAGE');
       body.append('file', file);
       return businessLicenseUploaded(
-        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+        await request('/files/upload', body, 'POST', true, {
+          timeoutMs: 60_000,
+        }),
         file,
         extension,
       );

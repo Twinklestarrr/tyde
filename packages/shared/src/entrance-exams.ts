@@ -284,7 +284,69 @@ export interface EntranceExamImportResult {
 }
 export const ENTRANCE_EXAM_SOURCE_MAX_BYTES = 10 * 1024 * 1024;
 export const ENTRANCE_EXAM_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
+export const ENTRANCE_EXAM_ANSWER_MAX_BYTES = 2 * 1024 * 1024;
+/** NOT_PASSED 也包含答题中、取消等状态，不能直接解释为已落榜。 */
+export type EntranceExamCandidateStatus = 'PASSED' | 'PENDING' | 'NOT_PASSED' | 'NOT_EXAMINED';
+export interface EntranceExamCandidateCurrent {
+  projectId: number;
+  status: EntranceExamCandidateStatus;
+}
+export interface EntranceExamCandidateQuestion {
+  questionId: number;
+  sequenceNo: number;
+  questionContent: string | null;
+  questionFiles: unknown;
+  requiredFlag: boolean;
+  score: number;
+}
+/** 重复入场恢复首次绑定的原卷和计时；后端不保存或返回临时作答。 */
+export interface EntranceExamCandidatePaper {
+  projectId: number;
+  attemptId: number;
+  examId: number;
+  examVersionId: number;
+  paperId: number;
+  examName: string;
+  paperName: string | null;
+  durationMinutes: number | null;
+  fullScore: number;
+  enteredAt: string;
+  answerDeadlineAt: string | null;
+  questions: EntranceExamCandidateQuestion[];
+}
+export interface EntranceExamCandidateAttemptInput {
+  projectId: number;
+  attemptId: number;
+}
+export interface EntranceExamCandidateAnswerInput {
+  questionId: number;
+  answerContent?: string | null;
+  answerFiles?: (EntranceExamFileInput & { uploadToken: string; uploadedFileId?: null })[] | null;
+}
+export interface EntranceExamCandidateSubmitInput extends EntranceExamCandidateAttemptInput {
+  integritySigned: boolean;
+  answers: EntranceExamCandidateAnswerInput[];
+}
+export interface EntranceExamCandidateSubmitResult {
+  attemptId: number;
+  answerCount: number;
+  gradingRoundCount: number;
+  gradingStatus: 'PENDING';
+  submittedAt: string;
+}
+export interface EntranceExamCandidateCancelResult {
+  attemptId: number;
+  cancelledAt: string;
+}
 export interface EntranceExamApi {
+  getEntranceExamCandidateCurrent(projectId: number): Promise<EntranceExamCandidateCurrent>;
+  enterEntranceExam(projectId: number): Promise<EntranceExamCandidatePaper>;
+  submitEntranceExam(
+    input: EntranceExamCandidateSubmitInput,
+  ): Promise<EntranceExamCandidateSubmitResult>;
+  cancelEntranceExam(
+    input: EntranceExamCandidateAttemptInput,
+  ): Promise<EntranceExamCandidateCancelResult>;
   getEntranceExamManagement(projectId: number): Promise<EntranceExamManagement>;
   listEntranceExamReviewers(projectId: number, keyword?: string): Promise<EntranceExamReviewer[]>;
   getEntranceExamConfiguration(input: EntranceExamLocator): Promise<EntranceExamConfiguration>;

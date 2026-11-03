@@ -24,6 +24,7 @@ export function StrategistExamFiles({
   user,
   onChange,
   purpose = 'exam',
+  role = 'PM',
 }: {
   label: string;
   files: ExamDraftFile[];
@@ -32,6 +33,7 @@ export function StrategistExamFiles({
   user: AuthUser;
   onChange: (update: (current: ExamDraftFile[]) => ExamDraftFile[]) => void;
   purpose?: 'project' | 'exam';
+  role?: 'PM' | 'EXPERT';
 }) {
   const cache = useQueryClient();
   const mounted = useRef(false);
@@ -47,7 +49,7 @@ export function StrategistExamFiles({
   function current() {
     const session = cache.getQueryData<AuthUser | null>(SESSION_KEY);
     return (
-      mounted.current && session?.id === user.id && (session.selectedRole ?? session.role) === 'PM'
+      mounted.current && session?.id === user.id && (session.selectedRole ?? session.role) === role
     );
   }
   async function upload(item: ExamDraftFile) {
