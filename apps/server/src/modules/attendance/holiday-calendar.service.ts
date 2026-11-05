@@ -1,7 +1,7 @@
-import { AuthError } from '../auth/auth.error.js';
-import { monthDates } from './attendance-domain.js';
-import { bundledHolidayCalendars, type Holiday } from './holiday-calendar.data.js';
 import type { fetch as nodeFetch } from 'undici-types';
+import { AppError } from '../../common/errors.js';
+import { monthDates } from './attendance.domain.js';
+import { bundledHolidayCalendars, type Holiday } from './holiday-calendar.data.js';
 export class HolidayCalendarService {
   private readonly cache = new Map<number, { days: Holiday[]; loadedAt: number }>();
   private readonly loading = new Map<number, Promise<Holiday[]>>();
@@ -90,7 +90,7 @@ export class HolidayCalendarService {
           this.cache.set(year, { days, loadedAt: Date.now() });
           return days;
         }
-        throw new AuthError(503, 'HOLIDAY_UNAVAILABLE', '节假日数据源暂不可用，请稍后重试');
+        throw new AppError(503, 'HOLIDAY_UNAVAILABLE', '节假日数据源暂不可用，请稍后重试');
       } finally {
         this.loading.delete(year);
       }

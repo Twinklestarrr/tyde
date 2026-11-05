@@ -1,6 +1,6 @@
 import { createApp } from './application.js';
 import { readConfig } from './config/index.js';
-import { registerWeb } from './web.js';
+import { registerWeb } from './plugins/static-web.js';
 const config = readConfig();
 const app = await createApp(config);
 await registerWeb(app);

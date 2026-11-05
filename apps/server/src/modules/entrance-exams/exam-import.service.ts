@@ -1,16 +1,12 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { uploadPolicy, validateUpload } from '../files/file-validation.js';
 import { FileService } from '../files/file.service.js';
-import { validateUpload, uploadPolicy } from '../files/file-validation.js';
 import { requireExamManager } from './exam-access.js';
-import {
-  parseExamText,
-  parseExamExcel,
-  EXAM_SOURCE_LIMIT,
-  importBad,
-} from './exam-import.parser.js';
 import type { ExamFileInput } from './exam-config.types.js';
+import { EXAM_SOURCE_LIMIT, importBad } from './exam-import.domain.js';
+import { parseExamExcel, parseExamText } from './exam-import.parser.js';
 export interface ExamAttachmentRef {
   name: string;
   objectKey: string;
@@ -41,7 +37,7 @@ export class ExamImportService {
       isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
     });
     if (hasUrl)
-      throw new AuthError(
+      throw new AppError(
         503,
         'SERVICE_UNAVAILABLE',
         '远程文档导入尚未配置可用来源，请使用XLS/XLSX/TXT文件',

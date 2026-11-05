@@ -1,16 +1,16 @@
-import { projectDetailData, projectDetailInclude, displayName } from './project-detail.js';
-import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient, type Project, type ProjectCategory } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import type { FileRegistryService } from '../files/file-registry.service.js';
-import type { ProjectSaveInput } from './project-creation.types.js';
-import { resolveCurrentRequester } from './project-requester.js';
 import { syncProjectAttachments } from './project-attachments.js';
+import type { ProjectSaveInput } from './project-creation.types.js';
+import { displayName, projectDetailData, projectDetailInclude } from './project-detail.js';
+import { resolveCurrentRequester } from './project-requester.js';
 import { parseProjectTime, projectTime } from './project-time.js';
 
-const bad = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
-const conflict = (message: string) => new AuthError(409, 'DUPLICATE', message);
+const bad = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
+const conflict = (message: string) => new AppError(409, 'DUPLICATE', message);
 const text = (value?: string | null) => value?.trim() || null;
 const draftWhere = (uid: string) => ({ createdBy: uid, status: 'DRAFT', deleted: false });
 

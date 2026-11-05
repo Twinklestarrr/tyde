@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
 export interface ImportAsset {
   name: string;
   bytes?: Buffer;
@@ -8,7 +8,7 @@ export interface ImportCell {
   text: string;
   assets: ImportAsset[];
 }
-const bad = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
+const bad = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
 function xml(files: Map<string, Buffer>, name: string) {
   const value = files.get(name)?.toString('utf8');
   if (!value || /<!DOCTYPE|<!ENTITY/i.test(value)) throw bad('Excel图片来源XML无效');

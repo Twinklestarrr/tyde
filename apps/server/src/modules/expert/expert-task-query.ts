@@ -1,21 +1,19 @@
+import { Prisma } from '@prisma/client';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { qualifiedForEntry } from '../personnel/personnel-entry.domain.js';
+import { memberInclude } from '../personnel/personnel.types.js';
+import { displayName } from '../projects/project-detail.js';
+import { projectTime } from '../projects/project-time.js';
 import { ordinaryExamTask } from './expert-exam-task.js';
 import { expertOutputTask } from './expert-output-task.js';
 import { canReportExpertOutput, hasReportedExpertOutputToday } from './expert-report-capability.js';
+import { type ExpertTaskQuery } from './expert-task.types.js';
 import { queryTransferTasks } from './expert-transfer-query.js';
-import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
-import { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
-import { displayName } from '../projects/project-detail.js';
-import { projectTime } from '../projects/project-time.js';
 
-export interface ExpertTaskQuery {
-  keyword?: string | null;
-  acceptanceStatus?: string | null;
-  status?: string | null;
-}
 const statuses = ['PENDING_ACCEPTANCE', 'ACCEPTED', 'REJECTED', 'CANCELLED', 'REPLACED'];
+
 export function validateTaskQuery(query: ExpertTaskQuery) {
   if (
     (query.keyword != null && (typeof query.keyword !== 'string' || query.keyword.length > 100)) ||
@@ -24,7 +22,7 @@ export function validateTaskQuery(query: ExpertTaskQuery) {
       query.status != null &&
       query.acceptanceStatus !== query.status)
   )
-    throw new AuthError(400, 'VALIDATION_ERROR', '关键字或接单状态参数无效，别名状态不得冲突');
+    throw new AppError(400, 'VALIDATION_ERROR', '关键字或接单状态参数无效，别名状态不得冲突');
 }
 
 /** 聚合真实接单、成员及报量权限；读取不修复快照或任务轮次。 */

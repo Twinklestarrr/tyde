@@ -1,6 +1,6 @@
-import { AuthError } from '../auth/auth.error.js';
-import { parseDate } from '../attendance/attendance-domain.js';
-import { todayText } from './personnel-domain.js';
+import { AppError } from '../../common/errors.js';
+import { parseDate } from '../attendance/attendance.domain.js';
+import { todayText } from './personnel.domain.js';
 export interface MovementInput {
   projectId: number;
   memberIds: number[];
@@ -19,8 +19,8 @@ export const transferSteps = (organization: boolean) =>
         'TARGET_ORG_OWNER',
       ]
     : ['MEMBER_CONFIRM', 'TARGET_ENTRANCE_EXAM', 'TARGET_MANAGER'];
-export const movementInvalid = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
-export const movementConflict = (message: string) => new AuthError(409, 'DUPLICATE', message);
+export const movementInvalid = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
+export const movementConflict = (message: string) => new AppError(409, 'DUPLICATE', message);
 export function validateMovement(input: MovementInput, now: Date) {
   const id = (v: number) => Number.isInteger(v) && v > 0 && v <= 2147483647;
   if (

@@ -1,13 +1,13 @@
 import { Prisma } from '@prisma/client';
 import { parseProjectTime } from '../projects/project-time.js';
+import type { ImportAsset, ImportCell } from './exam-import-images.js';
 import {
   buildExamImport,
   cell,
   importBad,
   questionHeaders,
   type ParsedExam,
-} from './exam-import.parser.js';
-import type { ImportAsset, ImportCell } from './exam-import-images.js';
+} from './exam-import.domain.js';
 const aliases: Record<string, string> = {
   格式版本: 'formatVersion',
   考试名称: 'examName',

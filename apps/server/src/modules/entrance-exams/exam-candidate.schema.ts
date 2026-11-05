@@ -1,6 +1,6 @@
-import { examFileSchema } from './exam-config.schema.js';
 import type { FastifySchema } from 'fastify';
 import { resultSchema } from '../auth/auth.schema.js';
+import { examFileSchema } from './exam-config.schema.js';
 import { examFileSnapshots } from './exam-query.schema.js';
 const id = (description: string) => ({
   type: 'integer',

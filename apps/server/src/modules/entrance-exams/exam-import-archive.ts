@@ -1,7 +1,7 @@
 import { crc32, inflateRawSync } from 'node:zlib';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
 const bad = () =>
-  new AuthError(400, 'VALIDATION_ERROR', 'Excel压缩结构无效或超过1000条目/32MiB解压限制');
+  new AppError(400, 'VALIDATION_ERROR', 'Excel压缩结构无效或超过1000条目/32MiB解压限制');
 // 在SheetJS或图片读取之前，逐项限制实际解压量；不信任ZIP声明的原始大小。
 export function examArchive(source: Buffer): Map<string, Buffer> {
   try {
@@ -72,7 +72,7 @@ export function examArchive(source: Buffer): Map<string, Buffer> {
     if (at !== end) throw bad();
     return files;
   } catch (error) {
-    if (error instanceof AuthError) throw error;
+    if (error instanceof AppError) throw error;
     throw bad();
   }
 }

@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient, UserOrgRel } from '@prisma/client';
-import { lockOrganization } from './organization.service.js';
-import { businessDate } from './member.service.js';
+import { businessDate } from './member.domain.js';
+import { lockOrganization } from './organization.repository.js';
 export const shanghaiDay = (now: Date) =>
   new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
 

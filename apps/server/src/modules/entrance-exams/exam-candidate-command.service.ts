@@ -1,19 +1,17 @@
-import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
-import { tryConsumeTransferResult } from '../personnel/personnel-transfer-exam.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
 import type { FileRegistryService } from '../files/file-registry.service.js';
-import type { ExamFileInput } from './exam-config.types.js';
-import {
-  lockCandidate,
-  candidateContext,
-  validateCandidateProject,
-} from './exam-candidate.service.js';
-import { collectGradingTasks, reviewerIds } from './exam-grading-tasks.js';
-import { syncGradingTasks } from './exam-grading-command.service.js';
+import { tryConsumeTransferResult } from '../personnel/personnel-transfer-exam.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { projectTime } from '../projects/project-time.js';
+import { candidateContext } from './exam-candidate.access.js';
+import { lockCandidate } from './exam-candidate.repository.js';
+import { validateCandidateProject } from './exam-candidate.service.js';
+import type { ExamFileInput } from './exam-config.types.js';
+import { syncGradingTasks } from './exam-grading-command.service.js';
+import { collectGradingTasks, reviewerIds } from './exam-grading-task.repository.js';
 
 export interface CandidateAttemptInput {
   projectId: number;
@@ -27,7 +25,7 @@ export interface CandidateSubmitInput extends CandidateAttemptInput {
     answerFiles?: ExamFileInput[] | null;
   }[];
 }
-const bad = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
+const bad = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
 export class ExamCandidateCommandService {
   constructor(
     readonly db: PrismaClient,
@@ -49,7 +47,7 @@ export class ExamCandidateCommandService {
         exam: { projectId: input.projectId, deleted: false },
       },
     });
-    if (!attempt) throw new AuthError(404, 'NOT_FOUND', '应试记录不存在');
+    if (!attempt) throw new AppError(404, 'NOT_FOUND', '应试记录不存在');
     if (
       attempt.sourceBizType !== context.sourceBizType ||
       attempt.sourceBizId !== context.sourceBizId ||
@@ -57,10 +55,10 @@ export class ExamCandidateCommandService {
       attempt.organizationId !== context.organizationId ||
       attempt.userOrgRelId !== (relation?.id ?? null)
     )
-      throw new AuthError(403, 'FORBIDDEN', '应试记录绑定的接单身份已失效');
+      throw new AppError(403, 'FORBIDDEN', '应试记录绑定的接单身份已失效');
     if (project.currentNodeCode === 'COMPLETED') throw bad('项目已结项');
     if (attempt.cancelledAt) throw bad('已取消并离场，不可再次操作');
-    if (attempt.submittedAt) throw new AuthError(409, 'CONFLICT', '答卷已提交，不可重复操作');
+    if (attempt.submittedAt) throw new AppError(409, 'CONFLICT', '答卷已提交，不可重复操作');
     if (attempt.finalResult !== 'PENDING') throw bad('应试记录已终结，不可重考');
     if (!attempt.enteredAt || !attempt.paperId || !attempt.examVersionId) throw bad('请先进入考试');
     return attempt as typeof attempt & { paperId: number; examVersionId: number };
@@ -90,7 +88,7 @@ export class ExamCandidateCommandService {
           orderBy: { roundNo: 'asc' },
         });
         if (!paper?.questions.length || !rounds.length)
-          throw new AuthError(500, 'INTERNAL_ERROR', '绑定试卷或判卷轮次异常');
+          throw new AppError(500, 'INTERNAL_ERROR', '绑定试卷或判卷轮次异常');
         const allowed = new Set(paper.questions.map((q) => q.id)),
           submitted = new Map<number, CandidateSubmitInput['answers'][number]>();
         for (const item of input.answers) {

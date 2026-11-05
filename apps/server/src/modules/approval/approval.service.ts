@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
 
 // 旧审批Service是查询/持久化内核，不包含通用条件表达式或多审批人执行器。
 export class ApprovalService {
@@ -51,11 +51,11 @@ export class ApprovalService {
     });
   }
 }
-export const approvalConflict = () => new AuthError(409, 'DUPLICATE', '审批已被处理，请刷新后重试');
+export const approvalConflict = () => new AppError(409, 'DUPLICATE', '审批已被处理，请刷新后重试');
 export async function lockFlow(tx: Prisma.TransactionClient, flowNo: string) {
   await tx.$queryRaw`SELECT "id" FROM "ApprovalFlow" WHERE "flowNo" = ${flowNo} FOR UPDATE`;
   const flow = await tx.approvalFlow.findUnique({ where: { flowNo } });
-  if (!flow) throw new AuthError(404, 'NOT_FOUND', '审批流程不存在');
+  if (!flow) throw new AppError(404, 'NOT_FOUND', '审批流程不存在');
   return flow;
 }
 // 只暴露追加入口；业务不得更新历史动作。顺序以内部自增id保证。

@@ -1,51 +1,52 @@
+import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
+import type { Config } from '../../config/index.js';
+import type { AuthService } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { validateTransport } from '../auth/security.js';
+import { AcceptanceService } from './acceptance.service.js';
+import {
+  type AcceptanceKey,
+  type AcceptanceReview,
+  type AcceptanceSubmit,
+} from './acceptance.types.js';
+import type {
+  ReportCorrect,
+  ReportQuery,
+  ReportReview,
+  ReportSave,
+} from './output-report.domain.js';
+import {
+  assigneesBody,
+  assigneesResponse,
+  correctBody,
+  nullReportResponse,
+  reportableBody,
+  reportableResponse,
+  reportsBody,
+  reportsResponse,
+  reviewBody,
+  saveBody,
+} from './output-report.schema.js';
+import { OutputReportService } from './output-report.service.js';
+import type { TaskInput, TaskQuery } from './production.domain.js';
+import {
+  createBody,
+  listBody,
+  listResponse,
+  membersBody,
+  membersResponse,
+  productionSchema,
+} from './production.schema.js';
+import { ProductionService } from './production.service.js';
+import * as qa from './quality-acceptance.schema.js';
 import {
   QualityService,
   type ProductionQuery,
   type QualityContext,
   type QualityInput,
 } from './quality.service.js';
-import {
-  AcceptanceService,
-  type AcceptanceKey,
-  type AcceptanceSubmit,
-  type AcceptanceReview,
-} from './acceptance.service.js';
-import * as qa from './quality-acceptance.schema.js';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { API_PREFIX } from '@tyde/shared';
-import type { Config } from '../../config/index.js';
-import type { AuthPrincipal, AuthService } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { validateTransport } from '../auth/security.js';
-import { ProductionService } from './production.service.js';
-import { OutputReportService } from './output-report.service.js';
-import type {
-  ReportQuery,
-  ReportSave,
-  ReportCorrect,
-  ReportReview,
-} from './output-report.domain.js';
-import {
-  reportableBody,
-  assigneesBody,
-  reportsBody,
-  saveBody,
-  correctBody,
-  reviewBody,
-  reportableResponse,
-  assigneesResponse,
-  reportsResponse,
-  nullReportResponse,
-} from './output-report.schema.js';
-import type { TaskQuery, TaskInput } from './production-domain.js';
-import {
-  productionSchema,
-  membersBody,
-  membersResponse,
-  createBody,
-  listBody,
-  listResponse,
-} from './production.schema.js';
 export async function productionRoutes(
   parent: FastifyInstance,
   service: ProductionService,
@@ -73,7 +74,7 @@ export async function productionRoutes(
           ...config.desktopOrigins,
         ]);
       } catch {
-        throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
+        throw new AppError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
       }
       const token =
         client === 'desktop'

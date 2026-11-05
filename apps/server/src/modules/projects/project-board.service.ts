@@ -1,14 +1,14 @@
-import { boardTrends, type BoardTrendsQuery } from './project-board-trends.js';
+import { Prisma, type PrismaClient } from '@prisma/client';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { boardProjects, type BoardProjectsQuery } from './project-board-projects.js';
 import { boardRisks } from './project-board-risks.js';
 import { boardSubtasks } from './project-board-subtasks.js';
-import { boardProjects, type BoardProjectsQuery } from './project-board-projects.js';
-import { workbenchStatistics, type WorkbenchMode } from './project-workbench-statistics.js';
-import { Prisma, type PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
+import { boardTrends, type BoardTrendsQuery } from './project-board-trends.js';
 import { displayName } from './project-detail.js';
 import { projectTime } from './project-time.js';
+import { workbenchStatistics, type WorkbenchMode } from './project-workbench-statistics.js';
 
 // 基础详情与统计/列表的范围不同：候选策略官待接受时也可读取，且不限制发布状态。
 export function boardBasicScope(p: AuthPrincipal): Prisma.ProjectWhereInput {
@@ -24,7 +24,7 @@ export function boardBasicScope(p: AuthPrincipal): Prisma.ProjectWhereInput {
         },
       },
     };
-  if (p.role !== 'EXPERT') throw new AuthError(403, 'FORBIDDEN', '当前角色无权查看项目基础详情');
+  if (p.role !== 'EXPERT') throw new AppError(403, 'FORBIDDEN', '当前角色无权查看项目基础详情');
   const member = { userId: p.userId, joinStatus: { in: participatingStatuses } };
   return {
     expertAssignments: {
@@ -69,14 +69,14 @@ export class ProjectBoardService {
   }
   async statistics(mode: WorkbenchMode, principal: AuthPrincipal, now = new Date()) {
     if (!['TASK', 'BOARD'].includes(mode))
-      throw new AuthError(400, 'VALIDATION_ERROR', 'mode必须为TASK或BOARD');
+      throw new AppError(400, 'VALIDATION_ERROR', 'mode必须为TASK或BOARD');
     return this.db.$transaction((tx) => workbenchStatistics(tx, mode, principal, now), {
       isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
     });
   }
   async basicDetail(projectId: number, principal: AuthPrincipal) {
     if (!Number.isInteger(projectId) || projectId < 1 || projectId > 2147483647)
-      throw new AuthError(400, 'VALIDATION_ERROR', 'projectId必须为32位正整数');
+      throw new AppError(400, 'VALIDATION_ERROR', 'projectId必须为32位正整数');
     const scope = boardBasicScope(principal);
     return this.db.$transaction(
       async (tx) => {
@@ -87,7 +87,7 @@ export class ProjectBoardService {
             requester: { select: { displayName: true, realName: true } },
           },
         });
-        if (!p) throw new AuthError(403, 'FORBIDDEN', '项目不存在或当前用户无权查看项目基础详情');
+        if (!p) throw new AppError(403, 'FORBIDDEN', '项目不存在或当前用户无权查看项目基础详情');
         const first = p.categories.find((c) => c.categoryLevel === 1);
         const second = p.categories.find((c) => c.categoryLevel === 2);
         const third = p.categories.filter((c) => c.categoryLevel === 3);

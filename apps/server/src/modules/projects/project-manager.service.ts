@@ -1,18 +1,18 @@
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
-import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
-import { refreshMovementApprovers } from '../personnel/personnel-movement-approvers.js';
-import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
 import { ManagementService } from '../management/management.service.js';
-import { projectTime } from './project-time.js';
+import { refreshMovementApprovers } from '../personnel/personnel-movement-approvers.service.js';
+import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
 import {
   collectManagementTasks,
   managementTaskTypes,
   reconcileTaskRounds,
   taskEventFacts,
 } from './project-task-rounds.js';
+import { projectTime } from './project-time.js';
 
 export interface ManagerCandidate {
   status: 'CURRENT' | 'RECOMMENDED';
@@ -39,11 +39,11 @@ export class ProjectManagerService {
     principal: AuthPrincipal,
   ) {
     const project = await tx.project.findFirst({ where: { id: projectId, deleted: false } });
-    if (!project) throw new AuthError(404, 'NOT_FOUND', '项目不存在');
+    if (!project) throw new AppError(404, 'NOT_FOUND', '项目不存在');
     if (project.createdBy !== principal.uid)
-      throw new AuthError(403, 'FORBIDDEN', '只能操作自己创建的项目');
+      throw new AppError(403, 'FORBIDDEN', '只能操作自己创建的项目');
     if (project.status !== 'PUBLISHED')
-      throw new AuthError(400, 'VALIDATION_ERROR', '只有已发布项目可以招募策略官');
+      throw new AppError(400, 'VALIDATION_ERROR', '只有已发布项目可以招募策略官');
     return project;
   }
   private assigned(tx: Prisma.TransactionClient, projectId: number) {
@@ -99,7 +99,7 @@ export class ProjectManagerService {
           await this.candidates(tx, previous?.candidateUserId ?? null, null, input.candidateUserId)
         ).find((c) => c.status === 'RECOMMENDED');
         if (!candidate)
-          throw new AuthError(
+          throw new AppError(
             400,
             'VALIDATION_ERROR',
             '所选用户不是当前可招募的策略官，请刷新候选列表',
@@ -112,7 +112,7 @@ export class ProjectManagerService {
             data: { status: 'REPLACED', replacedAt: now, updatedBy: principal.uid },
           });
           if (replaced.count !== 1)
-            throw new AuthError(409, 'DUPLICATE', '项目策略官已发生变化，请刷新后重试');
+            throw new AppError(409, 'DUPLICATE', '项目策略官已发生变化，请刷新后重试');
         }
         const recruitmentType = previous ? 'REPLACEMENT' : 'INITIAL';
         const recruitment = await tx.projectManagerRecruitment.create({
@@ -141,7 +141,7 @@ export class ProjectManagerService {
             data: { currentNodeCode: 'PRODUCTION_PLAN', updatedBy: principal.uid },
           });
           if (updated.count !== 1)
-            throw new AuthError(409, 'DUPLICATE', '项目流程节点已发生变化，请刷新后重试');
+            throw new AppError(409, 'DUPLICATE', '项目流程节点已发生变化，请刷新后重试');
           updatedProject = { ...project, currentNodeCode: 'PRODUCTION_PLAN' };
         }
         await refreshMovementApprovers(tx, project.id, now, false);
@@ -178,7 +178,7 @@ export class ProjectManagerService {
         });
         const manager = (await this.candidates(tx, candidate.userId, null, candidate.userId))[0];
         if (!manager)
-          throw new AuthError(409, 'DUPLICATE', '生效策略官资料已发生变化，请刷新后重试');
+          throw new AppError(409, 'DUPLICATE', '生效策略官资料已发生变化，请刷新后重试');
         return {
           recruitmentId: recruitment.id,
           projectId: project.id,
@@ -194,7 +194,7 @@ export class ProjectManagerService {
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-        throw new AuthError(409, 'DUPLICATE', '项目策略官已发生变化，请刷新后重试');
+        throw new AppError(409, 'DUPLICATE', '项目策略官已发生变化，请刷新后重试');
       throw error;
     }
   }

@@ -1,70 +1,20 @@
-import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
-import { queryTransferTasks } from './expert-transfer-query.js';
-import { respondToAssignment, type RespondInput } from './expert-respond-command.js';
-import { queryExpertTasks, validateTaskQuery, type ExpertTaskQuery } from './expert-task-query.js';
-import { replaceProjectOwners, type OwnerChangeInput } from './expert-owner-command.js';
+import { Prisma, type PrismaClient } from '@prisma/client';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
 import {
-  Prisma,
-  type PrismaClient,
-  type EntranceExamAttempt,
-  type ProjectMember,
-} from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
-import {
+  displayName,
   projectDetailData,
   projectDetailInclude,
-  displayName,
 } from '../projects/project-detail.js';
 import { productionStageData } from '../projects/project-production-plan.service.js';
+import { admissionStatus, expertNodeNames, expertProgress } from './expert-assignment.domain.js';
+import { replaceProjectOwners, type OwnerChangeInput } from './expert-owner.service.js';
+import { respondToAssignment, type RespondInput } from './expert-respond.service.js';
+import { queryExpertTasks, validateTaskQuery } from './expert-task-query.js';
+import { type ExpertTaskQuery } from './expert-task.types.js';
+import { queryTransferTasks } from './expert-transfer-query.js';
 
-export function admissionStatus(
-  attempts: Pick<
-    EntranceExamAttempt,
-    'finalResult' | 'gradingStatus' | 'enteredAt' | 'submittedAt' | 'finalDecidedAt'
-  >[],
-) {
-  if (attempts.some((a) => a.finalResult === 'ADMITTED')) return 'PASSED';
-  if (
-    attempts.some(
-      (a) =>
-        !['ADMITTED', 'ELIMINATED'].includes(a.finalResult) &&
-        (['PENDING', 'IN_PROGRESS'].includes(a.gradingStatus) ||
-          (a.submittedAt && !a.finalDecidedAt)),
-    )
-  )
-    return 'PENDING';
-  return attempts.some((a) => a.enteredAt) ? 'NOT_PASSED' : 'NOT_EXAMINED';
-}
-export function expertProgress(
-  needExam: boolean,
-  passed: boolean,
-  member?: Pick<
-    ProjectMember,
-    'status' | 'entryDecision' | 'joinedAt' | 'standardTrainingConfirmedAt'
-  >,
-) {
-  if (needExam && !passed) return 'ENTRANCE_EXAM';
-  if (
-    member &&
-    ['ACTIVE', 'PENDING_TRANSFER', 'PENDING_EXIT'].includes(member.status) &&
-    member.entryDecision !== 'NO' &&
-    member.joinedAt &&
-    member.standardTrainingConfirmedAt
-  )
-    return 'PRODUCTION_TASK';
-  // 沿旧my-projects展示回退；不表示已完成准入或实际入项，也不授予后续动作。
-  return 'STANDARD_TRAINING';
-}
-export const expertNodeNames: Record<string, string> = {
-  ENTRANCE_EXAM: '准入考试',
-  STANDARD_TRAINING: '标准与培训',
-  PRODUCTION_TASK: '生产任务',
-  OUTPUT_DATA_REVIEW: '检查数据',
-  MEMBER_MOVEMENT_APPROVAL: '人员变动审批',
-  MEMBER_ENTRY_CONFIRM: '确认入项时间',
-};
 export class ExpertAssignmentService {
   constructor(readonly db: PrismaClient) {}
   setProjectOwners(input: OwnerChangeInput, principal: AuthPrincipal, legacy = false) {
@@ -79,7 +29,7 @@ export class ExpertAssignmentService {
     return respondToAssignment(this.db, input, principal);
   }
   private requireExpert(principal: AuthPrincipal) {
-    if (principal.role !== 'EXPERT') throw new AuthError(403, 'FORBIDDEN', '仅执行专家可访问');
+    if (principal.role !== 'EXPERT') throw new AppError(403, 'FORBIDDEN', '仅执行专家可访问');
   }
   private async memberships(tx: Prisma.TransactionClient, userId: string) {
     return tx.userOrgRel.findMany({
@@ -100,7 +50,7 @@ export class ExpertAssignmentService {
   async projectOwnerCandidates(assignmentId: number, principal: AuthPrincipal) {
     this.requireExpert(principal);
     if (!Number.isInteger(assignmentId) || assignmentId < 1 || assignmentId > 2147483647)
-      throw new AuthError(400, 'VALIDATION_ERROR', 'assignmentId必须为32位正整数');
+      throw new AppError(400, 'VALIDATION_ERROR', 'assignmentId必须为32位正整数');
     return this.db.$transaction(
       async (tx) => {
         const assignment = await tx.projectExpertAssignment.findFirst({
@@ -108,7 +58,7 @@ export class ExpertAssignmentService {
           include: { owners: true },
         });
         if (!assignment || !assignment.organizationId)
-          throw new AuthError(404, 'NOT_FOUND', '组织执行专家任务不存在');
+          throw new AppError(404, 'NOT_FOUND', '组织执行专家任务不存在');
         const owner = await tx.userOrgRel.findFirst({
           where: {
             orgId: assignment.organizationId,
@@ -118,7 +68,7 @@ export class ExpertAssignmentService {
             organization: { deleted: false },
           },
         });
-        if (!owner) throw new AuthError(403, 'FORBIDDEN', '只有该组织主管可以执行此操作');
+        if (!owner) throw new AppError(403, 'FORBIDDEN', '只有该组织主管可以执行此操作');
         const members = await tx.userOrgRel.findMany({
           where: {
             orgId: assignment.organizationId,
@@ -153,7 +103,7 @@ export class ExpertAssignmentService {
   async myProjects(keyword: string | undefined, principal: AuthPrincipal) {
     this.requireExpert(principal);
     if (keyword && keyword.length > 100)
-      throw new AuthError(400, 'VALIDATION_ERROR', 'keyword长度不能超过100');
+      throw new AppError(400, 'VALIDATION_ERROR', 'keyword长度不能超过100');
     return this.db.$transaction(
       async (tx) => {
         const rels = await this.memberships(tx, principal.userId);
@@ -332,7 +282,7 @@ export class ExpertAssignmentService {
     return this.db.$transaction(
       async (tx) => {
         if ((assignmentId == null) === (movementId == null))
-          throw new AuthError(400, 'VALIDATION_ERROR', 'assignmentId与movementId须二选一');
+          throw new AppError(400, 'VALIDATION_ERROR', 'assignmentId与movementId须二选一');
         const transferCard =
           movementId == null
             ? null
@@ -357,22 +307,22 @@ export class ExpertAssignmentService {
             : await tx.projectExpertAssignment.findFirst({
                 where: { id: assignmentId, project: { deleted: false } },
               });
-        if (!assignment) throw new AuthError(404, 'NOT_FOUND', '执行专家任务不存在');
+        if (!assignment) throw new AppError(404, 'NOT_FOUND', '执行专家任务不存在');
         if (assignment.subjectType === 'INDIVIDUAL') {
           if (assignment.expertUserId !== principal.userId)
-            throw new AuthError(403, 'FORBIDDEN', '无权查看该个人执行专家任务');
+            throw new AppError(403, 'FORBIDDEN', '无权查看该个人执行专家任务');
         } else if (assignment.subjectType === 'ORGANIZATION') {
           const rel = (await this.memberships(tx, principal.userId)).find(
             (r) => r.orgId === assignment.organizationId,
           );
           if (!rel || (assignment.status !== 'ACCEPTED' && rel.position !== 'OWNER'))
-            throw new AuthError(403, 'FORBIDDEN', '无权查看该组织执行专家任务');
-        } else throw new AuthError(403, 'FORBIDDEN', '接单主体不支持');
+            throw new AppError(403, 'FORBIDDEN', '无权查看该组织执行专家任务');
+        } else throw new AppError(403, 'FORBIDDEN', '接单主体不支持');
         const project = await tx.project.findFirst({
           where: { id: assignment.projectId, deleted: false, status: 'PUBLISHED' },
           include: projectDetailInclude,
         });
-        if (!project) throw new AuthError(404, 'NOT_FOUND', '已发布项目不存在');
+        if (!project) throw new AppError(404, 'NOT_FOUND', '已发布项目不存在');
         const data = await projectDetailData(tx, project);
         const creator = await tx.user.findUnique({ where: { uid: project.createdBy } });
         const plan = await tx.projectProductionPlan.findUnique({
@@ -419,41 +369,4 @@ export class ExpertAssignmentService {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
   }
-}
-
-/** 与旧标准材料授权SQL一致；ACTIVE项目成员本身不授予附件权限。 */
-export async function canReadExpertProjectFile(
-  db: PrismaClient,
-  projectId: number,
-  userId: string,
-) {
-  const transferred = await db.projectMember.findMany({
-    where: {
-      projectId,
-      userId,
-      status: { in: ['ACTIVE', 'PENDING_EXIT', 'PENDING_TRANSFER'] },
-      joinedAt: { not: null },
-      leftAt: null,
-      admissionAttempt: { sourceBizType: 'PROJECT_MEMBER_TRANSFER' },
-    },
-    include: memberInclude,
-  });
-  if (transferred.some((m) => qualifiedForEntry(m, true))) return true;
-  const rows = await db.$queryRaw<{ allowed: boolean }[]>`SELECT EXISTS(
-    SELECT 1 FROM "ProjectExpertAssignment" a
-    LEFT JOIN "ProjectProductionPlan" plan ON plan."projectId"=a."projectId"
-    LEFT JOIN "UserOrgRel" rel ON rel."orgId"=a."organizationId" AND rel."userId"=${userId}::uuid
-      AND rel."joinStatus" IN (${Prisma.join(participatingStatuses)})
-    LEFT JOIN "Organization" org ON org."id"=rel."orgId" AND org."deleted"=false
-    WHERE a."projectId"=${projectId} AND a."status"='ACCEPTED'
-    AND ((a."subjectType"='INDIVIDUAL' AND a."expertUserId"=${userId}::uuid)
-      OR (a."subjectType"='ORGANIZATION' AND rel."id" IS NOT NULL AND org."id" IS NOT NULL))
-    AND (COALESCE(plan."needWrittenExam", false)=false
-      OR (a."subjectType"='ORGANIZATION' AND (rel."position"='OWNER'
-        OR EXISTS(SELECT 1 FROM "ProjectExpertAssignmentOwner" o WHERE o."assignmentId"=a."id" AND o."userId"=${userId}::uuid AND o."status"='ACTIVE')
-        OR (a."projectOwnerUserId"=${userId}::uuid AND NOT EXISTS(SELECT 1 FROM "ProjectExpertAssignmentOwner" o WHERE o."assignmentId"=a."id"))))
-      OR EXISTS(SELECT 1 FROM "EntranceExamAttempt" attempt JOIN "ProjectEntranceExam" exam ON exam."id"=attempt."examId" AND exam."deleted"=false
-        WHERE attempt."candidateUserId"=${userId}::uuid AND exam."projectId"=a."projectId" AND attempt."finalResult"='ADMITTED'))
-  ) AS allowed`;
-  return rows[0]?.allowed === true;
 }

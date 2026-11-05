@@ -1,31 +1,28 @@
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
-import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
-import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { personnelScope, memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
-import { lockPersonnel } from '../personnel/personnel.service.js';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
+import { personnelScope } from '../personnel/personnel-access.js';
+import { qualifiedForEntry } from '../personnel/personnel-entry.domain.js';
+import { lockPersonnel } from '../personnel/personnel.repository.js';
+import { memberInclude } from '../personnel/personnel.types.js';
 import { displayName } from '../projects/project-detail.js';
-import { projectTime } from '../projects/project-time.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import {
-  reconcileTaskRounds,
   collectManagementTasks,
   managementTaskTypes,
-  type TaskSnapshot,
+  reconcileTaskRounds,
 } from '../projects/project-task-rounds.js';
-import { validateTask, invalidTask, type TaskQuery, type TaskInput } from './production-domain.js';
-import { acceptanceReady } from './acceptance.service.js';
+import { projectTime } from '../projects/project-time.js';
+import { acceptanceReady } from './acceptance.domain.js';
 import { outputScope } from './output-report-access.js';
+import { invalidTask, validateTask, type TaskInput, type TaskQuery } from './production.domain.js';
+import { creationTasks, published } from './production.repository.js';
+
 const nameOf = (u: { displayName: string | null; realName: string | null; uid: string }) =>
   displayName(u.displayName ?? '', u.realName, u.uid);
-const published = async (tx: Prisma.TransactionClient, projectId: number) => {
-  const project = await tx.project.findFirst({
-    where: { id: projectId, deleted: false, status: 'PUBLISHED' },
-  });
-  if (!project) throw new AuthError(404, 'NOT_FOUND', '已发布项目不存在');
-  return project;
-};
+
 async function managerScope(
   tx: Prisma.TransactionClient,
   projectId: number,
@@ -33,9 +30,10 @@ async function managerScope(
   write = false,
 ) {
   await published(tx, projectId);
-  if (principal.role !== 'PM') throw new AuthError(403, 'FORBIDDEN', '请切换至PM角色');
+  if (principal.role !== 'PM') throw new AppError(403, 'FORBIDDEN', '请切换至PM角色');
   return personnelScope(tx, projectId, principal, write);
 }
+
 async function eligible(tx: Prisma.TransactionClient, projectId: number, now: Date) {
   const plan = await tx.projectProductionPlan.findUnique({ where: { projectId } });
   const members = await tx.projectMember.findMany({
@@ -44,34 +42,7 @@ async function eligible(tx: Prisma.TransactionClient, projectId: number, now: Da
   });
   return members.filter((m) => qualifiedForEntry(m, plan?.needWrittenExam ?? false));
 }
-// 本批只采集首次创建支线；验收和报量来源随后接入，不取消其他领域轮次。
-export async function creationTasks(
-  tx: Prisma.TransactionClient,
-  projectId: number,
-): Promise<TaskSnapshot> {
-  const project = await published(tx, projectId);
-  const manager = await tx.projectManagerRecruitment.findFirst({
-    where: { projectId, status: 'ASSIGNED' },
-    orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
-  });
-  if (!manager || project.currentNodeCode === 'COMPLETED') return { scopes: [], sources: [] };
-  const scope = {
-    userId: manager.candidateUserId,
-    role: 'PM' as const,
-    perspective: 'PROJECT_MANAGER',
-    currentNodeCode: project.currentNodeCode ?? 'PRODUCTION_TASK',
-    mainEligible: false,
-    boardVisible: true,
-  };
-  const count = await tx.projectSubtask.count({ where: { projectId } });
-  return {
-    scopes: [scope],
-    sources:
-      count || project.currentNodeCode !== 'PRODUCTION_TASK'
-        ? []
-        : [{ ...scope, taskType: 'SUBTASK_CREATE', sources: [`PROJECT:${projectId}`] }],
-  };
-}
+
 export class ProductionService {
   constructor(readonly db: PrismaClient) {}
   async members(query: TaskQuery, principal: AuthPrincipal, now = new Date()) {
@@ -117,14 +88,14 @@ export class ProductionService {
           await lockPersonnel(tx, input.projectId, ids, principal.userId);
           const scope = await managerScope(tx, input.projectId, principal, true);
           if (scope.project.currentNodeCode === 'COMPLETED')
-            throw new AuthError(409, 'DUPLICATE', '项目已结项');
+            throw new AppError(409, 'DUPLICATE', '项目已结项');
           if (!scope.project.quantityUnit?.trim()) throw invalidTask('项目量级单位未配置');
           if (
             await tx.projectSubtask.findUnique({
               where: { projectId_subtaskName: { projectId: input.projectId, subtaskName: name } },
             })
           )
-            throw new AuthError(409, 'DUPLICATE', '项目内子任务名称已存在');
+            throw new AppError(409, 'DUPLICATE', '项目内子任务名称已存在');
           const members = ids.length
             ? (await eligible(tx, input.projectId, now)).filter((m) => ids.includes(m.id))
             : [];
@@ -212,7 +183,7 @@ export class ProductionService {
       );
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-        throw new AuthError(409, 'DUPLICATE', '子任务名称或编号已存在');
+        throw new AppError(409, 'DUPLICATE', '子任务名称或编号已存在');
       throw error;
     }
   }

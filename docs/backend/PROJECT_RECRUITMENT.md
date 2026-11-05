@@ -45,7 +45,7 @@ API-056—060全部入口已接入，保留已实现待验收；058—060本批4
 以下命令仅供后续需要复验时使用，当前无需重跑。在tyde目录运行（仅`.env.test`专用且库名以`_test`结尾的数据库，会清表）：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^recruitment handler '
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t '^recruitment handler '
 ```
 
 第三批历史续做位置为058—060；当前058—060已接入，先复验下方第四批4项集成。无需新增迁移或重做前批7项。唯一逐接口状态和验收记录见06任务（历史外部记录 `backend-migration/06-training-recruitment/todoTask.md`）。
@@ -89,7 +89,7 @@ outbox仅持久化assignmentIds、项目及管理任务受众，保持PENDING；
 本批新增4项集成首次运行于17:13:17，4失败、184跳过（共188项，总5.73秒），全部在beforeEach因127.0.0.1:5432不可达，业务断言未执行；不能据此宣称SQL/并发/事务已验收，不撤销前批7项通过证据。未应用迁移或操作开发/部署库。保持06，先在本机tyde目录仅复验下列4项（命令只连接允许清表的.env.test专用_test库，会清表；无需新增迁移）：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^expert recruitment '
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t '^expert recruitment '
 ```
 
 覆盖真实统一候选/多组织/待激活/关键词/分页/权限、并发重复/下发/汇总/节点/任职失效、拒单跨项目/单次消费/历史/轮次/快照及批量失败/outbox故障回滚。真实HTTP、OSS、部署与完整兼容仍待验收，下一步以06唯一任务记录（历史外部记录 `backend-migration/06-training-recruitment/todoTask.md`）为准。
@@ -103,5 +103,5 @@ pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^e
 14项定向单测（17:25:15，总2.55秒）及服务端类型/变更ESLint/后端build通过，前批413单测证据保留。Agent17:25:08仅复验该1项仍停在beforeEach初始化不可达（187跳过，共188项，总2.68秒），修复后数据库断言尚未执行。保持06，无新迁移，不重复已过3项及前批7项；在tyde目录仅复验以下1项（仅.env.test允许清表的专用_test库，会清表）：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^expert recruitment candidates '
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t '^expert recruitment candidates '
 ```

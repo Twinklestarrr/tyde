@@ -1,20 +1,10 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import type { FileRegistryService } from '../files/file-registry.service.js';
-
-export const participatingStatuses = ['ACTIVE', 'EXIT_APPROVING', 'PENDING_LEAVE'];
-export interface OrganizationUpdateInput {
-  orgId: string;
-  description?: string | null;
-  logoUrl?: string | null;
-  logoUploadToken?: string | null;
-}
-
-// 后续成员写操作亦须先锁组织，再检查关系，统一组织内角色/人数/权限变更的锁顺序。
-export async function lockOrganization(tx: Prisma.TransactionClient, orgId: string) {
-  await tx.$queryRaw`SELECT "id" FROM "Organization" WHERE "id" = ${orgId}::uuid FOR UPDATE`;
-}
+import { participatingStatuses } from './organization.domain.js';
+import { lockOrganization } from './organization.repository.js';
+import { type OrganizationUpdateInput } from './organization.types.js';
 
 export class OrganizationService {
   constructor(
@@ -83,12 +73,12 @@ export class OrganizationService {
 
   async update(input: OrganizationUpdateInput, principal: AuthPrincipal) {
     if (input.logoUploadToken != null && input.logoUrl == null)
-      throw new AuthError(400, 'BAD_REQUEST', 'logoUploadToken必须与logoUrl一起提交');
+      throw new AppError(400, 'BAD_REQUEST', 'logoUploadToken必须与logoUrl一起提交');
     return this.db.$transaction(async (tx) => {
       await lockOrganization(tx, input.orgId);
       const membership = await this.requireManager(tx, input.orgId, principal.userId, true);
       if (membership.position !== 'OWNER')
-        throw new AuthError(403, 'FORBIDDEN', '仅组织主管可编辑组织基本资料');
+        throw new AppError(403, 'FORBIDDEN', '仅组织主管可编辑组织基本资料');
       await this.requireOrganization(tx, input.orgId);
       const logoUrl =
         input.logoUrl != null
@@ -131,15 +121,15 @@ export class OrganizationService {
       !membership ||
       !(activeOnly ? ['ACTIVE'] : participatingStatuses).includes(membership.joinStatus)
     )
-      throw new AuthError(403, 'FORBIDDEN', '当前用户不属于该组织');
+      throw new AppError(403, 'FORBIDDEN', '当前用户不属于该组织');
     if (!['OWNER', 'ADMIN'].includes(membership.position))
-      throw new AuthError(403, 'FORBIDDEN', '仅组织主管或管理员可查看组织工作台');
+      throw new AppError(403, 'FORBIDDEN', '仅组织主管或管理员可查看组织工作台');
     return membership;
   }
 
   private async requireOrganization(tx: Prisma.TransactionClient, orgId: string) {
     const organization = await tx.organization.findFirst({ where: { id: orgId, deleted: false } });
-    if (!organization) throw new AuthError(404, 'NOT_FOUND', '组织不存在');
+    if (!organization) throw new AppError(404, 'NOT_FOUND', '组织不存在');
     return organization;
   }
 }

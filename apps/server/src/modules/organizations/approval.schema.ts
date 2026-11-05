@@ -1,7 +1,7 @@
 import {
   attendanceFormProperties,
-  attendanceProcessFields,
   attendanceProcessExample,
+  attendanceProcessFields,
 } from '../attendance/attendance-application.schema.js';
 import { orgIdField } from './organization.schema.js';
 type Schema = Record<string, unknown>;

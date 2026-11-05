@@ -1,10 +1,10 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Prisma, PrismaClient, UploadedFile } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { FileConfig } from './file.config.js';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { FileConfig } from '../../config/files.js';
+import { validObjectKey, type ObjectStorage } from '../../infrastructure/storage/object-storage.js';
 import type { FileBizType, FileCategory } from './file.types.js';
 import { businesses } from './file.types.js';
-import { validObjectKey, type ObjectStorage } from './object-storage.js';
 
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
 type Tx = Prisma.TransactionClient;
@@ -61,27 +61,27 @@ export class FileRegistryService {
     ownerUid?: string,
   ) {
     if (!record || record.bizType !== bizType)
-      throw new AuthError(400, 'BAD_REQUEST', '上传记录不存在或业务类型不匹配');
+      throw new AppError(400, 'BAD_REQUEST', '上传记录不存在或业务类型不匹配');
     if (
       record.status !== 'UPLOADED' ||
       !record.expiresAt ||
       record.expiresAt.getTime() <= Date.now()
     )
-      throw new AuthError(409, 'DUPLICATE', '文件已被认领或上传凭证已过期');
+      throw new AppError(409, 'DUPLICATE', '文件已被认领或上传凭证已过期');
     if (ownerUid !== undefined && (!record.ownerUid || record.ownerUid !== ownerUid))
-      throw new AuthError(403, 'FORBIDDEN', '不能认领其他用户上传的文件');
-    if (!rawToken?.trim()) throw new AuthError(400, 'BAD_REQUEST', '附件上传凭证不能为空');
+      throw new AppError(403, 'FORBIDDEN', '不能认领其他用户上传的文件');
+    if (!rawToken?.trim()) throw new AppError(400, 'BAD_REQUEST', '附件上传凭证不能为空');
     const expected = Buffer.from(record.claimTokenHash, 'hex');
     const supplied = Buffer.from(tokenHash(rawToken), 'hex');
     if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied))
-      throw new AuthError(403, 'FORBIDDEN', '附件上传凭证无效');
+      throw new AppError(403, 'FORBIDDEN', '附件上传凭证无效');
     return record;
   }
 
   private async verifyObject(record: UploadedFile) {
     const metadata = await this.storage.head(record.objectKey);
     if (!metadata || metadata.size !== record.fileSize)
-      throw new AuthError(400, 'BAD_REQUEST', '上传文件不存在或大小校验失败，请重新上传');
+      throw new AppError(400, 'BAD_REQUEST', '上传文件不存在或大小校验失败，请重新上传');
   }
 
   /** 调用方必须传入业务事务；注册组织、消费验证码、写用户与文件认领一同提交/回滚。 */
@@ -144,7 +144,7 @@ export class FileRegistryService {
       try {
         url = new URL(value);
       } catch {
-        throw new AuthError(400, 'BAD_REQUEST', 'Logo图片地址格式不正确');
+        throw new AppError(400, 'BAD_REQUEST', 'Logo图片地址格式不正确');
       }
       const candidate = url.pathname.replace(/^\/(?:tyde\/)?/, '');
       if (candidate.startsWith('org-logo/')) {
@@ -176,7 +176,7 @@ export class FileRegistryService {
         });
       }
     } else if (token != null) {
-      throw new AuthError(400, 'BAD_REQUEST', 'Logo上传凭证必须与ORG_LOGO图片objectKey一起提交');
+      throw new AppError(400, 'BAD_REQUEST', 'Logo上传凭证必须与ORG_LOGO图片objectKey一起提交');
     }
     await tx.uploadedFile.updateMany({
       where: {
@@ -201,7 +201,7 @@ export class FileRegistryService {
       try {
         url = new URL(value);
       } catch {
-        throw new AuthError(400, 'BAD_REQUEST', '头像URL格式不正确');
+        throw new AppError(400, 'BAD_REQUEST', '头像URL格式不正确');
       }
       const candidate = url.pathname.replace(/^\/(?:tyde\/)?/, '');
       if (candidate.startsWith('avatar/')) {
@@ -237,7 +237,7 @@ export class FileRegistryService {
       }
       avatarUrl = this.storage.accessUrl(key, 2147483647);
     } else if (token != null) {
-      throw new AuthError(400, 'BAD_REQUEST', '头像上传凭证必须与AVATAR文件objectKey一起提交');
+      throw new AppError(400, 'BAD_REQUEST', '头像上传凭证必须与AVATAR文件objectKey一起提交');
     }
     await tx.uploadedFile.updateMany({
       where: {
@@ -283,7 +283,7 @@ export class FileRegistryService {
       record.claimedBizType !== 'ENTRANCE_EXAM_ATTACHMENT' ||
       record.claimedBizId !== examId
     )
-      throw new AuthError(400, 'BAD_REQUEST', '准入考试旧附件不存在或不属于当前考试');
+      throw new AppError(400, 'BAD_REQUEST', '准入考试旧附件不存在或不属于当前考试');
     return record;
   }
   async releaseProjectAttachment(tx: Tx, key: string, projectId: string) {
@@ -309,7 +309,7 @@ export class FileRegistryService {
         !record.ownerUid ||
         record.ownerUid !== ownerUid
       )
-        throw new AuthError(403, 'FORBIDDEN', '文件已被业务使用或无权删除');
+        throw new AppError(403, 'FORBIDDEN', '文件已被业务使用或无权删除');
       await this.storage.delete(record.objectKey);
       await tx.uploadedFile.update({
         where: { id: record.id },

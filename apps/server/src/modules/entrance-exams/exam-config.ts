@@ -1,9 +1,9 @@
 import { Prisma } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
 import { parseProjectTime } from '../projects/project-time.js';
 import type { ExamConfigInput } from './exam-config.types.js';
 const bad = (message: string): never => {
-  throw new AuthError(400, 'VALIDATION_ERROR', message);
+  throw new AppError(400, 'VALIDATION_ERROR', message);
 };
 export function examScore(value: number | null | undefined, label: string): Prisma.Decimal {
   if (typeof value !== 'number' || !Number.isFinite(value)) return bad(`${label}必须为正数`);

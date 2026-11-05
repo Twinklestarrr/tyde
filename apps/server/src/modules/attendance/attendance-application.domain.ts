@@ -1,7 +1,7 @@
 import type { ApprovalFlow, OrgAttendanceDaily, OrgMemberSchedule } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import { businessDate } from '../organizations/member.service.js';
-import { calendarDay, invalid, manualStatuses, parseDate } from './attendance-domain.js';
+import { AppError } from '../../common/errors.js';
+import { businessDate } from '../organizations/member.domain.js';
+import { calendarDay, invalid, manualStatuses, parseDate } from './attendance.domain.js';
 export const attendanceBusinessTypes = ['ATTENDANCE_LEAVE', 'ATTENDANCE_CORRECTION'];
 export const isAttendanceBusiness = (value: string) => attendanceBusinessTypes.includes(value);
 export const attendanceBusinessId = (userId: string, date: string) => `${userId}:${date}`;
@@ -26,7 +26,7 @@ export interface AttendanceForm extends AttendanceApplyInput {
   timezone: string;
 }
 export const applicationConflict = (message = '申请或考勤已发生变化，请刷新后重试') =>
-  new AuthError(409, 'DUPLICATE', message);
+  new AppError(409, 'DUPLICATE', message);
 export function validateApplication(input: AttendanceApplyInput, today: string) {
   parseDate(input.attendanceDate);
   if (!['LEAVE', 'CORRECTION'].includes(input.applicationType))
@@ -77,8 +77,7 @@ export function validateLeaveSchedule(
     throw invalid('请假时段必须位于当日排班时段内，按排班timezone解释');
 }
 export function readAttendanceForm(flow: ApprovalFlow): AttendanceForm {
-  const malformed = () =>
-    new AuthError(500, 'INVALID_FORM', '考勤申请表单快照不完整或与流程不匹配');
+  const malformed = () => new AppError(500, 'INVALID_FORM', '考勤申请表单快照不完整或与流程不匹配');
   const value = flow.formData;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw malformed();
   const numberOrNull = (v: unknown) => v === null || (Number.isInteger(v) && Number(v) >= 0);

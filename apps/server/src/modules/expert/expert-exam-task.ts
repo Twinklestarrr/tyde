@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
 
 /** 普通考试读取与仲裁共用真实身份、来源和绑定试卷门禁；只读。 */
 export async function ordinaryExamTask(
@@ -9,7 +9,7 @@ export async function ordinaryExamTask(
   now: Date,
 ) {
   try {
-    const { candidateContext } = await import('../entrance-exams/exam-candidate.service.js');
+    const { candidateContext } = await import('../entrance-exams/exam-candidate.access.js');
     const context = await candidateContext(tx, projectId, userId, true);
     // 转项由独立门禁按精确等待阶段采集，不能借普通接单/负责人视角复活。
     if (context.movement) return null;
@@ -76,7 +76,7 @@ export async function ordinaryExamTask(
     if (!exam?.currentVersion || exam.currentVersion.examId !== exam.id) return null;
     return { examId: exam.id, assignmentId: context.sourceBizId, sourceEventAt: exam.createdAt };
   } catch (error) {
-    if (!(error instanceof AuthError && [403, 404].includes(error.status))) throw error;
+    if (!(error instanceof AppError && [403, 404].includes(error.status))) throw error;
   }
   return null;
 }

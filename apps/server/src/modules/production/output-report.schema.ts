@@ -1,15 +1,15 @@
 import {
-  id,
-  text,
-  choice,
-  day,
-  quantity,
-  stamp,
-  object,
   array,
   base,
-  page,
+  choice,
+  day,
+  id,
   member,
+  object,
+  page,
+  quantity,
+  stamp,
+  text,
 } from './production.schema.js';
 export const reportableBody = {
   ...object('查询本人可报量的进行中子任务；无有效成员返回空数组，不支持代报目标参数。', {

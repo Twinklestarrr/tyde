@@ -1,4 +1,4 @@
-import type { Prisma, OrgMemberSchedule, OrgAttendanceDaily } from '@prisma/client';
+import type { OrgAttendanceDaily, OrgMemberSchedule, Prisma } from '@prisma/client';
 import { calculateClockDaily } from './attendance-clock.domain.js';
 // 有原始事件时以事件为唯一计算依据；迁移前仅有首末快照的历史日考勤保留原证据。
 export async function replayClockDaily(

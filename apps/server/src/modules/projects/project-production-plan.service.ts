@@ -4,17 +4,17 @@ import {
   type Project,
   type ProjectProductionStage,
 } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
 import { ManagementService } from '../management/management.service.js';
-import { projectTime } from './project-time.js';
 import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
 import {
   collectManagementTasks,
   managementTaskTypes,
   reconcileTaskRounds,
 } from './project-task-rounds.js';
+import { projectTime } from './project-time.js';
 
 export interface ProductionStageInput {
   stageName: string;
@@ -41,7 +41,7 @@ export interface ProductionPlanInput {
 // 独立上下文，避免默认20位精度在DECIMAL(30,4)产出乘加时提前舍入。
 const Decimal = Prisma.Decimal.clone({ precision: 60 });
 const invalid = (message: string): never => {
-  throw new AuthError(400, 'VALIDATION_ERROR', message);
+  throw new AppError(400, 'VALIDATION_ERROR', message);
 };
 const integer = (value: number, name: string) => {
   if (!Number.isInteger(value) || value <= 0 || value > 2147483647)
@@ -185,9 +185,9 @@ export class ProjectProductionPlanService {
     write: boolean,
   ) {
     const project = await tx.project.findFirst({ where: { id: projectId, deleted: false } });
-    if (!project) throw new AuthError(404, 'NOT_FOUND', '项目不存在');
+    if (!project) throw new AppError(404, 'NOT_FOUND', '项目不存在');
     if (project.status !== 'PUBLISHED')
-      throw new AuthError(
+      throw new AppError(
         write ? 400 : 404,
         write ? 'VALIDATION_ERROR' : 'NOT_FOUND',
         '只有已发布项目可以配置生产计划',
@@ -200,7 +200,7 @@ export class ProjectProductionPlanService {
       !primary &&
       (write || !assigned || assigned.expertRecruitmentHandlerUserId !== principal.userId)
     )
-      throw new AuthError(403, 'FORBIDDEN', '当前用户无权操作该项目生产计划');
+      throw new AppError(403, 'FORBIDDEN', '当前用户无权操作该项目生产计划');
     return { project, primary };
   }
   private response(project: Project, plan: Plan | null, primary: boolean) {
@@ -306,7 +306,7 @@ export class ProjectProductionPlanService {
           data: { currentNodeCode, updatedBy: principal.uid },
         });
         if (changed.count !== 1)
-          throw new AuthError(409, 'DUPLICATE', '项目已发生变化，请刷新后重试');
+          throw new AppError(409, 'DUPLICATE', '项目已发生变化，请刷新后重试');
         const updated = { ...project, currentNodeCode };
         const after = await collectManagementTasks(tx, updated);
         await reconcileTaskRounds(
@@ -328,7 +328,7 @@ export class ProjectProductionPlanService {
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-        throw new AuthError(409, 'DUPLICATE', '生产计划被并发确认，请刷新后重试');
+        throw new AppError(409, 'DUPLICATE', '生产计划被并发确认，请刷新后重试');
       throw error;
     }
   }

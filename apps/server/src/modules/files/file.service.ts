@@ -1,15 +1,15 @@
-import { canReadPerformanceFile } from '../personnel/personnel-records.service.js';
-import { canReadManagedExamFile } from '../entrance-exams/exam-file-access.js';
-import { canReadExpertProjectFile } from '../expert/expert-assignment.service.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { participatingStatuses } from '../organizations/organization.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { FileRegistryService } from './file-registry.service.js';
-import { businesses, categories, type FileUploadResponse } from './file.types.js';
-import { uploadPolicy, validateUpload, type UploadInput } from './file-validation.js';
-import { validObjectKey } from './object-storage.js';
+import { AppError } from '../../common/errors.js';
+import { validObjectKey } from '../../infrastructure/storage/object-storage.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { canReadManagedExamFile } from '../entrance-exams/exam-file-access.js';
+import { canReadExpertProjectFile } from '../expert/expert-assignment.access.js';
 import { ManagementService } from '../management/management.service.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { canReadPerformanceFile } from '../personnel/personnel-records.service.js';
+import { FileRegistryService } from './file-registry.service.js';
+import { uploadPolicy, validateUpload, type UploadInput } from './file-validation.js';
+import { businesses, categories, type FileUploadResponse } from './file.types.js';
 
 export class FileService {
   constructor(readonly registry: FileRegistryService) {}
@@ -30,7 +30,7 @@ export class FileService {
       ].includes(policy.bizType) &&
       !ownerUid
     )
-      throw new AuthError(401, 'UNAUTHORIZED', '头像、组织Logo及业务附件必须登录后上传');
+      throw new AppError(401, 'UNAUTHORIZED', '头像、组织Logo及业务附件必须登录后上传');
     const metadata = validateUpload(file, policy.category, this.registry.config.maxSize);
     const dateParts = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Shanghai',
@@ -85,13 +85,13 @@ export class FileService {
     const biz = Object.values(businesses).find((x) => key.startsWith(x.dir + '/'));
     const record = await this.registry.db.uploadedFile.findUnique({ where: { objectKey: key } });
     if (biz?.sensitive || record?.sensitiveFlag)
-      throw new AuthError(
+      throw new AppError(
         403,
         'FORBIDDEN',
         '敏感文件不支持直接获取访问链接，请通过文件查看接口访问',
       );
     if (!record || record.status === 'DELETED' || record.status === 'RELEASED')
-      throw new AuthError(404, 'NOT_FOUND', '文件不存在');
+      throw new AppError(404, 'NOT_FOUND', '文件不存在');
     const expire =
       seconds && seconds > 0
         ? seconds
@@ -101,15 +101,15 @@ export class FileService {
     return this.registry.storage.accessUrl(key, expire);
   }
   async open(key: string, principal: AuthPrincipal | null) {
-    if (!principal) throw new AuthError(403, 'FORBIDDEN', '无权访问该文件');
+    if (!principal) throw new AppError(403, 'FORBIDDEN', '无权访问该文件');
     const record = await this.registry.db.uploadedFile.findUnique({
       where: { objectKey: validObjectKey(key) },
     });
     if (!record || !['UPLOADED', 'CLAIMED'].includes(record.status))
-      throw new AuthError(403, 'FORBIDDEN', '无权访问该文件');
+      throw new AppError(403, 'FORBIDDEN', '无权访问该文件');
     if (record.bizType === 'MEMBER_PERFORMANCE_ATTACHMENT' && record.status === 'CLAIMED') {
       if (!(await canReadPerformanceFile(this.registry.db, record, principal)))
-        throw new AuthError(403, 'FORBIDDEN', '无权访问该成员表现附件');
+        throw new AppError(403, 'FORBIDDEN', '无权访问该成员表现附件');
       return this.registry.storage.open(record.objectKey);
     }
     const businessAttachment = ['PROJECT_ATTACHMENT', 'ENTRANCE_EXAM_ATTACHMENT'].includes(
@@ -129,7 +129,7 @@ export class FileService {
             record.objectKey,
           ))
         )
-          throw new AuthError(403, 'FORBIDDEN', '无权访问该准入考试附件');
+          throw new AppError(403, 'FORBIDDEN', '无权访问该准入考试附件');
         return this.registry.storage.open(record.objectKey);
       }
 
@@ -141,7 +141,7 @@ export class FileService {
         !Number.isSafeInteger(Number(record.claimedBizId)) ||
         Number(record.claimedBizId) > 2147483647
       )
-        throw new AuthError(403, 'FORBIDDEN', '无权访问该业务附件');
+        throw new AppError(403, 'FORBIDDEN', '无权访问该业务附件');
       const attachment = await this.registry.db.projectAttachment.findFirst({
         where: {
           objectKey: record.objectKey,
@@ -151,7 +151,7 @@ export class FileService {
         },
         select: { id: true, project: { select: { createdBy: true } } },
       });
-      if (!attachment) throw new AuthError(403, 'FORBIDDEN', '无权访问该项目附件');
+      if (!attachment) throw new AppError(403, 'FORBIDDEN', '无权访问该项目附件');
       const management = new ManagementService(this.registry.db);
       if (
         attachment.project.createdBy === principal.uid &&
@@ -182,7 +182,7 @@ export class FileService {
       )
         return this.registry.storage.open(record.objectKey);
       // 考试附件读取仍由05/08接入；不凭ACTIVE项目成员或上传者身份放行。
-      throw new AuthError(403, 'FORBIDDEN', '无权访问该项目附件');
+      throw new AppError(403, 'FORBIDDEN', '无权访问该项目附件');
     }
     if (record.sensitiveFlag || businessAttachment) {
       let permitted = record.ownerUid === principal.uid;
@@ -201,7 +201,7 @@ export class FileService {
           }),
         );
       }
-      if (!permitted) throw new AuthError(403, 'FORBIDDEN', '无权访问该文件');
+      if (!permitted) throw new AppError(403, 'FORBIDDEN', '无权访问该文件');
     }
     const object = await this.registry.storage.open(record.objectKey);
     return object;

@@ -1,18 +1,19 @@
 import type { Prisma } from '@prisma/client';
-import { hasTransferExamTask } from './expert-transfer-exam.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { qualifiedForEntry } from '../personnel/personnel-entry.domain.js';
 import {
-  transferInclude,
-  requireTransferEligibility,
   currentApprovers,
-} from '../personnel/personnel-transfer.js';
-import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
+  requireTransferEligibility,
+} from '../personnel/personnel-transfer.access.js';
+import { transferInclude } from '../personnel/personnel-transfer.types.js';
+import { memberInclude } from '../personnel/personnel.types.js';
 import { displayName } from '../projects/project-detail.js';
 import { projectTime } from '../projects/project-time.js';
-import type { ExpertTaskQuery } from './expert-task-query.js';
 import { expertOutputTask } from './expert-output-task.js';
 import { canReportExpertOutput, hasReportedExpertOutputToday } from './expert-report-capability.js';
+import type { ExpertTaskQuery } from './expert-task.types.js';
+import { hasTransferExamTask } from './expert-transfer-exam.js';
 
 export async function queryTransferTasks(
   tx: Prisma.TransactionClient,
@@ -92,7 +93,7 @@ export async function queryTransferTasks(
       try {
         await requireTransferEligibility(tx, m);
       } catch (error) {
-        if (error instanceof AuthError) continue;
+        if (error instanceof AppError) continue;
         throw error;
       }
       if (m.status !== 'PROCESSING' || m.flow?.status !== 'PENDING') continue;

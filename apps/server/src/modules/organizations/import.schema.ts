@@ -1,5 +1,5 @@
-import { orgIdField, organizationSchema } from './organization.schema.js';
 import { resultSchema } from '../auth/auth.schema.js';
+import { orgIdField, organizationSchema } from './organization.schema.js';
 type Schema = Record<string, unknown>;
 const orgId = '00000000-0000-4000-8000-000000000002';
 const memberId = '00000000-0000-4000-8000-000000000003';

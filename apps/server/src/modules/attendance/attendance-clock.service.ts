@@ -1,15 +1,13 @@
-import { createHash } from 'node:crypto';
 import {
   Prisma,
-  type PrismaClient,
   type AttendanceClockEvent,
   type OrgAttendanceDaily,
+  type PrismaClient,
 } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { lockOrganization } from '../organizations/organization.service.js';
-import { AttendanceService } from './attendance.service.js';
-import { dateText, parseDate, wallTime, invalid, conflict } from './attendance-domain.js';
+import { createHash } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { lockOrganization } from '../organizations/organization.repository.js';
 import {
   calculateClockDaily,
   clockDecision,
@@ -18,6 +16,8 @@ import {
   eventBounds,
   type ClockInput,
 } from './attendance-clock.domain.js';
+import { conflict, dateText, invalid, parseDate, wallTime } from './attendance.domain.js';
+import { AttendanceService } from './attendance.service.js';
 
 export class AttendanceClockService {
   private readonly attendance: AttendanceService;
@@ -99,7 +99,7 @@ export class AttendanceClockService {
       const existing = await tx.attendanceClockEvent.findUnique({ where: { eventNo } });
       if (existing) {
         if (input.clockType && input.clockType !== existing.clockType)
-          throw new AuthError(409, 'DUPLICATE', 'Idempotency-Key已用于其他打卡请求');
+          throw new AppError(409, 'DUPLICATE', 'Idempotency-Key已用于其他打卡请求');
         const daily = await tx.orgAttendanceDaily.findUniqueOrThrow({
           where: {
             scopeKey_userId_attendanceDate: {
@@ -123,7 +123,7 @@ export class AttendanceClockService {
       const decision = clockDecision(schedule, events, now);
       if (!decision.canClock) throw invalid(decision.warning!);
       if (input.clockType && input.clockType !== decision.nextClockType)
-        throw new AuthError(409, 'DUPLICATE', '打卡状态已变化，请刷新后重试');
+        throw new AppError(409, 'DUPLICATE', '打卡状态已变化，请刷新后重试');
       const event = await tx.attendanceClockEvent.create({
         data: {
           ...scope,

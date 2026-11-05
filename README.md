@@ -130,7 +130,7 @@ Web 通过 `API_PROXY_TARGET` 切换后端，shell 优先于 `apps/web/.env.loca
 
 Electron main 的后端地址依次取 `TYDE_API_BASE_URL`、shell 或 `apps/web/.env.local` 中的 `API_PROXY_TARGET`、本地后端。桌面页面独立使用 `http://127.0.0.1:5174`，可与 Web 同时开发；切换后端配置后，发码、登录、注册及会话请求均访问所选后端。
 
-mock 不会发送短信或验证真实号码归属，请用约定的测试号码。默认生产模式禁止 mock，真实短信后续在 `apps/server/src/modules/auth/sms.ts` 接入。
+mock 不会发送短信或验证真实号码归属，请用约定的测试号码。默认生产模式禁止 mock，真实短信后续在 `apps/server/src/infrastructure/sms/sms-provider.ts` 接入。
 
 ## 个人中心与接口边界
 
@@ -194,7 +194,7 @@ main 已提供真实角色切换、`GET /users/me` 中的 `organizations` 数组
 
 `pnpm build:server` 会先把 Web 构建到 `apps/server/public`，再构建 API；`pnpm package:server` 生成包含 Web 静态资源的后端包。Fastify 直接提供根路径页面和 `/api/v1/*`，HTTPS 使用 `deploy/nginx-server.conf.example` 将全部请求代理至后端。
 
-Vercel 使用同一个后端项目统一发布页面与 API。Root Directory 保持 `apps/server`，其 `vercel.json` 调用根目录 `pnpm build:vercel`，构建时生成 Web 资源，不提交打包产物。独立后端与 Vercel 入口均通过 `web.ts` 提供静态页面。
+Vercel 使用同一个后端项目统一发布页面与 API。Root Directory 保持 `apps/server`，其 `vercel.json` 调用根目录 `pnpm build:vercel`，构建时生成 Web 资源，不提交打包产物。独立后端与 Vercel 入口均通过 `plugins/static-web.ts` 提供静态页面。
 
 首次配置需在控制台开启 Root Directory 之外源码访问、关闭 Skip unaffected projects，并将页面访问来源加入 `WEB_ORIGINS`。完整设置与验收见 [Vercel 合并部署说明](docs/DEPLOY_TEST.md#vercel-前后端合并部署)。统一托管沿用同一套认证接口和 Cookie；真实短信尚未接入，当前仅能在后端开发/测试模式联调。
 

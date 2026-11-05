@@ -1,13 +1,14 @@
 import multipart from '@fastify/multipart';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
 import type { Config } from '../../config/index.js';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthService, AuthPrincipal } from '../auth/auth.service.js';
+import type { AuthService } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { validateTransport } from '../auth/security.js';
-import { FileService } from './file.service.js';
 import type { UploadInput } from './file-validation.js';
 import { fileSchema, keyQuery, uploadBody, uploadResponse } from './file.schema.js';
+import { FileService } from './file.service.js';
 
 export async function fileRoutes(
   parent: FastifyInstance,
@@ -45,7 +46,7 @@ export async function fileRoutes(
             ...config.desktopOrigins,
           ]);
         } catch {
-          throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
+          throw new AppError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
         }
         const token =
           client === 'desktop'
@@ -54,7 +55,7 @@ export async function fileRoutes(
         identities.set(req, token ? await auth.authenticate(token, client) : null);
         const path = req.url.split('?')[0];
         if (path !== `${API_PREFIX}/files/view` && req.method !== 'POST' && !identities.get(req))
-          throw new AuthError(401, 'UNAUTHENTICATED', '请先登录');
+          throw new AppError(401, 'UNAUTHENTICATED', '请先登录');
       });
       for (const batch of [false, true]) {
         const path = `${API_PREFIX}/files/upload${batch ? '/batch' : ''}`;
@@ -82,18 +83,18 @@ export async function fileRoutes(
             },
             preValidation: async (req) => {
               if (!req.isMultipart())
-                throw new AuthError(400, 'BAD_REQUEST', '请使用 multipart/form-data');
+                throw new AppError(400, 'BAD_REQUEST', '请使用 multipart/form-data');
               const files: UploadInput[] = [],
                 body: Record<string, string | string[]> = {};
               const seen = new Set<string>();
               if (Number(req.headers['content-length']) > config.files.maxRequestSize)
-                throw new AuthError(413, 'PAYLOAD_TOO_LARGE', '上传请求超过大小限制');
+                throw new AppError(413, 'PAYLOAD_TOO_LARGE', '上传请求超过大小限制');
               let received = 0;
-              let sizeError: AuthError | undefined;
+              let sizeError: AppError | undefined;
               const count = (chunk: Buffer) => {
                 received += chunk.length;
                 if (received > config.files.maxRequestSize && !sizeError) {
-                  sizeError = new AuthError(413, 'PAYLOAD_TOO_LARGE', '上传请求超过大小限制');
+                  sizeError = new AppError(413, 'PAYLOAD_TOO_LARGE', '上传请求超过大小限制');
                   // multipart 直接消费 req.raw；通过它的 error 监听终止解析，不创建旁路流。
                   req.raw.emit('error', sizeError);
                 }
@@ -107,7 +108,7 @@ export async function fileRoutes(
                       part.fieldname !== (batch ? 'files' : 'file') ||
                       (!batch && files.length)
                     )
-                      throw new AuthError(400, 'BAD_REQUEST', '文件字段名或数量不正确');
+                      throw new AppError(400, 'BAD_REQUEST', '文件字段名或数量不正确');
                     const content = await part.toBuffer();
                     files.push({ fileName: part.filename, declaredType: part.mimetype, content });
                   } else {
@@ -118,7 +119,7 @@ export async function fileRoutes(
                       part.valueTruncated ||
                       part.fieldnameTruncated
                     )
-                      throw new AuthError(400, 'BAD_REQUEST', '表单字段不正确或重复');
+                      throw new AppError(400, 'BAD_REQUEST', '表单字段不正确或重复');
                     seen.add(part.fieldname);
                     const normalized = part.value.trim().toUpperCase();
                     if (normalized) body[part.fieldname] = normalized;
@@ -126,9 +127,9 @@ export async function fileRoutes(
                 }
               } catch (error) {
                 if (sizeError) throw sizeError;
-                if (error instanceof AuthError) throw error;
+                if (error instanceof AppError) throw error;
                 const code = (error as { code?: string }).code;
-                throw new AuthError(
+                throw new AppError(
                   code &&
                     [
                       'FST_REQ_FILE_TOO_LARGE',
@@ -145,7 +146,7 @@ export async function fileRoutes(
                 req.raw.off('data', count);
               }
               if (sizeError) throw sizeError;
-              if (!files.length) throw new AuthError(400, 'BAD_REQUEST', '上传文件不能为空');
+              if (!files.length) throw new AppError(400, 'BAD_REQUEST', '上传文件不能为空');
               contents.set(req, files);
               // 文件内容已由流解析保存，schema 校验逻辑表单，Swagger 保留 binary 字段。
               body[batch ? 'files' : 'file'] = batch
@@ -271,7 +272,7 @@ export async function fileRoutes(
             expire !== undefined &&
             (!Number.isInteger(expire) || expire < -2147483648 || expire > 2147483647)
           )
-            throw new AuthError(400, 'BAD_REQUEST', '有效期超出整数范围');
+            throw new AppError(400, 'BAD_REQUEST', '有效期超出整数范围');
           return {
             code: 200,
             message: '操作成功',

@@ -1,54 +1,20 @@
 import { Prisma, type PrismaClient, type UserOrgRel } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { lockOrganization, participatingStatuses } from './organization.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { businessDate } from './member.domain.js';
+import {
+  type MemberPositionInput,
+  type MemberQuery,
+  type MemberUpdateInput,
+} from './member.types.js';
+import { participatingStatuses } from './organization.domain.js';
+import { lockOrganization } from './organization.repository.js';
 
-export interface MemberQuery {
-  orgId: string;
-  keyword?: string | null;
-  joinedStartDate?: string | null;
-  joinedEndDate?: string | null;
-  leftStartDate?: string | null;
-  leftEndDate?: string | null;
-  employmentType?: string | null;
-  position?: string | null;
-  joinStatus?: string | null;
-  projectId?: number | null;
-  current?: number;
-  size?: number;
-}
-export interface MemberUpdateInput {
-  orgId: string;
-  memberId: string;
-  versionNo: number;
-  joinedAt?: string | null;
-  employmentType?: string | null;
-}
-export interface MemberPositionInput {
-  orgId: string;
-  memberId: string;
-  position: string;
-}
-const invalid = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
+const invalid = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
+
 const conflict = (message = '成员资料已被更新，请刷新后重试') =>
-  new AuthError(409, 'DUPLICATE', message);
+  new AppError(409, 'DUPLICATE', message);
 
-// 旧接口不含时区的日期/时间按业务时区上海解释；禁止 Date 自动进位非法日期。
-export function businessDate(value: string, dateOnly = false): Date {
-  const pattern = dateOnly
-    ? /^(\d{4})-(\d{2})-(\d{2})$/
-    : /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/;
-  const parts = pattern.exec(value);
-  if (!parts) throw invalid('日期格式不正确');
-  const [, y, m, d, h = '00', min = '00', sec = '00'] = parts;
-  const utc = new Date(`${y}-${m}-${d}T${h}:${min}:${sec}.000Z`);
-  if (
-    !Number.isFinite(utc.getTime()) ||
-    utc.toISOString().slice(0, 19) !== `${y}-${m}-${d}T${h}:${min}:${sec}`
-  )
-    throw invalid('日期值不合法');
-  return new Date(utc.getTime() - 8 * 3_600_000);
-}
 function dateFilter(start?: string | null, end?: string | null) {
   const from = start ? businessDate(start, true) : undefined;
   const to = end ? businessDate(end, true) : undefined;
@@ -165,7 +131,7 @@ export class MemberService {
       if (joinedAt && joinedAt > new Date()) throw invalid('入组时间不得晚于当前时间');
       const target = await this.member(tx, input.orgId, input.memberId);
       if (actor.position === 'ADMIN' && target.position !== 'MEMBER' && target.id !== actor.id)
-        throw new AuthError(403, 'FORBIDDEN', '管理员只能编辑普通成员或自己');
+        throw new AppError(403, 'FORBIDDEN', '管理员只能编辑普通成员或自己');
       const updated = await tx.userOrgRel.updateMany({
         where: { id: target.id, orgId: input.orgId, versionNo: input.versionNo },
         data: {
@@ -197,9 +163,9 @@ export class MemberService {
       if (target.joinStatus !== 'ACTIVE') throw invalid('仅在职成员可以变更组织角色');
       if (actor.position === 'ADMIN') {
         if (input.position === 'OWNER')
-          throw new AuthError(403, 'FORBIDDEN', '管理员不能变更主管角色');
+          throw new AppError(403, 'FORBIDDEN', '管理员不能变更主管角色');
         if (target.id !== actor.id && target.position !== 'MEMBER')
-          throw new AuthError(403, 'FORBIDDEN', '管理员只能变更普通成员或自己的角色');
+          throw new AppError(403, 'FORBIDDEN', '管理员只能变更普通成员或自己的角色');
       } else {
         const owner = await tx.userOrgRel.findFirst({
           where: { orgId: input.orgId, position: 'OWNER', joinStatus: 'ACTIVE' },
@@ -251,18 +217,18 @@ export class MemberService {
   private async manager(tx: Prisma.TransactionClient, orgId: string, userId: string) {
     const rel = await tx.userOrgRel.findUnique({ where: { userId_orgId: { userId, orgId } } });
     if (!rel || !participatingStatuses.includes(rel.joinStatus))
-      throw new AuthError(403, 'FORBIDDEN', '当前用户不属于该组织');
+      throw new AppError(403, 'FORBIDDEN', '当前用户不属于该组织');
     if (!['OWNER', 'ADMIN'].includes(rel.position))
-      throw new AuthError(403, 'FORBIDDEN', '仅组织主管或管理员可管理组织人员');
+      throw new AppError(403, 'FORBIDDEN', '仅组织主管或管理员可管理组织人员');
     return rel;
   }
   private async organization(tx: Prisma.TransactionClient, orgId: string) {
     if (!(await tx.organization.findFirst({ where: { id: orgId, deleted: false } })))
-      throw new AuthError(404, 'NOT_FOUND', '组织不存在');
+      throw new AppError(404, 'NOT_FOUND', '组织不存在');
   }
   private async member(tx: Prisma.TransactionClient, orgId: string, memberId: string) {
     const rel = await tx.userOrgRel.findFirst({ where: { id: memberId, orgId } });
-    if (!rel) throw new AuthError(404, 'NOT_FOUND', '组织成员不存在');
+    if (!rel) throw new AppError(404, 'NOT_FOUND', '组织成员不存在');
     return rel;
   }
 }

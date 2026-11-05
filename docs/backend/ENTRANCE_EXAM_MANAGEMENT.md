@@ -119,7 +119,7 @@ pnpm test:integration
 Agent未应用迁移；用户13:16:29复跑新增3项数据库验证全部通过（163跳过，总4.64秒，测试2.24秒），原RESTRICT断言已修正并验证具体外键与删除后完整事实不变。当前专用库第20所需结构及来源/删除保护已验证，迁移历史未另查，无需再次迁移或重复本批验收。以下为需要时复查命令（在`tyde/`）：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'grading detail'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'grading detail'
 # 若需全量回归（当前166项）：pnpm test:integration
 ```
 
@@ -180,7 +180,7 @@ correct/incorrect是可控全题正确/错误判定，不分析真实答案内�
 
 ```sh
 pnpm db:deploy:test
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'auto grading'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'auto grading'
 ```
 
 第一条不清库，第二条会清空专用`_test`库，177项中只跑本批6项。15:48:06本轮尝试全部停在初始化连接127.0.0.1:5432，未进入业务断言；前批049的5项通过仍有效，不重跑。382项单测、类型/变更ESLint/后端build已通过；真实HTTP写链路/部署未验收；本批6项后续已通过，05基础交接06，跨领域卡片重算/转项审批/实际投递仍归04/12/14，08交卷另归原任务，不接真实Agent。

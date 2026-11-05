@@ -1,7 +1,7 @@
 import type { FastifySchema } from 'fastify';
 import { resultSchema } from '../auth/auth.schema.js';
-import { handlerBody } from './project-recruitment-handler.schema.js';
 import { productionPlanQuery } from './project-production-plan.schema.js';
+import { handlerBody } from './project-recruitment-handler.schema.js';
 const integer = (description: string) => ({
   type: 'integer',
   minimum: 1,

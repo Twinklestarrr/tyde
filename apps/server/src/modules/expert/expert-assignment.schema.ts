@@ -1,10 +1,10 @@
 import { authSchema, resultSchema } from '../auth/auth.schema.js';
+import { productionPlanResponse } from '../projects/project-production-plan.schema.js';
 import {
+  projectProductionRequirements,
   projectPublishedDetail,
   projectPublishedExample,
-  projectProductionRequirements,
 } from '../projects/project-query.schema.js';
-import { productionPlanResponse } from '../projects/project-production-plan.schema.js';
 const text = (description: string, nullable = false) => ({
   type: 'string',
   description,

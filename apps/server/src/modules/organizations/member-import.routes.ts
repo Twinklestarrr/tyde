@@ -1,13 +1,13 @@
 import multipart from '@fastify/multipart';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
-import type { Config } from '../../config/index.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
 import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
+import type { Config } from '../../config/index.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { importSchema, templateSchema } from './import.schema.js';
 import { IMPORT_MAX_BYTES, template, type ImportFile } from './member-import.parser.js';
 import { MemberImportService } from './member-import.service.js';
-import { importSchema, templateSchema } from './import.schema.js';
 export async function memberImportRoutes(
   app: FastifyInstance,
   db: PrismaClient,
@@ -50,15 +50,15 @@ export async function memberImportRoutes(
       schema: importSchema(),
       preValidation: async (req) => {
         if (!req.isMultipart())
-          throw new AuthError(400, 'VALIDATION_ERROR', '请使用multipart/form-data');
+          throw new AppError(400, 'VALIDATION_ERROR', '请使用multipart/form-data');
         const body: Body = {},
           seen = new Set<string>();
         let total = 0,
-          sizeError: AuthError | undefined;
+          sizeError: AppError | undefined;
         const count = (chunk: Buffer) => {
           total += chunk.length;
           if (total > config.files.maxRequestSize && !sizeError) {
-            sizeError = new AuthError(413, 'PAYLOAD_TOO_LARGE', '导入请求超过总大小限制');
+            sizeError = new AppError(413, 'PAYLOAD_TOO_LARGE', '导入请求超过总大小限制');
             req.raw.emit('error', sizeError);
           }
         };
@@ -66,11 +66,11 @@ export async function memberImportRoutes(
         try {
           for await (const part of req.parts()) {
             if (seen.has(part.fieldname))
-              throw new AuthError(400, 'VALIDATION_ERROR', '表单字段重复');
+              throw new AppError(400, 'VALIDATION_ERROR', '表单字段重复');
             seen.add(part.fieldname);
             if (part.type === 'file') {
               if (part.fieldname !== 'csvFile')
-                throw new AuthError(400, 'VALIDATION_ERROR', '文件字段名必须为csvFile');
+                throw new AppError(400, 'VALIDATION_ERROR', '文件字段名必须为csvFile');
               const bytes = await part.toBuffer();
               files.set(req, { fileName: part.filename, contentType: part.mimetype, bytes });
               body.csvFile = part.filename;
@@ -81,15 +81,15 @@ export async function memberImportRoutes(
                 part.valueTruncated ||
                 part.fieldnameTruncated
               )
-                throw new AuthError(400, 'VALIDATION_ERROR', '表单字段不正确或超过限制');
+                throw new AppError(400, 'VALIDATION_ERROR', '表单字段不正确或超过限制');
               body[part.fieldname as 'orgId' | 'memberText'] = part.value;
             }
           }
         } catch (error) {
           if (sizeError) throw sizeError;
-          if (error instanceof AuthError) throw error;
+          if (error instanceof AppError) throw error;
           const code = (error as { code?: string }).code;
-          throw new AuthError(
+          throw new AppError(
             code &&
               [
                 'FST_REQ_FILE_TOO_LARGE',
@@ -111,10 +111,10 @@ export async function memberImportRoutes(
             req.query[key] !== undefined &&
             body[key] !== req.query[key]
           )
-            throw new AuthError(400, 'VALIDATION_ERROR', '查询和表单同名字段冲突');
+            throw new AppError(400, 'VALIDATION_ERROR', '查询和表单同名字段冲突');
           if (body[key] === undefined && req.query[key] !== undefined) body[key] = req.query[key];
         }
-        if (!body.orgId) throw new AuthError(400, 'VALIDATION_ERROR', 'orgId不能为空');
+        if (!body.orgId) throw new AppError(400, 'VALIDATION_ERROR', 'orgId不能为空');
         req.body = body;
       },
     },

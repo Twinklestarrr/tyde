@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { outputScope, reportActions } from '../production/output-report-access.js';
 
 // 读取实时核查/修正权限，不信任历史卡片；同账号管理多个组织时按当前卡片组织收窄。
@@ -15,7 +15,7 @@ export async function expertOutputTask(
   try {
     scope = await outputScope(tx, projectId, principal, now);
   } catch (error) {
-    if (error instanceof AuthError && [403, 404].includes(error.status)) return null;
+    if (error instanceof AppError && [403, 404].includes(error.status)) return null;
     throw error;
   }
   if (scope.project.currentNodeCode === 'COMPLETED') return null;

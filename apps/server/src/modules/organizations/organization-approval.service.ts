@@ -1,54 +1,43 @@
-import { AttendanceApplicationService } from '../attendance/attendance-application.service.js';
-import { isAttendanceBusiness } from '../attendance/attendance-application.domain.js';
+import { Prisma, type ApprovalFlow, type PrismaClient, type User } from '@prisma/client';
 import { createHash } from 'node:crypto';
-import { Prisma, type PrismaClient, type ApprovalFlow, type User } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
 import {
   appendAction,
   approvalConflict,
   finishPending,
   lockFlow,
 } from '../approval/approval.service.js';
-import { lockOrganization, participatingStatuses } from './organization.service.js';
-import { businessDate } from './member.service.js';
+import { isAttendanceBusiness } from '../attendance/attendance-application.domain.js';
+import { AttendanceApplicationService } from '../attendance/attendance-application.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { recordDeparture, shanghaiDay } from './departure.service.js';
-export interface ExitInput {
-  orgId: string;
-  memberId?: string | null;
-  reason: string;
-  plannedLeaveDate: string;
-}
-export interface ApprovalQuery {
-  orgId: string;
-  businessType?: string | null;
-  current?: number;
-  size?: number;
-  status?: string | null;
-  startAt?: string | null;
-  endAt?: string | null;
-}
-export interface ProcessInput {
-  orgId: string;
-  flowNo: string;
-  nodeId: string;
-  flowVersionNo: number;
-  nodeVersionNo: number;
-  action: 'APPROVE' | 'REJECT';
-  actionComment?: string | null;
-}
-const invalid = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
-const forbidden = (message: string) => new AuthError(403, 'FORBIDDEN', message);
-const malformed = (message: string) => new AuthError(500, 'INVALID_FORM', message);
+import { businessDate } from './member.domain.js';
+import {
+  type ApprovalQuery,
+  type ExitInput,
+  type ProcessInput,
+} from './organization-approval.types.js';
+import { participatingStatuses } from './organization.domain.js';
+import { lockOrganization } from './organization.repository.js';
+
+const invalid = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
+
+const forbidden = (message: string) => new AppError(403, 'FORBIDDEN', message);
+
+const malformed = (message: string) => new AppError(500, 'INVALID_FORM', message);
+
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const displayName = (user: Pick<User, 'displayName' | 'realName' | 'uid'>) =>
   user.displayName?.trim() && user.realName?.trim()
     ? `${user.displayName.trim()}(${user.realName.trim()})`
     : user.displayName?.trim() || user.realName?.trim() || user.uid;
+
 const form = (flow: ApprovalFlow) =>
   (flow.formData && typeof flow.formData === 'object' && !Array.isArray(flow.formData)
     ? flow.formData
     : {}) as Record<string, Prisma.JsonValue>;
+
 export function exitFlowNo(orgId: string, userId: string, key: string) {
   return (
     'OMX' +
@@ -80,9 +69,9 @@ export class OrganizationApprovalService {
         where: { id: input.memberId ?? actor.id, orgId: input.orgId },
         include: { user: true },
       });
-      if (!target) throw new AuthError(404, 'NOT_FOUND', '组织成员不存在');
+      if (!target) throw new AppError(404, 'NOT_FOUND', '组织成员不存在');
       if (target.joinStatus !== 'ACTIVE')
-        throw new AuthError(409, 'DUPLICATE', '成员已处于退出或离职流程中');
+        throw new AppError(409, 'DUPLICATE', '成员已处于退出或离职流程中');
       if (target.position === 'OWNER') throw invalid('主管退出前必须先转让主管角色');
       const self = target.id === actor.id;
       if (actor.position === 'MEMBER' && !self) throw forbidden('普通成员只能为自己发起退出申请');
@@ -190,7 +179,7 @@ export class OrganizationApprovalService {
         throw invalid('审批流程单节点配置不正确');
       await tx.$queryRaw`SELECT "id" FROM "ApprovalNode" WHERE "id" = ${input.nodeId}::uuid FOR UPDATE`;
       const node = await tx.approvalNode.findUnique({ where: { id: input.nodeId } });
-      if (!node) throw new AuthError(404, 'NOT_FOUND', '审批节点不存在');
+      if (!node) throw new AppError(404, 'NOT_FOUND', '审批节点不存在');
       if (node.flowId !== flow.id || node.flowNo !== flow.flowNo)
         throw invalid('审批节点与流程不匹配');
       if (node.approverId !== principal.userId) throw forbidden('当前用户不是该节点审批人');
@@ -240,7 +229,7 @@ export class OrganizationApprovalService {
         },
       });
       if (changed.count !== 1)
-        throw new AuthError(409, 'DUPLICATE', '成员退出状态已变化，请刷新后重试');
+        throw new AppError(409, 'DUPLICATE', '成员退出状态已变化，请刷新后重试');
       await appendAction(tx, {
         flowId: flow.id,
         nodeId: node.id,
@@ -433,7 +422,7 @@ export class OrganizationApprovalService {
   }
   private async organization(tx: Prisma.TransactionClient, orgId: string) {
     const org = await tx.organization.findFirst({ where: { id: orgId, deleted: false } });
-    if (!org) throw new AuthError(404, 'NOT_FOUND', '组织不存在');
+    if (!org) throw new AppError(404, 'NOT_FOUND', '组织不存在');
     return org;
   }
 }

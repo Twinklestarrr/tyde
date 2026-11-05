@@ -1,27 +1,34 @@
-import { randomInt, randomUUID } from 'node:crypto';
 import {
   Prisma,
   PrismaClient,
-  type User,
   type Organization,
+  type User,
   type UserOrgRel,
 } from '@prisma/client';
-import { BUSINESS_ROLES, type BusinessRole } from '@tyde/shared';
 import type {
-  OrganizationCreateInput,
   AuthUser,
-  UserProfileUpdateInput,
-  NicknameCheckResult,
   LoginInput,
   LoginResponse,
-  SmsSendInput,
+  NicknameCheckResult,
+  OrganizationCreateInput,
+  PasswordResetInput,
   SmsLoginInput,
   SmsLoginResponse,
   SmsRegisterInput,
-  PasswordResetInput,
+  SmsSendInput,
+  UserProfileUpdateInput,
 } from '@tyde/shared';
+import { BUSINESS_ROLES, type BusinessRole } from '@tyde/shared';
+import { randomInt, randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
 import type { Config } from '../../config/index.js';
-import { AuthError } from './auth.error.js';
+import { hashPassword, verifyPassword } from '../../infrastructure/security/password.js';
+import { MockSmsProvider, type SmsProvider } from '../../infrastructure/sms/sms-provider.js';
+import { createObjectStorage } from '../../infrastructure/storage/object-storage.js';
+import { FileRegistryService } from '../files/file-registry.service.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { lockOrganization } from '../organizations/organization.repository.js';
+import { type AuthPrincipal, type ClientType } from './auth.types.js';
 import {
   codeDigest,
   digest,
@@ -29,19 +36,16 @@ import {
   MOCK_CODE,
   newToken,
   SESSION_DAYS,
-  type ClientType,
 } from './security.js';
-import { hashPassword, verifyPassword } from './password.js';
-import { MockSmsProvider, type SmsProvider } from './sms.js';
-import { FileRegistryService } from '../files/file-registry.service.js';
-import { lockOrganization, participatingStatuses } from '../organizations/organization.service.js';
-import { createObjectStorage } from '../files/object-storage.js';
+
 type Tx = Prisma.TransactionClient;
+
 type Profile = User & {
   memberships?: (UserOrgRel & { organization: Organization })[];
   assignmentOwners?: { assignment: { organizationId: string | null } }[];
   legacyOwnerAssignments?: { organizationId: string | null }[];
 };
+
 const profileInclude = {
   assignmentOwners: {
     where: {
@@ -64,22 +68,19 @@ const profileInclude = {
     include: { organization: true },
   },
 };
-// 服务端业务身份；角色只表示登录身份，业务权限和数据范围仍由各模块检查。
-export interface AuthPrincipal {
-  userId: string;
-  uid: string;
-  sessionId: string;
-  role: BusinessRole;
-  clientType: ClientType;
-}
-const invalid = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
-const unauthorized = () => new AuthError(401, 'UNAUTHENTICATED', '登录已过期，请重新登录');
+
+const invalid = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
+
+const unauthorized = () => new AppError(401, 'UNAUTHENTICATED', '登录已过期，请重新登录');
+
 function phoneNumber(phone: string): string {
   return `+86${phone}`;
 }
+
 async function lock(tx: Tx, key: string) {
   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))::text`;
 }
+
 function publicUser(user: Profile, selectedRole: BusinessRole | null = null): AuthUser {
   const memberships = (user.memberships ?? []).filter(
     (rel) => participatingStatuses.includes(rel.joinStatus) && !rel.organization.deleted,
@@ -152,6 +153,7 @@ function publicUser(user: Profile, selectedRole: BusinessRole | null = null): Au
     }));
   return result;
 }
+
 export class AuthService {
   constructor(
     readonly db: PrismaClient,
@@ -180,7 +182,7 @@ export class AuthService {
       }
       return retry;
     });
-    if (limited) throw new AuthError(429, 'RATE_LIMITED', '操作过于频繁，请稍后重试', limited);
+    if (limited) throw new AppError(429, 'RATE_LIMITED', '操作过于频繁，请稍后重试', limited);
   }
   async sendCode(input: SmsSendInput, ip: string) {
     const phone = phoneNumber(input.phone);
@@ -199,7 +201,7 @@ export class AuthService {
         const wait = recent
           ? Math.ceil((recent.createdAt.getTime() + 60_000 - now.getTime()) / 1000)
           : 0;
-        if (wait > 0) return new AuthError(429, 'RATE_LIMITED', '请等待后重新获取验证码', wait);
+        if (wait > 0) return new AppError(429, 'RATE_LIMITED', '请等待后重新获取验证码', wait);
         const id = randomUUID();
         const code =
           this.sms.mode === 'mock' ? MOCK_CODE : String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -221,7 +223,7 @@ export class AuthService {
       },
       { timeout: 10_000 },
     );
-    if (result instanceof AuthError) throw result;
+    if (result instanceof AppError) throw result;
     return result;
   }
   private async consume(
@@ -229,7 +231,7 @@ export class AuthService {
     phone: string,
     scene: string,
     code: string,
-  ): Promise<AuthError | undefined> {
+  ): Promise<AppError | undefined> {
     const row = await tx.verificationChallenge.findFirst({
       where: { phoneE164: phone, purpose: scene },
       orderBy: { createdAt: 'desc' },
@@ -238,7 +240,7 @@ export class AuthService {
     if (!row || row.expiresAt <= now || row.consumedAt || row.invalidatedAt)
       return invalid('验证码错误或已过期');
     if (row.failedAttempts >= 5)
-      return new AuthError(
+      return new AppError(
         429,
         'CODE_ATTEMPTS_EXCEEDED',
         '验证码尝试次数已用尽，请重新获取',
@@ -263,7 +265,7 @@ export class AuthService {
     selectedRole: BusinessRole = 'EXPERT',
   ): Promise<LoginResponse> {
     if (user.status !== 'ACTIVE')
-      throw new AuthError(403, 'FORBIDDEN', '账户已被禁用，请联系平台运营');
+      throw new AppError(403, 'FORBIDDEN', '账户已被禁用，请联系平台运营');
     if (ip !== undefined) {
       const pending = await tx.userOrgRel.findMany({
         where: { userId: user.id, joinStatus: 'PENDING_ACTIVATION' },
@@ -355,11 +357,11 @@ export class AuthService {
         });
         return publicUser(user);
       });
-      if (result instanceof AuthError) throw result;
+      if (result instanceof AppError) throw result;
       return result;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-        throw new AuthError(
+        throw new AppError(
           409,
           'DUPLICATE',
           '手机号/昵称/邮箱/身份证/组织信息已被占用，请更换后重试',
@@ -378,13 +380,13 @@ export class AuthService {
       where: { OR: [{ phoneE164: phoneNumber(account) }, { email: account }, { uid: account }] },
     });
     if (!(await verifyPassword(input.password, user?.passwordHash ?? null)) || !user)
-      throw new AuthError(401, 'BAD_CREDENTIALS', '账号或密码错误');
+      throw new AppError(401, 'BAD_CREDENTIALS', '账号或密码错误');
     return this.db.$transaction(async (tx) => {
       await lock(tx, user.phoneE164);
       // Re-read under the password-reset lock so old passwords cannot create new sessions after reset.
       const current = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
       if (current.passwordHash !== user.passwordHash)
-        throw new AuthError(401, 'BAD_CREDENTIALS', '账号或密码错误');
+        throw new AppError(401, 'BAD_CREDENTIALS', '账号或密码错误');
       return this.issue(tx, current, client, ip, selectedRole);
     });
   }
@@ -425,7 +427,7 @@ export class AuthService {
       }
       return this.issue(tx, user, client, ip, selectedRole);
     });
-    if (result instanceof AuthError) throw result;
+    if (result instanceof AppError) throw result;
     return result;
   }
   async resetPassword(input: PasswordResetInput, ip: string) {
@@ -437,14 +439,14 @@ export class AuthService {
       const error = await this.consume(tx, phone, 'reset_password', input.code);
       if (error) return error;
       const user = await tx.user.findUnique({ where: { phoneE164: phone } });
-      if (!user) return new AuthError(404, 'NOT_FOUND', '手机号未注册');
+      if (!user) return new AppError(404, 'NOT_FOUND', '手机号未注册');
       await tx.user.update({ where: { id: user.id }, data: { passwordHash } });
       await tx.session.updateMany({
         where: { userId: user.id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
     });
-    if (result instanceof AuthError) throw result;
+    if (result instanceof AppError) throw result;
   }
   async refresh(refreshToken: string, client: ClientType) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(refreshToken)) throw unauthorized();
@@ -523,7 +525,7 @@ export class AuthService {
           message: `昵称已存在，可使用推荐昵称「${candidate}」`,
         };
     }
-    throw new AuthError(409, 'DUPLICATE', '暂无可用推荐昵称，请更换昵称');
+    throw new AppError(409, 'DUPLICATE', '暂无可用推荐昵称，请更换昵称');
   }
   async updateCurrentUser(
     token: string | undefined,
@@ -573,7 +575,7 @@ export class AuthService {
           if (idCardNo && !/^(\d{15}|\d{17}[0-9X])$/.test(idCardNo))
             throw invalid('身份证号格式不正确');
           if (active.user.idVerified === 1 && active.user.idCardNo !== idCardNo)
-            throw new AuthError(403, 'FORBIDDEN', '身份证已实名认证，不能修改');
+            throw new AppError(403, 'FORBIDDEN', '身份证已实名认证，不能修改');
           data.idCardNo = idCardNo;
         }
         if (passwordHash !== undefined) data.passwordHash = passwordHash;
@@ -592,7 +594,7 @@ export class AuthService {
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-        throw new AuthError(409, 'DUPLICATE', '身份证号已被其他用户使用');
+        throw new AppError(409, 'DUPLICATE', '身份证号已被其他用户使用');
       throw error;
     }
   }
@@ -603,7 +605,7 @@ export class AuthService {
   ) {
     const session = await this.requireSession(token, client);
     if (this.businessRole(session.selectedRole) !== 'EXPERT')
-      throw new AuthError(403, 'FORBIDDEN', '请切换到执行专家角色创建组织');
+      throw new AppError(403, 'FORBIDDEN', '请切换到执行专家角色创建组织');
     const name = input.name.trim();
     if (!name) throw invalid('组织名称不能为空');
     if (input.logoUploadToken != null && input.logoUrl == null)
@@ -623,7 +625,7 @@ export class AuthService {
         )
           throw unauthorized();
         if (this.businessRole(active.selectedRole) !== 'EXPERT')
-          throw new AuthError(403, 'FORBIDDEN', '请切换到执行专家角色创建组织');
+          throw new AppError(403, 'FORBIDDEN', '请切换到执行专家角色创建组织');
         const org = await tx.organization.create({
           data: {
             name,
@@ -687,14 +689,14 @@ export class AuthService {
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-        throw new AuthError(409, 'DUPLICATE', '组织名称或统一社会信用代码已被占用');
+        throw new AppError(409, 'DUPLICATE', '组织名称或统一社会信用代码已被占用');
       throw error;
     }
   }
   private businessRole(role?: string): BusinessRole {
     if (role === undefined) return 'EXPERT';
     if (!(BUSINESS_ROLES as readonly string[]).includes(role))
-      throw new AuthError(403, 'FORBIDDEN', '仅可使用领航员、策略官或执行专家角色');
+      throw new AppError(403, 'FORBIDDEN', '仅可使用领航员、策略官或执行专家角色');
     return role as BusinessRole;
   }
   async switchRole(token: string | undefined, client: ClientType, role: BusinessRole) {

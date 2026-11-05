@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 import { resultSchema } from '../auth/auth.schema.js';
-import { examConfigSchema, examConfigExample } from './exam-config.schema.js';
+import { examConfigExample, examConfigSchema } from './exam-config.schema.js';
 export const attachmentRefSchema = {
   type: 'object',
   description: '通过模板附件名称匹配的本人预上传文件；不会在解析阶段认领。',

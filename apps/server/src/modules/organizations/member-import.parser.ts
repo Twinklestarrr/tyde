@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
-import { AuthError } from '../auth/auth.error.js';
-import { businessDate } from './member.service.js';
+import { AppError } from '../../common/errors.js';
+import { businessDate } from './member.domain.js';
 export const IMPORT_MAX_BYTES = 50 * 1024 * 1024;
 export const headers = ['姓名', '手机号', '人员属性', '组织内角色', '入组时间'];
 export const englishHeaders = [
@@ -67,7 +67,7 @@ export const rowError = (
 ): RowError => ({ rowNo, field, value, errorCode, message });
 export const maskImportPhone = (phone: string) =>
   phone.length >= 7 ? `${phone.slice(0, 3)}****${phone.slice(-4)}` : phone ? '****' : null;
-const bad = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
+const bad = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
 export function template(english = false): Buffer {
   const sheet = XLSX.utils.aoa_to_sheet([
     english ? englishHints : hints,
@@ -83,7 +83,7 @@ export function resolveImport(file?: ImportFile, memberText?: string): ImportInp
   const textProvided = Boolean(memberText?.trim());
   if (file?.bytes.length) {
     if (file.bytes.length > IMPORT_MAX_BYTES)
-      throw new AuthError(413, 'PAYLOAD_TOO_LARGE', '导入文件超过50MiB限制');
+      throw new AppError(413, 'PAYLOAD_TOO_LARGE', '导入文件超过50MiB限制');
     const name = file.fileName.toLowerCase(),
       type = file.contentType.toLowerCase();
     let sourceType: SourceType;
@@ -97,7 +97,7 @@ export function resolveImport(file?: ImportFile, memberText?: string): ImportInp
   }
   if (!textProvided) throw bad('请上传Excel、CSV或填写成员清单');
   if (Buffer.byteLength(memberText!) > IMPORT_MAX_BYTES)
-    throw new AuthError(413, 'PAYLOAD_TOO_LARGE', '成员清单超过50MiB限制');
+    throw new AppError(413, 'PAYLOAD_TOO_LARGE', '成员清单超过50MiB限制');
   return { sourceType: 'TEXT', textIgnored: false, content: memberText! };
 }
 function csv(content: string, chinese: boolean) {
@@ -157,7 +157,7 @@ function checkZip(bytes: Buffer) {
       throw bad('Excel压缩包目录不正确');
     total += bytes.readUInt32LE(offset + 24);
     if (total > 100 * 1024 * 1024)
-      throw new AuthError(413, 'PAYLOAD_TOO_LARGE', 'Excel解压内容超过100MiB限制');
+      throw new AppError(413, 'PAYLOAD_TOO_LARGE', 'Excel解压内容超过100MiB限制');
     offset +=
       46 +
       bytes.readUInt16LE(offset + 28) +
@@ -214,7 +214,7 @@ function excel(bytes: Buffer) {
     }
     return { rows, malformed };
   } catch (error) {
-    if (error instanceof AuthError) throw error;
+    if (error instanceof AppError) throw error;
     throw bad('Excel文件格式不正确或已损坏');
   }
 }

@@ -1,4 +1,4 @@
-import { attendanceStatuses } from '../attendance/attendance-domain.js';
+import { attendanceStatuses } from '../attendance/attendance.domain.js';
 const id = (description: string) => ({
   type: 'integer',
   minimum: 1,

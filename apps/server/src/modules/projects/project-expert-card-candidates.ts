@@ -1,20 +1,15 @@
-import { ordinaryExamTask } from '../expert/expert-exam-task.js';
 import type { Prisma } from '@prisma/client';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { ordinaryExamTask } from '../expert/expert-exam-task.js';
 import { hasTransferExamTask } from '../expert/expert-transfer-exam.js';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
-import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { qualifiedForEntry } from '../personnel/personnel-entry.domain.js';
+import { currentApprovers } from '../personnel/personnel-transfer.access.js';
+import { transferInclude } from '../personnel/personnel-transfer.types.js';
+import { memberInclude } from '../personnel/personnel.types.js';
 import { outputScope } from '../production/output-report-access.js';
-import { currentApprovers, transferInclude } from '../personnel/personnel-transfer.js';
-import type { ManagementBranchCandidate } from './project-management-card-snapshot.js';
-
-export const expertCardPerspectives = [
-  'EXPERT_ORG_OWNER',
-  'EXPERT_PROJECT_OWNER',
-  'EXPERT_MEMBER',
-  'EXPERT_INDIVIDUAL',
-];
+import type { ManagementBranchCandidate } from './project-card.domain.js';
 
 // 一个人可同时主管组织A、负责组织B及以个人身份履约；各视角独立收窄组织范围。
 // 不读取会话角色，也不以卡片胜者代替其他任务轮次。
@@ -174,7 +169,7 @@ export async function collectExpertCardCandidates(
           ),
         );
       } catch (error) {
-        if (!(error instanceof AuthError && error.status === 403)) throw error;
+        if (!(error instanceof AppError && error.status === 403)) throw error;
         outputScopes.set(scope.userId, null);
       }
     }

@@ -1,21 +1,19 @@
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
-import {
-  syncRecruitmentRetrySnapshot,
-  collectRecruitmentTasks,
-} from './project-recruitment-snapshot.js';
-import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
 import { displayName } from './project-detail.js';
-import { managementTaskTypes, reconcileTaskRounds, taskEventFacts } from './project-task-rounds.js';
 import {
-  candidateSql,
   candidateAssignmentSql,
+  candidateSql,
   type RecruitmentCandidate,
   type RecruitmentQuery,
   type SubjectType,
 } from './project-recruitment-candidates.js';
+import { syncRecruitmentRetrySnapshot } from './project-recruitment-snapshot.js';
+import { collectRecruitmentTasks } from './project-recruitment-task.repository.js';
+import { managementTaskTypes, reconcileTaskRounds, taskEventFacts } from './project-task-rounds.js';
 
 export interface RecruitmentItem {
   subjectType: SubjectType;
@@ -29,14 +27,14 @@ export interface RecruitmentInput {
   projectId: number;
   assignments: RecruitmentItem[];
 }
-const bad = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
+const bad = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
 const tracked = [...managementTaskTypes, 'EXPERT_RECRUITMENT_RETRY'];
 export class ProjectRecruitmentService {
   constructor(readonly db: PrismaClient) {}
   private async context(tx: Prisma.TransactionClient, id: number, p: AuthPrincipal) {
-    if (p.role !== 'PM') throw new AuthError(403, 'FORBIDDEN', '当前会话必须为策略官');
+    if (p.role !== 'PM') throw new AppError(403, 'FORBIDDEN', '当前会话必须为策略官');
     const project = await tx.project.findFirst({ where: { id, deleted: false } });
-    if (!project) throw new AuthError(404, 'NOT_FOUND', '项目不存在');
+    if (!project) throw new AppError(404, 'NOT_FOUND', '项目不存在');
     const relation = await tx.projectManagerRecruitment.findFirst({
       where: { projectId: id, status: 'ASSIGNED' },
       orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
@@ -46,7 +44,7 @@ export class ProjectRecruitmentService {
       (relation.candidateUserId !== p.userId &&
         relation.expertRecruitmentHandlerUserId !== p.userId)
     )
-      throw new AuthError(403, 'FORBIDDEN', '仅当前主策略官或招募环节负责人可操作');
+      throw new AppError(403, 'FORBIDDEN', '仅当前主策略官或招募环节负责人可操作');
     const creator = await tx.user.findUnique({
       where: { uid: project.createdBy },
       select: { id: true },
@@ -150,7 +148,7 @@ export class ProjectRecruitmentService {
   }
 
   async submit(input: RecruitmentInput, p: AuthPrincipal) {
-    if (p.role !== 'PM') throw new AuthError(403, 'FORBIDDEN', '当前会话必须为策略官');
+    if (p.role !== 'PM') throw new AppError(403, 'FORBIDDEN', '当前会话必须为策略官');
     if (!input.assignments.length || input.assignments.length > 100) throw bad('单次须下发1—100项');
     const subjects = new Set<string>(),
       sources = new Set<number>();
@@ -222,7 +220,7 @@ export class ProjectRecruitmentService {
             status: { in: ['PENDING_ACCEPTANCE', 'ACCEPTED'] },
           },
         });
-        if (active) throw new AuthError(409, 'DUPLICATE', '该执行专家已有待接单或已接单记录');
+        if (active) throw new AppError(409, 'DUPLICATE', '该执行专家已有待接单或已接单记录');
       }
       const ids: number[] = [];
       for (const a of input.assignments) {

@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { todayText } from '../personnel/personnel-domain.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { todayText } from '../personnel/personnel.domain.js';
 import { isReportOwner, outputScope } from '../production/output-report-access.js';
 
 /** 上海当日本人是否已有报量；零量、项目报量与子任务报量均计入。 */
@@ -29,7 +29,7 @@ export async function canReportExpertOutput(
   try {
     scope = await outputScope(tx, projectId, principal, now);
   } catch (error) {
-    if (error instanceof AuthError && [403, 404].includes(error.status)) return false;
+    if (error instanceof AppError && [403, 404].includes(error.status)) return false;
     throw error;
   }
   if (scope.readOnly || scope.project.currentNodeCode === 'COMPLETED') return false;

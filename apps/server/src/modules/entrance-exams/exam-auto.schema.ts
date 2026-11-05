@@ -1,8 +1,8 @@
 import type { FastifySchema } from 'fastify';
 import {
-  manualGradingSchema,
-  manualGradingExample,
   gradingSubmitExample,
+  manualGradingExample,
+  manualGradingSchema,
 } from './exam-grading-command.schema.js';
 const id = (description: string) => ({
   type: 'integer',

@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ManagementService } from '../management/management.service.js';
 import { resolveCurrentRequester } from './project-requester.js';
 
@@ -21,7 +21,7 @@ export class ProjectFoundationService {
   async categories(query: CategoryQuery, principal: AuthPrincipal) {
     await this.management.requireRole(principal, 'NAVIGATOR');
     if (query.categoryLevel !== undefined && ![1, 2, 3].includes(query.categoryLevel))
-      throw new AuthError(400, 'VALIDATION_ERROR', '分类级别必须为1、2或3');
+      throw new AppError(400, 'VALIDATION_ERROR', '分类级别必须为1、2或3');
     const keyword = query.keyword?.trim();
     // LIKE的%/_沿用旧模糊匹配语义；PostgreSQL大小写规则与旧库兼容仍待验收。
     return this.db.projectCategory.findMany({

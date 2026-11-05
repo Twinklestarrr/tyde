@@ -1,14 +1,14 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
+import { dateText, parseDate } from '../attendance/attendance.domain.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { personnelScope } from '../personnel/personnel-access.js';
-import { lockPersonnel } from '../personnel/personnel.service.js';
-import { todayText } from '../personnel/personnel-domain.js';
-import { parseDate, dateText } from '../attendance/attendance-domain.js';
+import { todayText } from '../personnel/personnel.domain.js';
+import { lockPersonnel } from '../personnel/personnel.repository.js';
 import { displayName } from '../projects/project-detail.js';
 import { projectTime } from '../projects/project-time.js';
-import { invalidTask } from './production-domain.js';
 import { reportQuantity } from './output-report.domain.js';
+import { invalidTask } from './production.domain.js';
 export interface ProductionQuery {
   projectId: number;
   reportDateStart?: string | null;
@@ -65,9 +65,9 @@ async function memberScope(
     where: { id: q.memberId, projectId: q.projectId },
     include: { user: true },
   });
-  if (!member) throw new AuthError(404, 'NOT_FOUND', '项目成员不存在');
+  if (!member) throw new AppError(404, 'NOT_FOUND', '项目成员不存在');
   if (scope.organizationIds && !scope.organizationIds.includes(member.organizationId ?? ''))
-    throw new AuthError(403, 'FORBIDDEN', '只能访问职责组织内成员');
+    throw new AppError(403, 'FORBIDDEN', '只能访问职责组织内成员');
   return { scope, member };
 }
 // 26位整数加4位小数的数量不能使用Decimal默认20位有效精度做累加。
@@ -276,9 +276,9 @@ export class QualityService {
           )
             throw invalidTask('日报量与项目、成员或日期不匹配');
           if (r.subtask?.status === 'ACCEPTED')
-            throw new AuthError(409, 'DUPLICATE', '已验收子任务不能新增质量记录');
+            throw new AppError(409, 'DUPLICATE', '已验收子任务不能新增质量记录');
           if (r.qualities[0]?.dataSource === 'WORK_SYSTEM')
-            throw new AuthError(403, 'FORBIDDEN', '作业系统质量不能人工覆盖');
+            throw new AppError(403, 'FORBIDDEN', '作业系统质量不能人工覆盖');
           await tx.projectOutputQuality.create({
             data: { outputReportId: r.id, ...amounts[index]!, recordedBy: p.uid },
           });

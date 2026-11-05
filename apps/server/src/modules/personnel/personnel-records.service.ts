@@ -1,19 +1,19 @@
 import { Prisma, type PrismaClient, type UploadedFile } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
 import {
+  dateText,
+  invalid,
   monthDates,
   parseDate,
-  dateText,
   wallTime,
-  invalid,
-} from '../attendance/attendance-domain.js';
+} from '../attendance/attendance.domain.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import type { FileRegistryService } from '../files/file-registry.service.js';
 import { displayName } from '../projects/project-detail.js';
 import { projectTime } from '../projects/project-time.js';
-import type { FileRegistryService } from '../files/file-registry.service.js';
 import { personnelScope } from './personnel-access.js';
-import { lockPersonnel } from './personnel.service.js';
-import { todayText } from './personnel-domain.js';
+import { todayText } from './personnel.domain.js';
+import { lockPersonnel } from './personnel.repository.js';
 
 export interface ProjectAttendanceQuery {
   projectId: number;
@@ -57,12 +57,12 @@ async function memberAccess(
 ) {
   const scope = await personnelScope(tx, projectId, principal, write);
   const member = await tx.projectMember.findFirst({ where: { id: memberId, projectId } });
-  if (!member) throw new AuthError(404, 'NOT_FOUND', '项目成员不存在');
+  if (!member) throw new AppError(404, 'NOT_FOUND', '项目成员不存在');
   if (
     scope.organizationIds &&
     (!member.organizationId || !scope.organizationIds.includes(member.organizationId))
   )
-    throw new AuthError(403, 'FORBIDDEN', '只能访问职责组织内成员');
+    throw new AppError(403, 'FORBIDDEN', '只能访问职责组织内成员');
   return member;
 }
 const page = <T>(records: T[], total: number, current: number, size: number) => ({
@@ -325,7 +325,7 @@ export async function canReadPerformanceFile(
         await memberAccess(tx, row.projectId, row.memberId, principal);
         return true;
       } catch (error) {
-        if (error instanceof AuthError && [403, 404].includes(error.status)) return false;
+        if (error instanceof AppError && [403, 404].includes(error.status)) return false;
         throw error;
       }
     },

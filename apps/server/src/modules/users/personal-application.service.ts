@@ -1,7 +1,7 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { businessDate } from '../organizations/member.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { businessDate } from '../organizations/member.domain.js';
 import { displayName } from '../projects/project-detail.js';
 import { projectTime } from '../projects/project-time.js';
 
@@ -27,11 +27,11 @@ export class PersonalApplicationService {
       size < 1 ||
       size > 100
     )
-      throw new AuthError(400, 'VALIDATION_ERROR', '分页参数不合法');
+      throw new AppError(400, 'VALIDATION_ERROR', '分页参数不合法');
     const start = input.startAt ? businessDate(input.startAt) : undefined;
     const end = input.endAt ? businessDate(input.endAt) : undefined;
     if (start && end && start > end)
-      throw new AuthError(400, 'VALIDATION_ERROR', 'startAt不能晚于endAt');
+      throw new AppError(400, 'VALIDATION_ERROR', 'startAt不能晚于endAt');
     const businessType =
       input.businessType === undefined ? 'ORG_MEMBER_EXIT' : input.businessType?.trim();
     return this.db.$transaction(

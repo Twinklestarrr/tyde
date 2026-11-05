@@ -1,19 +1,20 @@
-import { createHash, randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { lockOrganization, participatingStatuses } from './organization.service.js';
-import { businessDate } from './member.service.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { shanghaiDay } from './departure.service.js';
 import {
-  resolveImport,
-  parseImport,
   maskImportPhone,
+  parseImport,
+  resolveImport,
   rowError,
   type ImportFile,
-  type SourceType,
   type RowError,
+  type SourceType,
 } from './member-import.parser.js';
+import { businessDate } from './member.domain.js';
+import { participatingStatuses } from './organization.domain.js';
+import { lockOrganization } from './organization.repository.js';
 const effectiveStatuses = ['PENDING', 'PENDING_ACTIVATION', ...participatingStatuses];
 const hash = (input: string | Buffer) => createHash('sha256').update(input).digest('hex');
 export interface GeneratedMember {
@@ -50,7 +51,7 @@ export class MemberImportService {
   ): Promise<ImportResponse> {
     orgId = orgId.toLowerCase();
     if (!key.trim() || key.length > 128)
-      throw new AuthError(400, 'VALIDATION_ERROR', 'Idempotency-Key不能为空且不能超过128字符');
+      throw new AppError(400, 'VALIDATION_ERROR', 'Idempotency-Key不能为空且不能超过128字符');
     await this.manager(this.db, orgId, principal.userId);
     const input = resolveImport(file, memberText);
     const scope = hash(`${orgId}:${principal.userId}:${key.trim()}`);
@@ -66,7 +67,7 @@ export class MemberImportService {
             { locked: boolean }[]
           >`SELECT pg_try_advisory_xact_lock(hashtextextended(${`member-import:${scope}`},0)) AS locked`;
           if (!acquired[0]?.locked)
-            throw new AuthError(409, 'DUPLICATE', '批量生成请求正在处理中，请稍后重试');
+            throw new AppError(409, 'DUPLICATE', '批量生成请求正在处理中，请稍后重试');
           // 与注册/登录共用手机号锁；按手机号排序，再锁组织，避免激活与跨组织导入死锁。
           const phones =
             parsed.rows.length > 500
@@ -86,7 +87,7 @@ export class MemberImportService {
           const now = new Date();
           if (receipt && receipt.expiresAt > now) {
             if (receipt.requestHash !== requestHash)
-              throw new AuthError(409, 'DUPLICATE', 'Idempotency-Key已用于其他请求');
+              throw new AppError(409, 'DUPLICATE', 'Idempotency-Key已用于其他请求');
             return receipt.response as unknown as ImportResponse;
           }
           const errors = [...parsed.errors];
@@ -238,7 +239,7 @@ export class MemberImportService {
       );
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-        throw new AuthError(409, 'DUPLICATE', '成员手机号或组织关系已被占用，请刷新后重试');
+        throw new AppError(409, 'DUPLICATE', '成员手机号或组织关系已被占用，请刷新后重试');
       throw error;
     }
   }
@@ -253,8 +254,8 @@ export class MemberImportService {
       !participatingStatuses.includes(rel.joinStatus) ||
       !['OWNER', 'ADMIN'].includes(rel.position)
     )
-      throw new AuthError(403, 'FORBIDDEN', '仅组织主管或管理员可批量生成成员');
+      throw new AppError(403, 'FORBIDDEN', '仅组织主管或管理员可批量生成成员');
     if (!(await db.organization.findFirst({ where: { id: orgId, deleted: false } })))
-      throw new AuthError(404, 'NOT_FOUND', '组织不存在');
+      throw new AppError(404, 'NOT_FOUND', '组织不存在');
   }
 }

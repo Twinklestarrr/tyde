@@ -1,21 +1,19 @@
 import { Prisma, type Project } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
-import { collectRecruitmentTasks } from './project-recruitment-snapshot.js';
-import { collectGradingTasks } from '../entrance-exams/exam-grading-tasks.js';
-import { entryTasks } from '../personnel/personnel-progress.js';
-import {
-  currentApprovers,
-  transferInclude,
-  isManualTransferStep,
-} from '../personnel/personnel-transfer.js';
-import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
-import { outputTasks } from '../production/output-report-progress.js';
-import { acceptanceTasks } from '../production/acceptance.service.js';
-import { creationTasks } from '../production/production.service.js';
-import { candidateContext } from '../entrance-exams/exam-candidate.service.js';
-import type { TaskSnapshot } from './project-task-rounds.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { candidateContext } from '../entrance-exams/exam-candidate.access.js';
+import { collectGradingTasks } from '../entrance-exams/exam-grading-task.repository.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { qualifiedForEntry } from '../personnel/personnel-entry.domain.js';
+import { entryTasks } from '../personnel/personnel-task.repository.js';
+import { currentApprovers, isManualTransferStep } from '../personnel/personnel-transfer.access.js';
+import { transferInclude } from '../personnel/personnel-transfer.types.js';
+import { memberInclude } from '../personnel/personnel.types.js';
+import { acceptanceTasks } from '../production/acceptance.repository.js';
+import { outputTasks } from '../production/output-report-task.repository.js';
+import { creationTasks } from '../production/production.repository.js';
+import { collectRecruitmentTasks } from './project-recruitment-task.repository.js';
+import type { TaskSnapshot } from './project-task.types.js';
 
 export type WorkbenchMode = 'TASK' | 'BOARD';
 export const startupNodes = [
@@ -36,7 +34,7 @@ export function boardStatisticsScope(p: AuthPrincipal): Prisma.ProjectWhereInput
         },
       },
     };
-  if (p.role !== 'EXPERT') throw new AuthError(403, 'FORBIDDEN', '当前角色无工作台统计权限');
+  if (p.role !== 'EXPERT') throw new AppError(403, 'FORBIDDEN', '当前角色无工作台统计权限');
   const member = { userId: p.userId, joinStatus: { in: participatingStatuses } };
   return {
     expertAssignments: {
@@ -248,7 +246,7 @@ export async function personalTasks(
     }
     types.add('ENTRANCE_EXAM');
   } catch (error) {
-    if (!(error instanceof AuthError && error.status === 403)) throw error;
+    if (!(error instanceof AppError && error.status === 403)) throw error;
   }
   return types;
 }
@@ -278,7 +276,7 @@ async function currentMovementTask(
     try {
       if ((await currentApprovers(tx, row, code)).some((u) => u.id === p.userId)) return true;
     } catch (error) {
-      if (!(error instanceof AuthError && error.status === 403)) throw error;
+      if (!(error instanceof AppError && error.status === 403)) throw error;
     }
   }
   return false;
@@ -330,7 +328,7 @@ export async function workbenchStatistics(
           await candidateContext(tx, project.id, p.userId, true);
           eligible = true;
         } catch (error) {
-          if (!(error instanceof AuthError && error.status === 403)) throw error;
+          if (!(error instanceof AppError && error.status === 403)) throw error;
         }
       }
     }

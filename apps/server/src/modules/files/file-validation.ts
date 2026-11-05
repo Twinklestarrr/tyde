@@ -1,13 +1,13 @@
 import { crc32, inflateRawSync } from 'node:zlib';
-import { AuthError } from '../auth/auth.error.js';
-import { categories, businesses, type FileBizType, type FileCategory } from './file.types.js';
+import { AppError } from '../../common/errors.js';
+import { businesses, categories, type FileBizType, type FileCategory } from './file.types.js';
 
 export interface UploadInput {
   fileName: string;
   declaredType: string;
   content: Buffer;
 }
-const bad = (message: string) => new AuthError(400, 'BAD_REQUEST', message);
+const bad = (message: string) => new AppError(400, 'BAD_REQUEST', message);
 export function uploadPolicy(bizType?: string, category?: string) {
   const biz = bizType?.trim().toUpperCase() || 'COMMON';
   const cat = category?.trim().toUpperCase() || '';
@@ -249,7 +249,7 @@ export function validateUpload(file: UploadInput, category: FileCategory, maxSiz
   if (!file.content.length) throw bad('上传文件不能为空');
   const limit = Math.min(maxSize, categories[category].maxMB * 1024 * 1024);
   if (file.content.length > limit)
-    throw new AuthError(413, 'PAYLOAD_TOO_LARGE', `文件大小超过限制（最大 ${limit} 字节）`);
+    throw new AppError(413, 'PAYLOAD_TOO_LARGE', `文件大小超过限制（最大 ${limit} 字节）`);
   const name = file.fileName.replaceAll('\\', '/').split('/').at(-1)?.trim() || 'file';
   const extension = name.includes('.') ? name.split('.').at(-1)!.toLowerCase() : '';
   if (

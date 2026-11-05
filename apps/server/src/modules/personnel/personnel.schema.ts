@@ -1,5 +1,5 @@
 import type { FastifySchema } from 'fastify';
-import { memberStatuses, statusNames } from './personnel-domain.js';
+import { memberStatuses, statusNames } from './personnel.domain.js';
 const id = (description: string) => ({
   type: 'integer',
   minimum: 1,

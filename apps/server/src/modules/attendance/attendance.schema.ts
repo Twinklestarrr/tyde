@@ -1,9 +1,9 @@
+import { authSchema, resultSchema } from '../auth/auth.schema.js';
 import {
   calendarApplicationSchema,
   calendarDayPermissions,
 } from './attendance-application.schema.js';
-import { authSchema, resultSchema } from '../auth/auth.schema.js';
-import { attendanceStatuses, manualStatuses, calendarDay, summarize } from './attendance-domain.js';
+import { attendanceStatuses, calendarDay, manualStatuses, summarize } from './attendance.domain.js';
 type Schema = Record<string, unknown>;
 const text = (description: string, nullable = false): Schema => ({
   type: 'string',

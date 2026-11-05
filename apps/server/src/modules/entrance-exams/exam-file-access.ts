@@ -1,9 +1,9 @@
-import { candidateContext } from './exam-candidate.service.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
-import { AuthError } from '../auth/auth.error.js';
 import type { PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ManagementService } from '../management/management.service.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { candidateContext } from './exam-candidate.access.js';
 // 考生只读取本人绑定卷题干与答案；组织职责仅授予本组织答案，不放开参考答案。
 export async function canReadManagedExamFile(
   db: PrismaClient,
@@ -23,7 +23,7 @@ export async function canReadManagedExamFile(
         try {
           candidate = await candidateContext(tx, exam.projectId, principal.userId, true);
         } catch (error) {
-          if (!(error instanceof AuthError) || ![403, 404].includes(error.status)) throw error;
+          if (!(error instanceof AppError) || ![403, 404].includes(error.status)) throw error;
         }
         const own = candidate
           ? await tx.entranceExamAttempt.findMany({

@@ -1,15 +1,15 @@
 import {
-  id,
-  text,
-  choice,
-  day,
-  quantity,
-  stamp,
-  object,
   array,
   base,
-  page,
+  choice,
   createBody,
+  day,
+  id,
+  object,
+  page,
+  quantity,
+  stamp,
+  text,
 } from './production.schema.js';
 const bool = (description: string) => ({ type: 'boolean', description });
 const amount = createBody.properties.expectedQuantity;

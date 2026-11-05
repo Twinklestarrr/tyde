@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { hasManagementRole } from '../management/management.service.js';
 export async function requireExamManager(
   tx: Prisma.TransactionClient,
@@ -8,17 +8,17 @@ export async function requireExamManager(
   principal: AuthPrincipal,
 ) {
   if (!(await hasManagementRole(tx, principal, 'PM')))
-    throw new AuthError(403, 'FORBIDDEN', '请切换到对应业务角色');
+    throw new AppError(403, 'FORBIDDEN', '请切换到对应业务角色');
   const project = await tx.project.findFirst({ where: { id: projectId, deleted: false } });
-  if (!project) throw new AuthError(404, 'NOT_FOUND', '项目不存在');
+  if (!project) throw new AppError(404, 'NOT_FOUND', '项目不存在');
   if (project.status !== 'PUBLISHED')
-    throw new AuthError(400, 'VALIDATION_ERROR', '只有已发布项目可以组织准入考试');
+    throw new AppError(400, 'VALIDATION_ERROR', '只有已发布项目可以组织准入考试');
   const manager = await tx.projectManagerRecruitment.findFirst({
     where: { projectId, status: 'ASSIGNED' },
     orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
   });
   if (!manager || manager.candidateUserId !== principal.userId)
-    throw new AuthError(403, 'FORBIDDEN', '当前用户不是该项目的生效策略官');
+    throw new AppError(403, 'FORBIDDEN', '当前用户不是该项目的生效策略官');
   return project;
 }
 
@@ -32,11 +32,11 @@ export async function requireExamViewer(
     hasManagementRole(tx, principal, 'PM'),
     hasManagementRole(tx, principal, 'NAVIGATOR'),
   ]);
-  if (!pm && !navigator) throw new AuthError(403, 'FORBIDDEN', '请切换到对应业务角色');
+  if (!pm && !navigator) throw new AppError(403, 'FORBIDDEN', '请切换到对应业务角色');
   const project = await tx.project.findFirst({ where: { id: projectId, deleted: false } });
-  if (!project) throw new AuthError(404, 'NOT_FOUND', '项目不存在');
+  if (!project) throw new AppError(404, 'NOT_FOUND', '项目不存在');
   if (project.status !== 'PUBLISHED')
-    throw new AuthError(400, 'VALIDATION_ERROR', '只有已发布项目可以组织准入考试');
+    throw new AppError(400, 'VALIDATION_ERROR', '只有已发布项目可以组织准入考试');
   if (pm) {
     const manager = await tx.projectManagerRecruitment.findFirst({
       where: { projectId, status: 'ASSIGNED' },
@@ -61,7 +61,7 @@ export async function requireExamViewer(
     }))
   )
     return { project, canManage: false };
-  throw new AuthError(
+  throw new AppError(
     403,
     'FORBIDDEN',
     '当前用户不是项目策略官、招募协作负责人或配置的领航员阅卷人',
@@ -76,6 +76,6 @@ export async function requireProjectExam(tx: Prisma.TransactionClient, input: Ex
   const exam = await tx.projectEntranceExam.findFirst({
     where: { id: input.examId, projectId: input.projectId, deleted: false },
   });
-  if (!exam) throw new AuthError(404, 'NOT_FOUND', '考试不存在或不属于当前项目');
+  if (!exam) throw new AppError(404, 'NOT_FOUND', '考试不存在或不属于当前项目');
   return exam;
 }

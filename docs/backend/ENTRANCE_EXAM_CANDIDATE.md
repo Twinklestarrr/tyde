@@ -65,7 +65,7 @@ PM当前策略官/招募协作负责人、NAV需求方及本考试历史人工�
 下方已通过命令仅供追溯；本轮仅同步结果，未重跑测试或操作数据库：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'exam candidate submission (concurrent|AUTO first|claims own|and cancellation outbox)'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'exam candidate submission (concurrent|AUTO first|claims own|and cancellation outbox)'
 ```
 
 覆盖历史卷并发交卷及多轮准入、AUTO首轮失败重试/淘汰、交卷取消竞争/超时、完整性/角色/身份不换绑、附件权限及outbox故障整事务回滚。无新增schema/迁移/依赖，未应用迁移，未操作开发/部署库。真实HTTP/OSS、部署与完整兼容待验收；08基础已交接09，前批已过项不重复，本轮不执行09。

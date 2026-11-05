@@ -1,18 +1,18 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
 import { displayName } from '../projects/project-detail.js';
 import { parseProjectTime, projectTime } from '../projects/project-time.js';
 import { personnelScope } from './personnel-access.js';
-import { todayText } from './personnel-domain.js';
 import {
   currentApprovers,
   isManualTransferStep,
-  requireTransferStage,
   requireTransferPassed,
-  transferInclude,
-} from './personnel-transfer.js';
+  requireTransferStage,
+} from './personnel-transfer.access.js';
+import { transferInclude } from './personnel-transfer.types.js';
+import { todayText } from './personnel.domain.js';
 
 export const movementStatusNames: Record<string, string> = {
   PROCESSING: '审批处理中',
@@ -73,16 +73,16 @@ export async function listMovements(
     !choices(q.statuses, Object.keys(movementStatusNames), 5) ||
     (q.keyword != null && (typeof q.keyword !== 'string' || q.keyword.length > 100))
   )
-    throw new AuthError(400, 'VALIDATION_ERROR', '人员变动筛选或分页格式不正确');
+    throw new AppError(400, 'VALIDATION_ERROR', '人员变动筛选或分页格式不正确');
   const start = q.createdStartAt == null ? undefined : parseProjectTime(q.createdStartAt);
   const end = q.createdEndAt == null ? undefined : parseProjectTime(q.createdEndAt);
-  if (start && end && start > end) throw new AuthError(400, 'VALIDATION_ERROR', '发起时间区间倒置');
+  if (start && end && start > end) throw new AppError(400, 'VALIDATION_ERROR', '发起时间区间倒置');
   if (!['PM', 'EXPERT'].includes(p.role))
-    throw new AuthError(403, 'FORBIDDEN', '请切换至PM或EXPERT角色');
+    throw new AppError(403, 'FORBIDDEN', '请切换至PM或EXPERT角色');
   return db.$transaction(
     async (tx) => {
       const scope = await personnelScope(tx, q.projectId, p).catch((error) => {
-        if (error instanceof AuthError && error.status === 403)
+        if (error instanceof AppError && error.status === 403)
           return { organizationIds: [] as string[], readOnly: false };
         throw error;
       });
@@ -186,7 +186,7 @@ export async function listMovements(
                     allowedActions.push('TAKE_TARGET_EXAM');
                 }
               } catch (error) {
-                if (!(error instanceof AuthError && [403, 409].includes(error.status))) throw error;
+                if (!(error instanceof AppError && [403, 409].includes(error.status))) throw error;
               }
             }
           }
@@ -270,12 +270,12 @@ export async function listMovements(
   );
 }
 export async function movementDetail(db: PrismaClient, q: MovementDetailQuery, p: AuthPrincipal) {
-  if (q.memberId == null) throw new AuthError(400, 'VALIDATION_ERROR', 'memberId必填');
+  if (q.memberId == null) throw new AppError(400, 'VALIDATION_ERROR', 'memberId必填');
   const result = await listMovements(
     db,
     { projectId: q.projectId, memberId: q.memberId, size: 1 },
     p,
   );
-  if (!result.records.length) throw new AuthError(404, 'NOT_FOUND', '人员变动记录不存在或无权查看');
+  if (!result.records.length) throw new AppError(404, 'NOT_FOUND', '人员变动记录不存在或无权查看');
   return result.records[0]!;
 }

@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import { requireTransferEligibility, type Transfer } from '../personnel/personnel-transfer.js';
+import { AppError } from '../../common/errors.js';
+import { requireTransferEligibility } from '../personnel/personnel-transfer.access.js';
+import { type Transfer } from '../personnel/personnel-transfer.types.js';
 
 // 转项考试没有普通接单关系；读取与快照必须沿同一真实流程、来源及答题窗口判断。
 export async function hasTransferExamTask(
@@ -30,7 +31,7 @@ export async function hasTransferExamTask(
   try {
     await requireTransferEligibility(tx, movement);
   } catch (error) {
-    if (error instanceof AuthError && [403, 409].includes(error.status)) return false;
+    if (error instanceof AppError && [403, 409].includes(error.status)) return false;
     throw error;
   }
   const attempt = movement.targetExamAttempt;

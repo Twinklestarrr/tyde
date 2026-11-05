@@ -1,10 +1,10 @@
-import { AuthError } from '../auth/auth.error.js';
 import type { FastifyInstance } from 'fastify';
+import { AppError } from '../../common/errors.js';
 import type { Config } from '../../config/index.js';
-import type { ExamGradingCommandService } from './exam-grading-command.service.js';
-import type { AutoCallbackInput } from './exam-auto.types.js';
-import { autoCallbackSchema } from './exam-auto.schema.js';
 import { autoCallbackPath, verifyAutoCallback } from './exam-auto-signature.js';
+import { autoCallbackSchema } from './exam-auto.schema.js';
+import type { AutoCallbackInput } from './exam-auto.types.js';
+import type { ExamGradingCommandService } from './exam-grading-command.service.js';
 export async function examAutoCallbackRoutes(
   parent: FastifyInstance,
   service: ExamGradingCommandService,
@@ -27,7 +27,7 @@ export async function examAutoCallbackRoutes(
         } catch (error) {
           done(
             error instanceof SyntaxError
-              ? new AuthError(400, 'VALIDATION_ERROR', '回调JSON格式错误')
+              ? new AppError(400, 'VALIDATION_ERROR', '回调JSON格式错误')
               : (error as Error),
           );
         }

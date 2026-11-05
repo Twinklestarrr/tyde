@@ -23,5 +23,5 @@ API-083—085均已实现待验收，HTTP方法、路径及旧字段名保持。
 仅保留以下本批定位命令供将来相关变更回归使用，无需现在重跑：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'personnel records:'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'personnel records:'
 ```
