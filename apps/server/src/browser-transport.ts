@@ -5,7 +5,7 @@ import { AuthError } from './modules/auth/auth.error.js';
 
 export function registerBrowserTransport(app: FastifyInstance, config: Config) {
   const origins = [...config.webOrigins, ...config.desktopOrigins];
-  const methods = ['GET', 'HEAD', 'POST', 'DELETE'];
+  const methods = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'];
   const headers = ['content-type', 'x-tyde-client', 'idempotency-key'];
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith(`${API_PREFIX}/`)) return;
