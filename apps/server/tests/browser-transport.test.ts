@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client';
+import Fastify, { type HTTPMethods } from 'fastify';
 import { afterEach, expect, test, vi } from 'vitest';
-import { createApp } from '../src/application.js';
+import { API_PREFIX } from '@tyde/shared';
+import { createApp, fastifyOptions } from '../src/application.js';
 import { readConfig } from '../src/config/index.js';
 import { AuthError } from '../src/modules/auth/auth.error.js';
 import { AuthService } from '../src/modules/auth/auth.service.js';
@@ -13,6 +15,7 @@ import { importExample } from '../src/modules/organizations/import.schema.js';
 import { ProjectManagerService } from '../src/modules/projects/project-manager.service.js';
 import { managerRecruitResult } from '../src/modules/projects/project-manager.schema.js';
 import { ExamCommandService } from '../src/modules/entrance-exams/exam-command.service.js';
+import { autoCallbackPath } from '../src/modules/entrance-exams/exam-auto-signature.js';
 import {
   examConfigExample,
   examMutationExample,
@@ -28,6 +31,11 @@ const environment = {
   LOG_LEVEL: 'silent',
 };
 const config = readConfig(environment);
+const secureConfig = readConfig({
+  ...environment,
+  WEB_ORIGINS: 'https://web.example',
+  COOKIE_SECURE: 'true',
+});
 const tokens = {
   accessToken: 'a'.repeat(43),
   refreshToken: 'r'.repeat(43),
@@ -36,12 +44,82 @@ const tokens = {
 };
 afterEach(() => vi.restoreAllMocks());
 
-test('exam publishing accepts trusted desktop Cookie sources and preserves transport rejection', async () => {
-  const secureConfig = readConfig({
-    ...environment,
-    WEB_ORIGINS: 'https://web.example',
-    COOKIE_SECURE: 'true',
+test('every registered business route accepts the trusted desktop Cookie transport', async () => {
+  vi.spyOn(AuthService.prototype, 'authenticate').mockImplementation(async (token, client) => {
+    if (token !== tokens.accessToken || client !== 'web')
+      throw new AuthError(401, 'UNAUTHENTICATED', '请先登录');
+    return {
+      userId: '00000000-0000-4000-8000-000000000001',
+      uid: 'test-user',
+      sessionId: 'session',
+      role: 'EXPERT',
+      clientType: 'web',
+    };
   });
+  const app = Fastify(fastifyOptions(secureConfig));
+  const routes: { method: HTTPMethods; path: string }[] = [];
+  app.addHook('onRoute', ({ method, url }) => {
+    if (
+      !url.startsWith(`${API_PREFIX}/`) ||
+      url === `${API_PREFIX}/docs` ||
+      url.startsWith(`${API_PREFIX}/docs/`) ||
+      url === autoCallbackPath
+    )
+      return;
+    for (const verb of Array.isArray(method) ? method : [method]) {
+      if (verb !== 'OPTIONS') routes.push({ method: verb, path: url });
+    }
+  });
+  // Stop after the route's onRequest hooks. No body parsing, business handler or database access.
+  app.addHook('preParsing', async (req, reply) => {
+    if (req.routeOptions.url)
+      return reply.header('x-test-route', req.routeOptions.url).code(204).send();
+  });
+  try {
+    await createApp(secureConfig, { $disconnect: vi.fn() } as unknown as PrismaClient, app);
+    await app.ready();
+    expect(routes).toContainEqual({ method: 'POST', path: `${API_PREFIX}/entrance-exams/publish` });
+    for (const { method, path } of routes) {
+      const url = path.replace(/:[^/]+/g, '1');
+      for (const origin of secureConfig.desktopOrigins) {
+        const context = `${method} ${path} (${origin})`;
+        const preflight = await app.inject({
+          method: 'OPTIONS',
+          url,
+          headers: {
+            origin,
+            'access-control-request-method': method,
+            'access-control-request-headers': 'content-type,x-tyde-client,idempotency-key',
+          },
+        });
+        expect(preflight.statusCode, context).toBe(204);
+        expect(preflight.headers['access-control-allow-origin'], context).toBe(origin);
+        expect(preflight.headers['access-control-allow-credentials'], context).toBe('true');
+        expect(preflight.headers['access-control-allow-methods']?.split(', '), context).toContain(
+          method,
+        );
+
+        const response = await app.inject({
+          method,
+          url,
+          headers: {
+            origin,
+            cookie: `__Host-tyde_session=${tokens.accessToken}`,
+            ...(['GET', 'HEAD'].includes(method) ? {} : { 'x-tyde-client': 'web' }),
+          },
+        });
+        expect(response.statusCode, `${context}: ${response.body}`).toBe(204);
+        expect(response.headers['x-test-route'], context).toBe(path);
+        expect(response.headers['access-control-allow-origin'], context).toBe(origin);
+        expect(response.headers['access-control-allow-credentials'], context).toBe('true');
+      }
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test('exam publishing accepts trusted desktop Cookie sources and preserves transport rejection', async () => {
   const identity = {
     userId: '00000000-0000-4000-8000-000000000001',
     uid: 'test-user',
@@ -225,7 +303,7 @@ test('credential CORS preflights allow only exact sources, supported methods and
       { origin: 'null' },
       { origin: 'tyde-app://app.evil.test' },
       { origin: 'http://127.0.0.1:5175' },
-      { 'access-control-request-method': 'PUT' },
+      { 'access-control-request-method': 'PATCH' },
       { 'access-control-request-headers': 'Authorization' },
       { 'access-control-request-headers': 'X-Untrusted-Header' },
     ]) {
