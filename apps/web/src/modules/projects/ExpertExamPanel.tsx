@@ -94,10 +94,12 @@ export function ExpertExamPanel({
   user,
   task,
   onChanged,
+  onCancelled,
 }: {
   user: AuthUser;
   task: ExpertTask;
   onChanged: () => Promise<unknown>;
+  onCancelled?: () => Promise<unknown>;
 }) {
   const cache = useQueryClient();
   const key = [
@@ -138,9 +140,9 @@ export function ExpertExamPanel({
   const current = useQuery({
     queryKey: currentKey(user.id, projectId),
     queryFn: async () => {
-      requireSession();
+      requireIdentity();
       const result = await api.getEntranceExamCandidateCurrent(projectId);
-      requireSession();
+      requireIdentity();
       return result;
     },
     enabled: open,
@@ -197,13 +199,15 @@ export function ExpertExamPanel({
     enableBeforeUnload: () => working.current || uploading || dirty,
   });
 
-  function sessionMatches() {
+  function sameIdentity() {
     const session = cache.getQueryData<AuthUser | null>(SESSION_KEY);
-    return (
-      mounted.current &&
-      session?.id === user.id &&
-      (session.selectedRole ?? session.role) === 'EXPERT'
-    );
+    return session?.id === user.id && (session.selectedRole ?? session.role) === 'EXPERT';
+  }
+  function sessionMatches() {
+    return mounted.current && sameIdentity();
+  }
+  function requireIdentity() {
+    if (!sameIdentity()) throw new Error('登录身份已变化，请重新打开工作台。');
   }
   function requireSession() {
     if (!sessionMatches()) throw new Error('登录身份已变化，请重新打开工作台。');
@@ -345,6 +349,7 @@ export function ExpertExamPanel({
     working.current = true;
     setBusy(true);
     setError(null);
+    let cancelled = false;
     try {
       requireSession();
       if (kind === 'submit') await api.submitEntranceExam(checked.input);
@@ -355,6 +360,7 @@ export function ExpertExamPanel({
         ...(kind === 'cancel' ? { paper: null, answers: {}, integrity: false } : {}),
         notice: kind === 'submit' ? '答卷已提交，等待阅卷。' : '考试已取消，无法再次入场。',
       });
+      cancelled = kind === 'cancel';
       await Promise.allSettled([
         cache.invalidateQueries({ queryKey: currentKey(user.id, projectId) }),
         cache.invalidateQueries({ queryKey: ['profile-workbench', user.id], refetchType: 'none' }),
@@ -366,6 +372,14 @@ export function ExpertExamPanel({
       if (mounted.current) {
         setBusy(false);
         setConfirming(null);
+      }
+    }
+    if (cancelled && sessionMatches()) {
+      setOpen(false);
+      try {
+        await (onCancelled ?? onChanged)();
+      } catch (value) {
+        failure(value);
       }
     }
   }
@@ -423,7 +437,11 @@ export function ExpertExamPanel({
                   >
                     取消考试
                   </Button>
-                  <Button size="mobileTouch" disabled={disabled} onClick={requestSubmit}>
+                  <Button
+                    size="mobileTouch"
+                    disabled={disabled || !draft.integrity}
+                    onClick={requestSubmit}
+                  >
                     提交答卷
                   </Button>
                 </>
@@ -509,100 +527,157 @@ export function ExpertExamPanel({
                     ? `答题截止：${paper.answerDeadlineAt}（上海时间）`
                     : '答题不限时'}
                 </p>
-                {seconds !== null && !lock && (
-                  <p
-                    role="timer"
-                    aria-label="剩余答题时间"
-                    className="font-mono text-sm text-primary"
-                  >
-                    剩余 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}
-                  </p>
-                )}
                 {expired && !lock && <Alert>答题时间已结束，无法交卷；可以取消考试离场。</Alert>}
               </header>
-              {paper.questions.map((question) => {
-                const answer = draft.answers[question.questionId] ?? { text: '', files: [] };
-                const label = `第${question.sequenceNo}题答案`;
-                return (
-                  <section
-                    key={question.questionId}
-                    aria-label={`第${question.sequenceNo}题`}
-                    className="space-y-4 border-b pb-5"
-                  >
-                    <h4 className="text-sm font-medium">
-                      第{question.sequenceNo}题 · {question.requiredFlag ? '必答' : '选答'} ·{' '}
-                      {question.score}分
-                    </h4>
-                    <EntranceExamText value={question.questionContent} empty="请查看题干附件" />
-                    <EntranceExamFiles
-                      value={question.questionFiles}
-                      label={`第${question.sequenceNo}题题干附件`}
-                    />
-                    <div className="space-y-2">
-                      <label
-                        htmlFor={`expert-answer-${question.questionId}`}
-                        className="text-[13px] font-medium"
+              <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div className="min-w-0 space-y-5">
+                  {paper.questions.map((question) => {
+                    const answer = draft.answers[question.questionId] ?? { text: '', files: [] };
+                    const label = `第${question.sequenceNo}题答案`;
+                    return (
+                      <section
+                        key={question.questionId}
+                        id={`expert-exam-question-${question.questionId}`}
+                        aria-label={`第${question.sequenceNo}题`}
+                        className="space-y-4 border-b pb-5"
                       >
-                        {label}
-                      </label>
-                      <Textarea
-                        id={`expert-answer-${question.questionId}`}
-                        rows={5}
-                        maxLength={100000}
-                        value={answer.text}
-                        disabled={disabled}
-                        aria-invalid={!!errors[question.questionId]}
-                        aria-describedby={
-                          errors[question.questionId]
-                            ? `expert-answer-error-${question.questionId}`
-                            : undefined
-                        }
-                        onChange={(event) =>
-                          update((state) => ({
-                            ...state,
-                            answers: {
-                              ...state.answers,
-                              [question.questionId]: {
-                                ...(state.answers[question.questionId] ?? { text: '', files: [] }),
-                                text: event.target.value,
+                        <h4 className="text-sm font-medium">
+                          第{question.sequenceNo}题 · {question.requiredFlag ? '必答' : '选答'} ·{' '}
+                          {question.score}分
+                        </h4>
+                        <EntranceExamText value={question.questionContent} empty="请查看题干附件" />
+                        <EntranceExamFiles
+                          value={question.questionFiles}
+                          label={`第${question.sequenceNo}题题干附件`}
+                        />
+                        <div className="space-y-2">
+                          <label
+                            htmlFor={`expert-answer-${question.questionId}`}
+                            className="text-[13px] font-medium"
+                          >
+                            {label}
+                          </label>
+                          <Textarea
+                            id={`expert-answer-${question.questionId}`}
+                            rows={5}
+                            maxLength={100000}
+                            value={answer.text}
+                            disabled={disabled}
+                            aria-invalid={!!errors[question.questionId]}
+                            aria-describedby={
+                              errors[question.questionId]
+                                ? `expert-answer-error-${question.questionId}`
+                                : undefined
+                            }
+                            onChange={(event) =>
+                              update((state) => ({
+                                ...state,
+                                answers: {
+                                  ...state.answers,
+                                  [question.questionId]: {
+                                    ...(state.answers[question.questionId] ?? {
+                                      text: '',
+                                      files: [],
+                                    }),
+                                    text: event.target.value,
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                          {errors[question.questionId] && (
+                            <p
+                              id={`expert-answer-error-${question.questionId}`}
+                              role="alert"
+                              className="text-xs text-destructive"
+                            >
+                              {errors[question.questionId]}
+                            </p>
+                          )}
+                        </div>
+                        <StrategistExamFiles
+                          label={`${label}附件`}
+                          files={answer.files}
+                          limit={10}
+                          disabled={disabled}
+                          user={user}
+                          role="EXPERT"
+                          onChange={(change) =>
+                            update((state) => ({
+                              ...state,
+                              answers: {
+                                ...state.answers,
+                                [question.questionId]: {
+                                  ...(state.answers[question.questionId] ?? {
+                                    text: '',
+                                    files: [],
+                                  }),
+                                  files: change(state.answers[question.questionId]?.files ?? []),
+                                },
                               },
-                            },
-                          }))
-                        }
-                      />
-                      {errors[question.questionId] && (
-                        <p
-                          id={`expert-answer-error-${question.questionId}`}
-                          role="alert"
-                          className="text-xs text-destructive"
+                            }))
+                          }
+                        />
+                      </section>
+                    );
+                  })}
+                </div>
+                <aside
+                  aria-label="答题进度"
+                  className="space-y-4 rounded-xl border bg-muted/30 p-4 lg:sticky lg:top-0"
+                >
+                  <h4 className="text-sm font-semibold">答题进度</h4>
+                  {seconds !== null && !lock ? (
+                    <p
+                      role="timer"
+                      aria-label="剩余答题时间"
+                      className="font-mono text-sm text-primary"
+                    >
+                      剩余 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {paper.answerDeadlineAt ? '考试已结束' : '答题不限时'}
+                    </p>
+                  )}
+                  <div className="grid grid-cols-4 gap-2">
+                    {paper.questions.map((question) => {
+                      const answer = draft.answers[question.questionId];
+                      const answered =
+                        !!answer?.text.trim() ||
+                        !!answer?.files.some((file) => file.status === 'ready');
+                      return (
+                        <button
+                          key={question.questionId}
+                          type="button"
+                          aria-label={`第${question.sequenceNo}题${answered ? '已作答' : '未作答'}`}
+                          className={`min-h-10 rounded-md border text-sm ${answered ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'bg-background text-muted-foreground'}`}
+                          onClick={() =>
+                            document
+                              .getElementById(`expert-exam-question-${question.questionId}`)
+                              ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+                          }
                         >
-                          {errors[question.questionId]}
-                        </p>
-                      )}
-                    </div>
-                    <StrategistExamFiles
-                      label={`${label}附件`}
-                      files={answer.files}
-                      limit={10}
-                      disabled={disabled}
-                      user={user}
-                      role="EXPERT"
-                      onChange={(change) =>
-                        update((state) => ({
-                          ...state,
-                          answers: {
-                            ...state.answers,
-                            [question.questionId]: {
-                              ...(state.answers[question.questionId] ?? { text: '', files: [] }),
-                              files: change(state.answers[question.questionId]?.files ?? []),
-                            },
-                          },
-                        }))
-                      }
-                    />
-                  </section>
-                );
-              })}
+                          {question.sequenceNo}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    已作答{' '}
+                    {
+                      paper.questions.filter((question) => {
+                        const answer = draft.answers[question.questionId];
+                        return (
+                          !!answer?.text.trim() ||
+                          !!answer?.files.some((file) => file.status === 'ready')
+                        );
+                      }).length
+                    }{' '}
+                    / {paper.questions.length} 题
+                  </p>
+                </aside>
+              </div>
               <div className="space-y-2">
                 <label className="flex min-h-11 items-start gap-3 text-[13px] leading-6">
                   <input

@@ -205,7 +205,7 @@ for (const desktop of [false, true]) {
     await expect(link).toHaveAttribute('target', '_blank');
     await expect(link).toHaveAttribute('rel', /noopener/);
     const downloaded = page.waitForEvent('download');
-    await dialog.getByRole('button', { name: /培训参考\.txt/ }).click();
+    await dialog.getByRole('button', { name: '下载培训参考.txt', exact: true }).click();
     expect((await downloaded).suggestedFilename()).toBe('培训参考.txt');
     const download = fixture.requests.find((request) => request.path === '/api/v1/files/view');
     expect(download?.query).toEqual({ objectKey: attachment.objectKey });
@@ -237,6 +237,14 @@ for (const desktop of [false, true]) {
     expect(confirmations(fixture.requests)[0].headers.cookie).toContain('training_session=active');
     expect(fixture.state.materials.versionNo).toBe(4);
     expect(fixture.state.materials.currentNodeCode).toBe('PRODUCTION_TASK');
+    await page.getByRole('tab', { name: '标准与培训', exact: true }).click();
+    await page.getByRole('button', { name: '查看标准与培训', exact: true }).click();
+    const previousTraining = page.getByRole('dialog', { name: '标准与培训', exact: true });
+    await expect(previousTraining).toContainText('本人已确认阅读');
+    await expect(
+      previousTraining.getByRole('button', { name: '确认已阅读', exact: true }),
+    ).toHaveCount(0);
+    expect(confirmations(fixture.requests)).toHaveLength(1);
     expect(
       fixture.requests.filter((request) => request.path.endsWith('/standard-materials/update')),
     ).toHaveLength(0);
@@ -248,7 +256,7 @@ for (const owner of [true, false]) {
     page,
   }) => {
     const { state, requests } = await backend(page);
-    state.materials.canConfirmRead = false;
+    state.materials.canConfirmRead = owner;
     state.task.accessContext.projectOwner = owner;
     if (owner) {
       Object.assign(state.task.basicInfo, {

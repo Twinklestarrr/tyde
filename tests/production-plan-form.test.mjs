@@ -26,6 +26,7 @@ function values() {
         startDate: '2099-01-05',
         endDate: '2099-01-09',
         operatorHeadcount: '2',
+        operatorCpd: '10.25',
         accuracyRate: '98.5',
       },
       {
@@ -54,11 +55,11 @@ test('AUTO counts inclusive Monday–Friday without subtracting public holidays'
   assert.equal(productionWorkdays('0000-01-01', '0000-01-02'), null);
 });
 
-test('confirmation snapshot keeps inherited CPD null and permits overlapping stages/manual days above natural days', () => {
+test('confirmation includes each visible stage CPD and permits overlapping stages/manual days above natural days', () => {
   const { input, errors } = productionPlanInput(values(), '2026-10-27');
   assert.deepEqual(errors, {});
   assert.deepEqual(input.crowds, [{ crowdName: '熟练组', profileRequirement: '完成培训' }]);
-  assert.equal(input.stages[0].operatorCpd, null);
+  assert.equal(input.stages[0].operatorCpd, 10.25);
   assert.equal(input.stages[0].accuracyRate, 98.5);
   assert.equal(input.stages[0].workdayCountSource, 'AUTO');
   assert.equal(Object.hasOwn(input.stages[0], 'workdayCount'), false);
@@ -68,8 +69,14 @@ test('confirmation snapshot keeps inherited CPD null and permits overlapping sta
   assert.equal(input.needInterview, true);
   assert.equal(input.inspectorHeadcount, null);
   assert.equal(input.inspectorCpd, null);
-  assert.equal(productionStageEstimate(values().stages[0], '10.25').expectedOutput, 102.5);
-  assert.equal(productionStageEstimate(values().stages[1], '10.25').expectedOutput, 430.5);
+  assert.equal(productionStageEstimate(values().stages[0]).expectedOutput, 102.5);
+  assert.equal(productionStageEstimate(values().stages[1]).expectedOutput, 430.5);
+  const cleared = values();
+  cleared.stages[0].operatorCpd = '';
+  const blocked = productionPlanInput(cleared, '2026-10-27');
+  assert.equal(blocked.input, null);
+  assert.ok(blocked.errors['stages.0.operatorCpd']);
+  assert.equal(productionStageEstimate(cleared.stages[0]).expectedOutput, null);
 });
 
 test('pairing, 32-bit integers, CPD scale/range and percentage limits cannot reach the API', () => {
@@ -149,7 +156,7 @@ test('DECIMAL output overflow is checked for each stage and for their sum', () =
       workdayCountSource: 'MANUAL',
       workdayCount: '100000',
       operatorHeadcount: '100000',
-      operatorCpd: '',
+      operatorCpd: form.operatorCpd,
     });
   const total = productionPlanInput(form, '2026-10-27');
   assert.ok(total.errors.stages);
@@ -189,4 +196,6 @@ test('initial values use server defaults and keep confirmed production results s
   assert.equal(form.stages[0].startDate, '2020-01-01');
   assert.equal(form.stages[0].operatorCpd, '10.25');
   assert.equal(plan.stages[0].expectedOutput, 900);
+  plan.stages[0].operatorCpd = null;
+  assert.equal(productionPlanValues(plan).stages[0].operatorCpd, '');
 });

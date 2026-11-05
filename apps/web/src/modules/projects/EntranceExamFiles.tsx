@@ -1,6 +1,8 @@
-import { useMutation } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
-import type { EntranceExamFileSnapshot } from '@tyde/shared';
+import type { AuthUser, EntranceExamFileSnapshot } from '@tyde/shared';
+import { SESSION_KEY } from '@/hooks/useSession';
 import { api } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ErrorNotice';
@@ -37,10 +39,34 @@ export function entranceExamFiles(value: unknown): EntranceExamFileSnapshot[] | 
 }
 
 export function EntranceExamFiles({ value, label }: { value: unknown; label: string }) {
+  const cache = useQueryClient();
+  const origin = useRef(cache.getQueryData<AuthUser | null>(SESSION_KEY));
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  function requireIdentity() {
+    const current = cache.getQueryData<AuthUser | null>(SESSION_KEY);
+    if (
+      !mounted.current ||
+      !origin.current ||
+      !current ||
+      current.id !== origin.current.id ||
+      (current.selectedRole ?? current.role) !==
+        (origin.current.selectedRole ?? origin.current.role)
+    )
+      throw new Error('当前账号或角色已变化，请重新打开附件。');
+  }
   const files = entranceExamFiles(value);
   const download = useMutation({
     mutationFn: async (file: EntranceExamFileSnapshot) => {
-      saveExamBlob(await api.readEntranceExamAttachment(file.objectKey), file.fileName);
+      requireIdentity();
+      const blob = await api.readEntranceExamAttachment(file.objectKey);
+      requireIdentity();
+      saveExamBlob(blob, file.fileName);
     },
     retry: false,
   });

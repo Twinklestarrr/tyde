@@ -36,6 +36,7 @@ export function ExpertTrainingPanel({
 }) {
   const cache = useQueryClient();
   const projectId = task.basicInfo.projectId;
+  const manager = task.accessContext.projectOwner || task.accessContext.acceptedOrganizationOwner;
   const scope = [
     'expert-standard-materials',
     user.id,
@@ -63,7 +64,12 @@ export function ExpertTrainingPanel({
   const working = useRef(false);
   const materials = useQuery({
     queryKey: scope,
-    queryFn: readMaterials,
+    queryFn: async () => {
+      requireIdentity();
+      const result = await api.getProjectStandardMaterials(projectId);
+      requireIdentity();
+      return result;
+    },
     enabled: open,
     staleTime: 0,
     retry: false,
@@ -73,6 +79,7 @@ export function ExpertTrainingPanel({
   const data = materials.data;
   const checked = !!data && acknowledged === contentKey(data);
   const canConfirm =
+    !manager &&
     data?.canConfirmRead === true &&
     data.confirmedReadAt === null &&
     !materials.isError &&
@@ -97,13 +104,15 @@ export function ExpertTrainingPanel({
   }, []);
   useBlocker({ shouldBlockFn: () => working.current, enableBeforeUnload: () => working.current });
 
-  function sameSession() {
+  function sameIdentity() {
     const session = cache.getQueryData<AuthUser | null>(SESSION_KEY);
-    return (
-      mounted.current &&
-      session?.id === user.id &&
-      (session.selectedRole ?? session.role) === 'EXPERT'
-    );
+    return session?.id === user.id && (session.selectedRole ?? session.role) === 'EXPERT';
+  }
+  function sameSession() {
+    return mounted.current && sameIdentity();
+  }
+  function requireIdentity() {
+    if (!sameIdentity()) throw new Error('登录身份已变化，请重新打开工作台。');
   }
   function requireSession() {
     if (!sameSession()) throw new Error('登录身份已变化，请重新打开工作台。');
@@ -277,12 +286,12 @@ export function ExpertTrainingPanel({
                   核实阅读状态
                 </Button>
               )}
-              {(lock === 'success' || data?.confirmedReadAt) && (
+              {!manager && (lock === 'success' || data?.confirmedReadAt) && (
                 <Button size="mobileTouch" disabled={busy} onClick={() => void complete()}>
                   更新项目待办
                 </Button>
               )}
-              {data?.canConfirmRead && !data.confirmedReadAt && !lock && (
+              {!manager && data?.canConfirmRead && !data.confirmedReadAt && !lock && (
                 <Button
                   size="mobileTouch"
                   disabled={!checked || !canConfirm || busy}
@@ -322,7 +331,7 @@ export function ExpertTrainingPanel({
           {data && !materials.isError && (
             <>
               <StandardMaterialsContent user={user} materials={data} />
-              {data.confirmedReadAt ? (
+              {manager ? null : data.confirmedReadAt ? (
                 <Alert>本人已确认阅读：{data.confirmedReadAt}（上海时间）。</Alert>
               ) : !data.canConfirmRead ? (
                 <p className="text-[13px] leading-6 text-muted-foreground">

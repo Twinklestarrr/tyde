@@ -264,6 +264,17 @@ async function publish(page: Page) {
   await dialog.getByRole('button', { name: '确认发布', exact: true }).click();
 }
 
+test('策略官可直接发布当前标准快照，无须先进入编辑', async ({ page }) => {
+  const f = await backend(page);
+  const panel = await openMaterials(page);
+  await panel.getByRole('button', { name: '标准发布', exact: true }).click();
+  await expect.poll(() => f.calls('projects/standard-materials/update').length).toBe(1);
+  expect(f.calls('projects/standard-materials/update')[0]!.body).toMatchObject({
+    projectId,
+    standardContent: project.standardContent,
+  });
+});
+
 for (const [mode, desktop] of [
   ['Web', false],
   ['桌面运行配置', true],
@@ -280,9 +291,7 @@ for (const [mode, desktop] of [
     expect((await download).suggestedFilename()).toBe('原始案例.txt');
     await panel.getByRole('button', { name: '编辑标准材料', exact: true }).click();
     await panel.getByRole('textbox', { name: '标准正文', exact: true }).fill('  新版作业标准  ');
-    await panel
-      .getByRole('textbox', { name: '标准链接', exact: true })
-      .fill('https://example.com/new-standard');
+    await expect(panel.getByRole('textbox', { name: '标准链接', exact: true })).toHaveCount(0);
     await publish(page);
     await expect(page.getByRole('tab', { name: '招募执行专家', exact: true })).toHaveAttribute(
       'aria-selected',
@@ -297,8 +306,9 @@ for (const [mode, desktop] of [
     expect(calls('projects/standard-materials/update').map((row) => row.body)).toEqual([
       {
         projectId,
-        standardContent: '新版作业标准',
-        standardLink: 'https://example.com/new-standard',
+        // 与旧版相同的 Markdown 内核会保留用户输入的边界空格。
+        standardContent: '&#x20; 新版作业标准 &#x20;',
+        standardLink: project.standardLink,
         attachments: [{ id: 81, sortNo: 0 }],
       },
     ]);
@@ -357,7 +367,7 @@ test('上传失败与保存400均保留草稿，手动重试保存复用已上�
   state.writeStatus = 400;
   await publish(page);
   await expect(panel).toContainText('标准材料保存被拒绝');
-  await expect(panel.getByRole('textbox', { name: '标准正文', exact: true })).toHaveValue(
+  await expect(panel.getByRole('textbox', { name: '标准正文', exact: true })).toHaveText(
     '保留输入与附件凭证',
   );
   await expect(panel.getByRole('button', { name: '保存并发布标准', exact: true })).toBeEnabled();
@@ -394,14 +404,26 @@ for (const failure of ['冲突', '网络未知'] as const) {
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('tab', { name: '招募执行专家', exact: true }).click();
     await page.getByRole('tab', { name: '标准与培训', exact: true }).click();
-    await expect(panel.getByRole('button', { name: '编辑标准材料', exact: true })).toBeDisabled();
+    await expect(panel.getByRole('textbox', { name: '标准正文', exact: true })).toHaveText(
+      '未确认保存的本地内容',
+    );
+    await expect(panel.getByRole('button', { name: '保存并发布标准', exact: true })).toBeDisabled();
     expect(calls('projects/standard-materials/update')).toHaveLength(1);
     state.writeStatus = 200;
     state.networkFailure = false;
     page.once('dialog', (dialog) => dialog.accept());
     await panel.getByRole('button', { name: '重新读取标准材料', exact: true }).click();
-    await expect(panel.getByRole('button', { name: '编辑标准材料', exact: true })).toBeEnabled();
-    await expect(panel).toContainText('逐条核对标准与案例');
+    if (failure === '网络未知')
+      await expect(
+        panel.getByRole('button', { name: '保存并发布标准', exact: true }),
+      ).toBeDisabled();
+    else
+      await expect(
+        panel.getByRole('button', { name: '保存并发布标准', exact: true }),
+      ).toBeEnabled();
+    await expect(panel.getByRole('textbox', { name: '标准正文', exact: true })).toHaveText(
+      '未确认保存的本地内容',
+    );
     expect(calls('projects/standard-materials/update')).toHaveLength(1);
   });
 }
@@ -460,7 +482,7 @@ test('未保存标准保护模块与角色切换，375px布局和详情弹框保
   await expect(basicInfo).toContainText(project.projectName!);
   await expect(basicInfo).toContainText(project.projectDescription!);
   await page.keyboard.press('Escape');
-  await expect(panel.getByRole('textbox', { name: '标准正文', exact: true })).toHaveValue(
+  await expect(panel.getByRole('textbox', { name: '标准正文', exact: true })).toHaveText(
     '保留未保存草稿',
   );
   expect(requests).toHaveLength(before);
@@ -477,10 +499,18 @@ test('不执行不安全材料链接或正文脚本，并在HTTP前阻止超16Ki
   expect(await panel.locator('a[href^="javascript:"]').count()).toBe(0);
   expect(await page.evaluate(() => 'materialExecuted' in window)).toBe(false);
   await panel.getByRole('button', { name: '编辑标准材料', exact: true }).click();
-  await panel.getByRole('textbox', { name: '标准链接', exact: true }).fill('');
-  await panel.getByRole('textbox', { name: '标准正文', exact: true }).fill('标准'.repeat(4000));
+  const source = panel
+    .locator('textarea')
+    .and(panel.getByRole('textbox', { name: '标准正文', exact: true }));
+  await expect(source).toHaveValue(state.materials.standardContent!);
+  await source.fill('标准'.repeat(4000));
   await panel.getByRole('button', { name: '保存并发布标准', exact: true }).click();
   await expect(panel).toContainText('内容过长');
   await expect(page.getByRole('dialog', { name: '发布标准材料', exact: true })).toHaveCount(0);
   expect(calls('projects/standard-materials/update')).toHaveLength(0);
+  await source.fill('修订后的安全正文');
+  await publish(page);
+  expect(
+    calls('projects/standard-materials/update').map((row) => row.body?.standardContent),
+  ).toEqual(['修订后的安全正文']);
 });

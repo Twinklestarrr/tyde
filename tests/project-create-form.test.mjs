@@ -29,3 +29,18 @@ test('date-only validation rejects impossible dates and keeps the draft creation
   assert.equal(errors('2028-02-28', '2028-02-28 23:59:59').deadline, '截止日期须晚于草稿创建时间');
   assert.equal(errors('2028-02-27').deadline, '截止日期须晚于草稿创建时间');
 });
+
+test('legacy creation defaults and quantity rules are preserved', () => {
+  const blank = projectCreateValues(null);
+  assert.equal(blank.employmentType, 'FULL_TIME');
+  for (const quantity of ['0', '-1', '1.5'])
+    assert.ok(
+      validateProjectCreate({ ...blank, projectQuantity: quantity }, false).projectQuantity,
+    );
+  assert.equal(
+    validateProjectCreate({ ...blank, projectQuantity: '12' }, false).projectQuantity,
+    undefined,
+  );
+  for (const quantityUnit of ['张2', '条２'])
+    assert.ok(validateProjectCreate({ ...blank, quantityUnit }, false).quantityUnit);
+});

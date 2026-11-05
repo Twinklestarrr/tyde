@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import { materialsExample } from '../../apps/server/src/modules/projects/project-materials.schema';
 import type {
   AuthUser,
   NavigatorProjectCard,
@@ -137,6 +138,27 @@ async function backend(page: Page, desktop = false) {
     const reply = (data: unknown, status = 200, message = '成功') =>
       route.fulfill({ status, json: { code: status, message, data } });
     if (path === '/api/v1/users/me') return reply(state.user);
+    if (path === '/api/v1/projects/workbench/statistics')
+      return reply({
+        mode: 'TASK',
+        pendingTaskCount: 1,
+        completedTaskCount: 0,
+        involvedProjectCount: 1,
+      });
+    if (path === '/api/v1/entrance-exams/management' && request.method() === 'GET')
+      return reply(null, 403, '当前账号未配置人工阅卷资格');
+    if (path === '/api/v1/production-tasks/list' && request.method() === 'POST')
+      return reply({ current: 1, size: 20, total: 0, pages: 0, records: [] });
+    if (path === '/api/v1/projects/standard-materials/detail' && request.method() === 'GET')
+      return reply({
+        ...structuredClone(materialsExample),
+        projectId: detail.id,
+        standardContent: detail.standardContent,
+        standardLink: detail.standardLink,
+        attachments: detail.attachments,
+        currentNodeCode: state.node,
+        versionNo: detail.versionNo,
+      });
     if (path === '/api/v1/projects/draft/current') return reply({ hasDraft: false, draft: null });
     if (path === '/api/v1/projects/list') {
       const card: NavigatorProjectCard = {
@@ -313,12 +335,28 @@ for (const [mode, desktop] of [
       tabs.getByRole('tab', { name: /^(生产计划|招募执行专家|人员管理|结项)$/ }),
     ).toHaveCount(0);
     const beforeTabs = requests.length;
-    for (const name of ['准入考试', '标准与培训', '生产任务']) {
+    for (const [name, previous] of [
+      ['准入考试', '生产计划'],
+      ['标准与培训', '准入考试'],
+      ['生产任务', '人员管理'],
+    ] as const) {
       await tabs.getByRole('tab', { name, exact: true }).click();
-      await expect(page.getByRole('tabpanel', { name, exact: true })).toContainText('入口暂未开放');
+      await expect(page.getByRole('tabpanel', { name, exact: true })).toContainText(
+        `请先完成上一节点「${previous}」`,
+      );
       await expect(section).toHaveCount(0);
     }
-    expect(requests).toHaveLength(beforeTabs);
+    expect(
+      requests
+        .slice(beforeTabs)
+        .filter(({ path }) =>
+          [
+            '/api/v1/entrance-exams/management',
+            '/api/v1/projects/standard-materials/detail',
+            '/api/v1/production-tasks/list',
+          ].includes(path),
+        ),
+    ).toHaveLength(0);
     expect(calls('manager-recruitments')).toHaveLength(0);
     await tabs.getByRole('tab', { name: '招募策略官', exact: true }).click();
     await expect(section.getByRole('radio', { name: /策略官甲/ })).toBeEnabled();

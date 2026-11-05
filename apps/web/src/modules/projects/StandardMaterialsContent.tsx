@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Download, ExternalLink } from 'lucide-react';
+import { Download, ExternalLink, Eye } from 'lucide-react';
 import type { AuthUser, ProjectStandardMaterials } from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
@@ -40,15 +40,33 @@ export function StandardMaterialsContent({
     );
   }
 
-  async function download(id: number) {
+  async function download(id: number, preview = false) {
     const file = materials.attachments.find((item) => item.id === id);
     if (!file || downloading !== null || !sameSession()) return;
+    const previewWindow = preview ? window.open('about:blank', '_blank') : null;
+    if (preview && !previewWindow) {
+      setError(new Error('请允许打开附件预览窗口后重试。'));
+      return;
+    }
+    if (previewWindow) previewWindow.opener = null;
     setDownloading(id);
     setError(null);
     try {
       const blob = await api.readProjectAttachment(file.objectKey);
-      if (sameSession()) saveExamBlob(blob, file.fileName);
+      if (!sameSession()) {
+        previewWindow?.close();
+        return;
+      }
+      if (previewWindow) {
+        const safe = ['text/html', 'application/xhtml+xml', 'image/svg+xml'].includes(blob.type)
+          ? new Blob([blob], { type: 'text/plain' })
+          : blob;
+        const url = URL.createObjectURL(safe);
+        previewWindow.location.href = url;
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } else saveExamBlob(blob, file.fileName);
     } catch (failure) {
+      previewWindow?.close();
       if (sameSession()) setError(failure);
     } finally {
       if (mounted.current) setDownloading(null);
@@ -87,19 +105,30 @@ export function StandardMaterialsContent({
           <p className="text-muted-foreground">暂无标准附件。</p>
         )}
         {materials.attachments.map((file) => (
-          <Button
-            key={file.id}
-            variant="outline"
-            size="mobileTouch"
-            className="flex h-auto max-w-full justify-start whitespace-normal break-all text-left"
-            loading={downloading === file.id}
-            aria-label={`下载${file.fileName}`}
-            disabled={downloading !== null}
-            onClick={() => void download(file.id)}
-          >
-            <Download className="size-4 shrink-0" aria-hidden />
-            {file.fileName}
-          </Button>
+          <div key={file.id} className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="ghost"
+              size="mobileTouch"
+              aria-label={`查看${file.fileName}`}
+              disabled={downloading !== null}
+              onClick={() => void download(file.id, true)}
+            >
+              <Eye className="size-4 shrink-0" aria-hidden />
+              查看
+            </Button>
+            <Button
+              variant="outline"
+              size="mobileTouch"
+              className="flex h-auto max-w-full justify-start whitespace-normal break-all text-left"
+              loading={downloading === file.id}
+              aria-label={`下载${file.fileName}`}
+              disabled={downloading !== null}
+              onClick={() => void download(file.id)}
+            >
+              <Download className="size-4 shrink-0" aria-hidden />
+              {file.fileName}
+            </Button>
+          </div>
         ))}
       </div>
       <ErrorNotice error={error} />

@@ -1,4 +1,17 @@
-import type { EntranceExamGradingDetail, EntranceExamGradingItemInput } from '@tyde/shared';
+import {
+  ApiError,
+  type EntranceExamGradingDetail,
+  type EntranceExamGradingItemInput,
+} from '@tyde/shared';
+
+/** 超时和2xx业务错误不证明写入被拒绝；只有明确拒绝状态可在重读后恢复。 */
+export function entranceExamGradingFailureIsUnknown(error: unknown) {
+  return (
+    !(error instanceof ApiError) ||
+    ['SESSION_CHANGED', 'INVALID_RESPONSE'].includes(String(error.code)) ||
+    ![400, 401, 403, 404, 409, 413, 422, 429].includes(error.status)
+  );
+}
 
 export interface EntranceExamGradingValues {
   items: {
@@ -28,24 +41,55 @@ export function entranceExamGradingValues(
 }
 
 /** 门禁只使用本次应试绑定的轮次；人工阅卷人的最终资格仍由提交接口核验。 */
-export function entranceExamGradingActions(detail: EntranceExamGradingDetail, canManage: boolean) {
+export function entranceExamGradingActions(
+  detail: EntranceExamGradingDetail,
+  canManage: boolean,
+  role: 'PM' | 'NAVIGATOR' = 'PM',
+) {
   const round = detail.selectedRound;
   const previousComplete = detail.rounds
     .filter((item) => item.roundNo < round.roundNo)
     .every((item) => item.status === 'COMPLETED');
-  const active = canManage && previousComplete && round.gradingRecordId !== null;
+  const active = previousComplete && round.gradingRecordId !== null;
   return {
     previousComplete,
     manual:
       active &&
       round.gradingMode === 'MANUAL' &&
       (round.status === 'PENDING' || round.status === 'PROCESSING'),
-    retry: active && round.gradingMode === 'AUTO' && round.status === 'FAILED',
+    retry:
+      role === 'PM' &&
+      canManage &&
+      active &&
+      round.gradingMode === 'AUTO' &&
+      round.status === 'FAILED',
     compensate:
       active &&
+      role === 'PM' &&
+      canManage &&
       round.gradingMode === 'AUTO' &&
       (round.status === 'FAILED' || round.status === 'COMPLETED'),
   };
+}
+
+/** 写前重读仍须是同一绑定轮次、记录和完整题目集合。 */
+export function entranceExamGradingSourceMatches(
+  previous: EntranceExamGradingDetail,
+  current: EntranceExamGradingDetail,
+) {
+  const a = previous.selectedRound,
+    b = current.selectedRound;
+  return (
+    previous.examId === current.examId &&
+    previous.attemptId === current.attemptId &&
+    a.gradingRecordId !== null &&
+    a.gradingRecordId === b.gradingRecordId &&
+    a.gradingRoundId === b.gradingRoundId &&
+    a.roundNo === b.roundNo &&
+    a.gradingMode === b.gradingMode &&
+    JSON.stringify(previous.questions.map((item) => item.questionId).sort((x, y) => x - y)) ===
+      JSON.stringify(current.questions.map((item) => item.questionId).sort((x, y) => x - y))
+  );
 }
 
 /** 必须覆盖同一应试的全部题目；每题只有正确满分或错误零分，不接受任意分值。 */

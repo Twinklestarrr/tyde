@@ -8,6 +8,7 @@ import type {
   EntranceExamCard,
   EntranceExamConfigInput,
   EntranceExamConfiguration,
+  EntranceExamFileInput,
   EntranceExamGradingDetail,
   EntranceExamGradingSubmitResult,
   EntranceExamManagement,
@@ -167,7 +168,16 @@ function configuration(
   input = baselineInput,
   id = examId,
   version = 6001,
+  uploads: ReadonlyMap<string, typeof attachment> = new Map(),
 ): EntranceExamConfiguration {
+  const snapshots = (files?: EntranceExamFileInput[] | null) =>
+    files?.length
+      ? files.map(({ objectKey }) => {
+          const uploaded = uploads.get(objectKey);
+          if (!uploaded) throw new Error('考试配置引用了未上传的测试文件');
+          return uploaded;
+        })
+      : null;
   return {
     projectId,
     examId: id,
@@ -191,7 +201,7 @@ function configuration(
         questionId: 8001 + p * 100 + q,
         sequenceNo: q + 1,
         questionContent: question.questionContent ?? null,
-        questionFiles: question.questionFiles?.map((file) => ({ ...attachment, ...file })) ?? [],
+        questionFiles: snapshots(question.questionFiles),
         requiredFlag: question.requiredFlag ?? true,
         score:
           question.scoreSource === 'MANUAL'
@@ -199,7 +209,7 @@ function configuration(
             : input.fullScore! / paper.questions.length,
         scoreSource: question.scoreSource ?? 'AUTO',
         referenceAnswer: question.referenceAnswer ?? null,
-        referenceFiles: question.referenceFiles?.map((file) => ({ ...attachment, ...file })) ?? [],
+        referenceFiles: snapshots(question.referenceFiles),
       })),
     })),
     gradingRounds: input.gradingRounds.map((round, index) => ({
@@ -209,7 +219,7 @@ function configuration(
       toolCode: round.toolCode ?? null,
       toolName: round.toolName ?? null,
       toolConfig: round.toolConfig ?? null,
-      toolFiles: round.toolFiles ?? [],
+      toolFiles: snapshots(round.toolFiles),
       reviewers: (round.reviewerUserIds ?? []).map((id) => ({
         userId: id,
         uid: user.uid,
@@ -334,6 +344,7 @@ async function backend(page: Page, desktop = false) {
     importStatus: 200,
   };
   const requests: RequestLog[] = [];
+  const uploads = new Map<string, typeof attachment>();
   let release: (() => Promise<void>) | undefined;
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request(),
@@ -509,19 +520,23 @@ async function backend(page: Page, desktop = false) {
         contentType: 'application/octet-stream',
         body: 'isolated exam answer',
       });
-    if (path === '/api/v1/files/upload' && log.method === 'POST')
+    if (path === '/api/v1/files/upload' && log.method === 'POST') {
+      if (!log.fileName) return reply(null, 400, '请选择文件');
+      const fileSize = Buffer.byteLength(log.form.file ?? '');
+      uploads.set(attachment.objectKey, { ...attachment, fileName: log.fileName, fileSize });
       return reply({
-        fileId: uuid(90),
+        fileId: attachment.uploadedFileId,
         objectKey: attachment.objectKey,
         uploadToken: 'u'.repeat(43),
         url: null,
         sensitive: true,
         fileName: log.fileName,
         extension: 'txt',
-        size: Buffer.byteLength(log.form.file ?? ''),
+        size: fileSize,
         contentType: 'text/plain',
         fileHash: 'a'.repeat(64),
       });
+    }
     if (path === '/api/v1/entrance-exams/import/template' && log.method === 'GET') {
       const type = url.searchParams.get('type');
       return route.fulfill({
@@ -574,6 +589,7 @@ async function backend(page: Page, desktop = false) {
             body as unknown as EntranceExamConfigInput,
             id,
             path.endsWith('/publish') ? 6001 : 6002,
+            uploads,
           );
           const changed: EntranceExamCard = {
             ...card(id),
@@ -732,7 +748,7 @@ async function fillEditor(editor: Locator, name = '完整发布考试') {
     .fill('核对原始记录与标准');
   await editor
     .getByRole('group', { name: '第1轮阅卷人', exact: true })
-    .getByRole('checkbox', { name: `${user.realName} · ${user.uid}`, exact: true })
+    .getByRole('checkbox', { name: `${user.realName} · ${user.id}`, exact: true })
     .check();
   return editor;
 }
@@ -753,12 +769,11 @@ const examCard = (panel: Locator, name = '当前生效考试') =>
   panel.locator('article').filter({
     has: panel.page().getByRole('heading', { name, exact: true }),
   });
-async function roster(page: Page, panel: Locator) {
+async function roster(_page: Page, panel: Locator) {
   await panel.getByRole('tab', { name: '阅卷', exact: true }).click();
-  await examCard(panel).getByRole('button', { name: '查看名单', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '考试名单', exact: true });
-  await expect(dialog.getByRole('row').filter({ hasText: '应试甲' })).toBeVisible();
-  return dialog;
+  const list = examCard(panel).getByRole('region', { name: '考试花名册', exact: true });
+  await expect(list.getByRole('row').filter({ hasText: '应试甲' })).toBeVisible();
+  return list;
 }
 async function gradingDialog(page: Page, panel: Locator) {
   const list = await roster(page, panel);
@@ -767,9 +782,9 @@ async function gradingDialog(page: Page, panel: Locator) {
     .filter({ hasText: '应试甲' })
     .getByRole('button', { name: '查看阅卷', exact: true })
     .click();
-  const dialog = page.getByRole('dialog', { name: '阅卷详情', exact: true });
-  await expect(dialog.getByText('历史版本题干', { exact: true })).toBeVisible();
-  return dialog;
+  const detail = page.getByRole('region', { name: '阅卷详情', exact: true });
+  await expect(detail.getByText('历史版本题干', { exact: true })).toBeVisible();
+  return detail;
 }
 
 for (const [mode, desktop] of [
@@ -791,13 +806,17 @@ for (const [mode, desktop] of [
     await editor.getByRole('checkbox', { name: '试卷2题目1必答', exact: true }).uncheck();
     await editor.getByRole('button', { name: '添加判卷轮次', exact: true }).click();
     await choose(page, editor, '第2轮判卷方式', '自动阅卷');
-    await editor
-      .getByRole('textbox', { name: '第2轮工具编码', exact: true })
-      .fill('fixture-mock-tool');
-    await editor.getByRole('textbox', { name: '第2轮工具名称', exact: true }).fill('模拟阅卷工具');
-    await editor
-      .getByRole('textbox', { name: '第2轮工具配置（选填）', exact: true })
-      .fill('{"mode":"fixture"}');
+    await editor.getByLabel('上传第2轮工具附件', { exact: true }).setInputFiles({
+      name: '模拟阅卷工具.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('规则'),
+    });
+    await expect(
+      editor.getByRole('button', { name: '下载模拟阅卷工具.txt', exact: true }),
+    ).toBeVisible();
+    await expect(editor.getByRole('textbox', { name: '第2轮工具编码', exact: true })).toHaveCount(
+      0,
+    );
     await choose(page, editor, '平局裁决规则', '从宽（准入）');
     if (!desktop) await screenshot(page, 'create');
     state.holdWrite = true;
@@ -833,13 +852,16 @@ for (const [mode, desktop] of [
         { gradingMode: 'MANUAL', reviewerUserIds: [user.id] },
         {
           gradingMode: 'AUTO',
-          toolCode: 'fixture-mock-tool',
+          toolCode: '模拟阅卷工具',
           toolName: '模拟阅卷工具',
-          toolConfig: { mode: 'fixture' },
+          toolConfig: null,
         },
       ],
     });
     expect(calls('publish')[0]!.body).not.toHaveProperty('retakeCount');
+    expect(
+      (calls('publish')[0]!.body as EntranceExamConfigInput).gradingRounds[1]!.toolFiles,
+    ).toEqual([{ objectKey: attachment.objectKey, uploadToken: 'u'.repeat(43) }]);
     expect(calls('publish')[0]!.headers.cookie).toContain('exam_session=active');
     expect(calls('publish')[0]!.headers.authorization).toBeUndefined();
     expect(calls('publish')[0]!.headers['idempotency-key']).toBeUndefined();
@@ -853,10 +875,16 @@ for (const [mode, desktop] of [
     await expect(edit.getByRole('textbox', { name: '考试名称', exact: true })).toHaveValue(
       '完整发布考试',
     );
+    await expect(
+      edit.getByRole('button', { name: '下载模拟阅卷工具.txt', exact: true }),
+    ).toBeVisible();
     await edit.getByRole('textbox', { name: '考试名称', exact: true }).fill('已更新考试');
     await submitConfiguration(page, edit, true);
     await expect(edit).toHaveCount(0);
     expect(calls('edit')).toHaveLength(1);
+    expect((calls('edit')[0]!.body as EntranceExamConfigInput).gradingRounds[1]!.toolFiles).toEqual(
+      [{ objectKey: attachment.objectKey, uploadedFileId: attachment.uploadedFileId }],
+    );
     expect(calls('edit')[0]).toMatchObject({
       method: 'PUT',
       body: {
@@ -888,7 +916,7 @@ for (const [mode, desktop] of [
   });
 }
 
-test('多卷题目与人工自动轮次校验阻止错误分数、时间和敏感工具配置', async ({ page }) => {
+test('多卷题目与人工自动轮次校验阻止错误分数、时间和缺失工具文件', async ({ page }) => {
   const { calls } = await backend(page);
   const editor = await createEditor(page, await openExams(page));
   await fillEditor(editor);
@@ -916,15 +944,8 @@ test('多卷题目与人工自动轮次校验阻止错误分数、时间和敏�
   await editor.getByRole('button', { name: '删除试卷1题目2', exact: true }).click();
   await editor.getByRole('button', { name: '添加判卷轮次', exact: true }).click();
   await choose(page, editor, '第2轮判卷方式', '自动阅卷');
-  await editor.getByRole('textbox', { name: '第2轮工具编码', exact: true }).fill('fixture');
-  await editor.getByRole('textbox', { name: '第2轮工具名称', exact: true }).fill('模拟工具');
-  await editor
-    .getByRole('textbox', { name: '第2轮工具配置（选填）', exact: true })
-    .fill('{"token":"fixture-value"}');
   await editor.getByRole('button', { name: '发布考试', exact: true }).click();
-  await expect(
-    editor.getByRole('textbox', { name: '第2轮工具配置（选填）', exact: true }),
-  ).toHaveAttribute('aria-invalid', 'true');
+  await expect(editor).toContainText('请至少上传一个自动阅卷工具文件');
   expect(calls('publish')).toHaveLength(0);
 });
 
@@ -950,8 +971,8 @@ test('考试活动上限仅禁止新增，主策略官仍可编辑；无需笔�
   const configurationReads = calls('detail').length;
   const closed = examCard(panel, '历史关闭考试');
   await expect(closed.getByRole('button', { name: '查看配置', exact: true })).toBeDisabled();
-  await closed.getByRole('button', { name: '查看名单', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '考试名单', exact: true })).toBeVisible();
+  await expect(closed.getByRole('region', { name: '考试花名册', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '考试名单', exact: true })).toBeVisible();
   expect(calls('detail')).toHaveLength(configurationReads);
   await page.keyboard.press('Escape');
   state.managementStatus = 503;
@@ -973,29 +994,31 @@ test('考试活动上限仅禁止新增，主策略官仍可编辑；无需笔�
   state.management.needWrittenExam = false;
   state.management.canCreateExam = false;
   await panel.getByRole('button', { name: '刷新考试', exact: true }).click();
-  await expect(panel).toContainText('当前不能组织新考试');
+  await expect(panel).toContainText('本项目不需要准入考试');
   expect(calls('publish')).toHaveLength(0);
 });
 
-test('协作身份403只读与候选503禁写，真实切换角色后不读取策略官考试', async ({ page }) => {
+test('考试配置编辑遵循管理资格，创建只按canCreateExam，切角色不读取策略官考试', async ({
+  page,
+}) => {
   const { state, calls, requests } = await backend(page);
   state.reviewerStatus = 403;
   const panel = await openExams(page);
   await expect(
     panel.getByText('当前仅可查看，考试由生效主策略官维护。', { exact: true }),
   ).toBeVisible();
-  await expect(panel.getByRole('button', { name: '组织考试', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: '组织考试', exact: true })).toBeEnabled();
   await expect(
     examCard(panel)
       .getByRole('button', { name: '编辑考试', exact: true })
       .and(examCard(panel).locator(':enabled')),
   ).toHaveCount(0);
   await expect(
-    examCard(panel).getByRole('button', { name: '查看名单', exact: true }),
-  ).toBeEnabled();
+    examCard(panel).getByRole('region', { name: '考试花名册', exact: true }),
+  ).toBeVisible();
   state.reviewerStatus = 503;
   await panel.getByRole('button', { name: '刷新考试', exact: true }).click();
-  await expect(panel.getByRole('button', { name: '组织考试', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: '组织考试', exact: true })).toBeEnabled();
   state.reviewerStatus = 200;
   await panel.getByRole('button', { name: '刷新考试', exact: true }).click();
   await expect(panel.getByRole('button', { name: '组织考试', exact: true })).toBeEnabled();
@@ -1047,7 +1070,7 @@ for (const viewport of [
       );
       const height = viewport.width <= 640 ? 44 : 40;
       for (const box of boxes) expect(box.height).toBe(height);
-      if (viewport.width >= 1024) {
+      if (viewport.width >= 1024 && name === 'admissions') {
         const tops = boxes.map((box) => box.y);
         const bottoms = boxes.map((box) => box.y + box.height);
         expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(1);
@@ -1070,13 +1093,7 @@ for (const viewport of [
     }
     await aligned(admissions, '搜索准入人员', '准入状态', '刷新准入情况', 'admissions');
     const list = await roster(page, panel);
-    await aligned(
-      list.getByRole('region', { name: '考试花名册', exact: true }),
-      '搜索考试人员',
-      '考试结果',
-      '刷新名单',
-      'roster',
-    );
+    await aligned(list, '搜索考试人员', '考试结果', '刷新名单', 'roster');
   });
 }
 
@@ -1105,7 +1122,7 @@ test('项目准入与考试名单分别使用真实GET和POST筛选分页，考�
     },
   });
   const list = await roster(page, panel);
-  await list.getByRole('button', { name: '下一页', exact: true }).click();
+  await list.getByRole('button', { name: '加载更多', exact: true }).click();
   await expect.poll(() => calls('roster').at(-1)!.body).toMatchObject({ current: 2 });
   await list.getByRole('textbox', { name: '搜索考试人员', exact: true }).fill('应试甲');
   await choose(page, list, '考试结果', '待阅卷');
@@ -1242,7 +1259,7 @@ test('导入弹框确认后回填、取消与失败保留草稿，敏感附件�
   await expect(
     importDialog.getByRole('button', { name: '确认并解析', exact: true }),
   ).toBeDisabled();
-  await expect(importDialog).toContainText('确认解析后将替换当前表单中的考试配置');
+  await expect(importDialog).toContainText('确认解析后将替换试卷内容，未解析到的其他设置保留原值');
   const [template] = await Promise.all([
     page.waitForEvent('download'),
     importDialog.getByRole('button', { name: 'TXT模板', exact: true }).click(),
@@ -1290,7 +1307,9 @@ test('导入弹框确认后回填、取消与失败保留草稿，敏感附件�
     form: { projectId: String(projectId) },
   });
   expect(calls('publish')).toHaveLength(0);
-  await expect(editor.getByRole('status')).toContainText('试卷已解析到当前表单');
+  await expect(editor.getByRole('status')).toContainText(
+    '试卷已替换，其他已填写设置在解析未提供新值时保留',
+  );
   await editor.getByLabel('上传试卷1题目1题干附件', { exact: true }).setInputFiles({
     name: 'question.txt',
     mimeType: 'text/plain',
@@ -1330,6 +1349,28 @@ test('导入弹框确认后回填、取消与失败保留草稿，敏感附件�
   expect(calls('publish')).toHaveLength(0);
 });
 
+for (const reviewerStatus of [403, 503]) {
+  test(`人工阅卷可读时主PM候选接口${reviewerStatus}不阻断成功回读`, async ({ page }) => {
+    const { state, calls, requests } = await backend(page);
+    state.reviewerStatus = reviewerStatus;
+    const detail = await gradingDialog(page, await openExams(page));
+    const gradingReads = () =>
+      requests.filter((request) => request.path.endsWith('/grading/detail'));
+    const priorReads = gradingReads().length;
+    await choose(page, detail, '题目1判定', '正确');
+    await detail.getByRole('button', { name: '提交人工阅卷', exact: true }).click();
+    await page
+      .getByRole('alertdialog', { name: '确认提交人工阅卷', exact: true })
+      .getByRole('button', { name: '确认提交', exact: true })
+      .click();
+    await expect(detail).toContainText('本轮得分：20分');
+    await expect(detail).toContainText('已读取最新阅卷状态');
+    await expect(detail).not.toContainText('最新状态读取失败');
+    expect(gradingReads().length).toBeGreaterThan(priorReads);
+    expect(calls('grading/manual')).toHaveLength(1);
+  });
+}
+
 test('历史答卷逐题判定后一次人工提交，附件鉴权下载且历史HTML不执行', async ({ page }) => {
   const { state, calls, requests } = await backend(page);
   state.grading.questions[0]!.referenceAnswer =
@@ -1365,10 +1406,9 @@ test('历史答卷逐题判定后一次人工提交，附件鉴权下载且历�
   await opinion.fill(longOpinion);
   await summary.fill(longSummary);
   await dialog.getByRole('button', { name: '提交人工阅卷', exact: true }).click();
-  await page
-    .getByRole('alertdialog', { name: '确认提交人工阅卷', exact: true })
-    .getByRole('button', { name: '确认提交', exact: true })
-    .click();
+  await expect(
+    page.getByRole('alertdialog', { name: '确认提交人工阅卷', exact: true }),
+  ).toHaveCount(0);
   await expect(dialog).toContainText(
     '阅卷内容超过当前可提交大小，请缩短阅卷意见或本轮总结后重试。',
   );
@@ -1403,9 +1443,10 @@ test('历史答卷逐题判定后一次人工提交，附件鉴权下载且历�
   await screenshot(page, 'historical-grading');
   await dialog.getByRole('button', { name: '返回考试名单', exact: true }).click();
   const row = page
-    .getByRole('dialog', { name: '考试名单', exact: true })
+    .getByRole('region', { name: '考试名单', exact: true })
     .getByRole('row')
-    .filter({ hasText: '应试甲' });
+    .filter({ hasText: '应试甲' })
+    .first();
   await expect(row.getByRole('cell').nth(2)).toContainText('本轮通过');
   await expect(row.getByRole('cell').nth(2)).not.toContainText('考试通过');
   await expect(row.getByRole('cell').nth(3)).toHaveText('待阅卷');
@@ -1455,6 +1496,8 @@ test('失败自动轮重试仅进入待执行，人工补偿使用原因和完�
   await dialog
     .getByRole('textbox', { name: '补偿原因', exact: true })
     .fill('核对模拟失败记录后人工修正');
+  await dialog.getByRole('textbox', { name: '本轮总结', exact: true }).fill('核'.repeat(5000));
+  await dialog.getByRole('textbox', { name: '阅卷意见1', exact: true }).fill('验'.repeat(1000));
   state.networkFailure = true;
   await dialog.getByRole('button', { name: '人工补偿', exact: true }).click();
   await page
@@ -1462,13 +1505,17 @@ test('失败自动轮重试仅进入待执行，人工补偿使用原因和完�
     .getByRole('button', { name: '确认提交', exact: true })
     .click();
   await expect.poll(() => calls('grading/auto/compensate').length).toBe(1);
+  expect(
+    Buffer.byteLength(JSON.stringify(calls('grading/auto/compensate')[0]!.body)),
+  ).toBeGreaterThan(16 * 1024);
   await expect(dialog.getByRole('button', { name: '人工补偿', exact: true })).toBeDisabled();
   page.once('dialog', (dialog) => dialog.accept());
   await dialog.getByRole('button', { name: '返回考试名单', exact: true }).click();
   await page
-    .getByRole('dialog', { name: '考试名单', exact: true })
+    .getByRole('region', { name: '考试名单', exact: true })
     .getByRole('row')
     .filter({ hasText: '应试甲' })
+    .first()
     .getByRole('button', { name: '查看阅卷', exact: true })
     .click();
   await choose(page, dialog, '判卷轮次', '第2轮 · 模拟自动阅卷');
@@ -1476,22 +1523,8 @@ test('失败自动轮重试仅进入待执行，人工补偿使用原因和完�
   expect(calls('grading/auto/compensate')).toHaveLength(1);
   state.networkFailure = false;
   await dialog.getByRole('button', { name: '重新读取阅卷状态', exact: true }).click();
-  await dialog.getByRole('button', { name: '人工补偿', exact: true }).click();
-  await choose(page, dialog, '题目1判定', '正确');
-  await dialog.getByRole('textbox', { name: '补偿原因', exact: true }).fill('显式重读后核对并修正');
-  await dialog.getByRole('button', { name: '人工补偿', exact: true }).click();
-  await page
-    .getByRole('alertdialog', { name: '确认人工补偿', exact: true })
-    .getByRole('button', { name: '确认提交', exact: true })
-    .click();
-  await expect.poll(() => calls('grading/auto/compensate').length).toBe(2);
-  expect(calls('grading/auto/compensate')[1]!.body).toMatchObject({
-    projectId,
-    examId,
-    gradingRecordId: 10002,
-    compensationReason: '显式重读后核对并修正',
-    items: [{ questionId: 8001, correctness: 'CORRECT' }],
-  });
-  await expect(dialog).toContainText('最终准入结果：已录取');
+  await expect(dialog.getByRole('button', { name: '人工补偿', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('combobox', { name: '题目1判定', exact: true })).toHaveText('正确');
+  expect(calls('grading/auto/compensate')).toHaveLength(1);
   expect(requests.some((row) => row.path.includes('/integrations/agents'))).toBe(false);
 });

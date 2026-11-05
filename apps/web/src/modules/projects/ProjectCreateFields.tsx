@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import { Controller, type UseFormReturn } from 'react-hook-form';
 import type { ProjectCategory } from '@tyde/shared';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import { MarkdownEditor } from '@/components/ui/shared/MarkdownEditor';
 import { FormField } from '@/components/ui/shared/FormField';
 import { ProjectCategoryMultiSelect } from './ProjectCategoryMultiSelect';
 import {
@@ -25,6 +26,7 @@ interface ProjectCreateFieldsProps {
   onReloadCategories: () => void;
   requesterName: string;
   creatorName: string;
+  disabled?: boolean;
 }
 
 /** 三步表单复用当前主题控件，分类按后端公开的独立级别选择。 */
@@ -37,8 +39,11 @@ export function ProjectCreateFields({
   onReloadCategories,
   requesterName,
   creatorName,
+  disabled = false,
 }: ProjectCreateFieldsProps) {
   const errors = form.formState.errors;
+  const [categorySearch, setCategorySearch] = useState<Record<string, string>>({});
+  const [expandedCategoryGroup, setExpandedCategoryGroup] = useState<string | null>(null);
   const missingCategories = ['一级', '二级', '三级'].filter(
     (_, index) => !categories.some((item) => item.categoryLevel === index + 1),
   );
@@ -67,25 +72,44 @@ export function ProjectCreateFields({
       >
         {({ invalid, describedBy }) =>
           options.multiline ? (
-            <Textarea
-              id={id}
-              rows={4}
-              maxLength={options.maxLength}
-              aria-invalid={invalid || undefined}
-              aria-describedby={describedBy}
-              {...form.register(name, { onChange: () => form.clearErrors(name) })}
+            <Controller
+              control={form.control}
+              name={name}
+              render={({ field }) => (
+                <MarkdownEditor
+                  id={id}
+                  ariaLabel={label}
+                  value={field.value}
+                  onValueChange={(value) => {
+                    field.onChange(value);
+                    form.clearErrors(name);
+                  }}
+                  onBlur={field.onBlur}
+                  ref={field.ref}
+                  ariaRequired={options.required}
+                  ariaInvalid={invalid}
+                  ariaDescribedBy={describedBy}
+                  disabled={disabled}
+                />
+              )}
             />
           ) : (
             <Input
               id={id}
               size="profile"
               type={options.type ?? 'text'}
-              step={options.type === 'number' ? 'any' : undefined}
-              min={options.type === 'number' ? 0 : undefined}
+              step={options.type === 'number' ? '1' : undefined}
+              min={options.type === 'number' ? 1 : undefined}
               maxLength={options.maxLength}
               aria-invalid={invalid || undefined}
               aria-describedby={describedBy}
-              {...form.register(name, { onChange: () => form.clearErrors(name) })}
+              {...form.register(name)}
+              onChange={(event) => {
+                if (name === 'quantityUnit')
+                  event.target.value = event.target.value.replace(/[0-9０-９]/gu, '');
+                void form.register(name).onChange(event);
+                form.clearErrors(name);
+              }}
             />
           )
         }
@@ -100,6 +124,20 @@ export function ProjectCreateFields({
     options: { value: string; label: string }[],
   ) {
     const id = `project-create-${name}`;
+    const searchable = name === 'categoryLevel1Id' || name === 'categoryLevel2Id';
+    const visible = options.filter(
+      (option) =>
+        !searchable ||
+        option.label.toLowerCase().includes((categorySearch[name] ?? '').trim().toLowerCase()),
+    );
+    const groups = new Map<string, typeof options>();
+    for (const option of visible) {
+      const group =
+        name === 'categoryLevel2Id' && option.label.includes('·')
+          ? option.label.split('·')[0]!.trim()
+          : '';
+      groups.set(group, [...(groups.get(group) ?? []), option]);
+    }
     return (
       <FormField key={name} controlId={id} label={label} required error={errors[name]?.message}>
         {({ invalid, describedBy }) => (
@@ -109,6 +147,10 @@ export function ProjectCreateFields({
             render={({ field }) => (
               <Select
                 value={field.value || '__empty'}
+                onOpenChange={() => {
+                  setCategorySearch((current) => ({ ...current, [name]: '' }));
+                  if (name === 'categoryLevel2Id') setExpandedCategoryGroup(null);
+                }}
                 onValueChange={(value) => {
                   field.onChange(value === '__empty' ? '' : value);
                   form.clearErrors(name);
@@ -126,11 +168,51 @@ export function ProjectCreateFields({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__empty">请选择</SelectItem>
-                  {options.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
+                  {searchable && (
+                    <Input
+                      aria-label={`搜索${label}`}
+                      value={categorySearch[name] ?? ''}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      onChange={(event) =>
+                        setCategorySearch((current) => ({ ...current, [name]: event.target.value }))
+                      }
+                    />
+                  )}
+                  {[...groups].map(([group, items]) => {
+                    const initialGroup =
+                      [...groups].find(([, entries]) =>
+                        entries.some((option) => option.value === field.value),
+                      )?.[0] ?? [...groups.keys()][0];
+                    const expanded =
+                      !group ||
+                      !!categorySearch[name]?.trim() ||
+                      (expandedCategoryGroup ?? initialGroup) === group;
+                    return (
+                      <div role="group" aria-label={group || label} key={group}>
+                        {group && (
+                          <button
+                            type="button"
+                            className="flex min-h-10 w-full items-center justify-between px-2 text-left text-xs font-medium text-muted-foreground"
+                            aria-expanded={expanded}
+                            onClick={() => setExpandedCategoryGroup(expanded ? '' : group)}
+                          >
+                            {group}
+                            <span aria-hidden>{expanded ? '−' : '+'}</span>
+                          </button>
+                        )}
+                        <div hidden={!expanded}>
+                          {items.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {!visible.length && (
+                    <p className="p-2 text-xs text-muted-foreground">没有匹配的项目类型</p>
+                  )}
                 </SelectContent>
               </Select>
             )}
@@ -257,13 +339,7 @@ export function ProjectCreateFields({
         </>
       )}
       {step === 2 && (
-        <>
-          {text('standardContent', '标准说明与作业规范', { required: true, multiline: true })}
-          {text('standardLink', '标准文档链接（选填）', {
-            maxLength: 2000,
-            description: '文档链接作为补充，仍需填写上方标准说明。',
-          })}
-        </>
+        <>{text('standardContent', '标准说明与作业规范', { required: true, multiline: true })}</>
       )}
     </div>
   );

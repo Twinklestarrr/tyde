@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { MarkdownPreview } from '@/components/ui/shared/MarkdownEditor';
 
 /** 历史富文本在惰性模板中提取文字；不执行脚本、不装载外部图片或渲染任意HTML。 */
 export function EntranceExamText({
@@ -10,6 +11,7 @@ export function EntranceExamText({
 }) {
   const text = useMemo(() => {
     if (!value) return empty;
+    if (!/<\/?[a-z][\w-]*(?:\s[^>]*|\/?)>/i.test(value)) return value;
     const template = document.createElement('template');
     template.innerHTML = value
       .replace(/<br\s*\/?\s*>/gi, '\n')
@@ -17,5 +19,5 @@ export function EntranceExamText({
     template.content.querySelectorAll('script,style,template').forEach((node) => node.remove());
     return template.content.textContent?.trim() || empty;
   }, [value, empty]);
-  return <div className="whitespace-pre-wrap break-words text-[13px] leading-6">{text}</div>;
+  return <MarkdownPreview value={text} emptyText={empty} />;
 }

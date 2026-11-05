@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { ApiError } from '../packages/shared/dist/index.js';
 import {
   entranceExamGradingActions,
+  entranceExamGradingFailureIsUnknown,
   entranceExamGradingInput,
   entranceExamGradingPreview,
+  entranceExamGradingSourceMatches,
   entranceExamGradingValues,
 } from '../apps/web/src/modules/projects/entrance-exam-grading.ts';
 import { examGradingDetailExample } from '../apps/server/src/modules/entrance-exams/exam-grading-query.schema.ts';
@@ -33,10 +36,31 @@ function detail() {
   return result;
 }
 
-test('grading permits manager manual writes only for an existing active record after earlier rounds complete', () => {
+test('grading preserves unknown writes for timeouts and HTTP-success business failures', () => {
+  for (const status of [0, 200, 202, 204, 408, 500, 502, 504])
+    assert.equal(
+      entranceExamGradingFailureIsUnknown(new ApiError(status, { code: 409, message: '未确认' })),
+      true,
+    );
+  for (const status of [400, 401, 403, 404, 409, 413, 422, 429])
+    assert.equal(
+      entranceExamGradingFailureIsUnknown(
+        new ApiError(status, { code: 'REJECTED', message: '拒绝' }),
+      ),
+      false,
+    );
+  for (const code of ['SESSION_CHANGED', 'INVALID_RESPONSE'])
+    assert.equal(
+      entranceExamGradingFailureIsUnknown(new ApiError(409, { code, message: '仍待核实' })),
+      true,
+    );
+  assert.equal(entranceExamGradingFailureIsUnknown(new Error('连接中断')), true);
+});
+
+test('readable manual grading is available without inventing a project manager permission gate', () => {
   const data = detail();
   assert.equal(entranceExamGradingActions(data, true).manual, true);
-  assert.equal(entranceExamGradingActions(data, false).manual, false);
+  assert.equal(entranceExamGradingActions(data, false).manual, true);
   data.selectedRound.gradingRecordId = null;
   assert.equal(entranceExamGradingActions(data, true).manual, false);
   data.selectedRound.gradingRecordId = 123;
@@ -66,6 +90,67 @@ test('only failed automatic records can retry; compensation accepts failed or co
     assert.equal(entranceExamGradingActions(data, false).retry, false);
     assert.equal(entranceExamGradingActions(data, false).compensate, false);
   }
+});
+
+test('NAVIGATOR can attempt pending manual grading from a readable bound detail; the POST checks reviewer identity', () => {
+  const data = detail();
+  assert.equal(entranceExamGradingActions(data, true, 'NAVIGATOR').manual, true);
+  assert.equal(entranceExamGradingActions(data, false, 'NAVIGATOR').manual, true);
+  data.selectedRound.roundNo = 2;
+  data.rounds = [{ ...data.selectedRound, roundNo: 1, status: 'PROCESSING' }, data.selectedRound];
+  assert.equal(entranceExamGradingActions(data, true, 'NAVIGATOR').manual, false);
+  data.rounds[0].status = 'COMPLETED';
+  assert.equal(entranceExamGradingActions(data, false, 'NAVIGATOR').manual, true);
+  data.selectedRound.gradingRecordId = null;
+  assert.equal(entranceExamGradingActions(data, false, 'NAVIGATOR').manual, false);
+  data.selectedRound.gradingRecordId = 123;
+  for (const status of [null, 'WAITING', 'COMPLETED', 'FAILED']) {
+    data.selectedRound.status = status;
+    assert.equal(entranceExamGradingActions(data, false, 'NAVIGATOR').manual, false);
+  }
+  data.selectedRound.gradingMode = 'AUTO';
+  for (const status of ['FAILED', 'COMPLETED', 'PENDING', 'PROCESSING']) {
+    data.selectedRound.status = status;
+    const actions = entranceExamGradingActions(data, true, 'NAVIGATOR');
+    assert.equal(actions.manual, false);
+    assert.equal(actions.retry, false);
+    assert.equal(actions.compensate, false);
+  }
+});
+
+test('grading preflight preserves the exact bound round, record and complete question IDs', () => {
+  const data = detail();
+  assert.equal(entranceExamGradingSourceMatches(data, structuredClone(data)), true);
+  assert.equal(
+    entranceExamGradingSourceMatches(data, { ...data, questions: [...data.questions].reverse() }),
+    true,
+  );
+  for (const change of [
+    { examId: data.examId + 1 },
+    { attemptId: data.attemptId + 1 },
+    { selectedRound: { ...data.selectedRound, gradingRecordId: null } },
+    {
+      selectedRound: {
+        ...data.selectedRound,
+        gradingRecordId: data.selectedRound.gradingRecordId + 1,
+      },
+    },
+    {
+      selectedRound: {
+        ...data.selectedRound,
+        gradingRoundId: data.selectedRound.gradingRoundId + 1,
+      },
+    },
+    { selectedRound: { ...data.selectedRound, roundNo: data.selectedRound.roundNo + 1 } },
+    { selectedRound: { ...data.selectedRound, gradingMode: 'AUTO' } },
+    { questions: data.questions.slice(1) },
+    {
+      questions: data.questions.map((question, index) =>
+        index ? question : { ...question, questionId: 999 },
+      ),
+    },
+  ])
+    assert.equal(entranceExamGradingSourceMatches(data, { ...data, ...change }), false);
 });
 
 test('all questions require correctness, submitted items bind actual IDs and cannot send partial numeric scores', () => {

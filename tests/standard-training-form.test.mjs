@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { ApiError } from '../packages/shared/dist/index.js';
 import {
   standardMaterialLink,
   standardTrainingDraft,
+  standardTrainingFailureIsUnknown,
   standardTrainingInput,
 } from '../apps/web/src/modules/projects/standard-training-form.ts';
 
@@ -12,6 +14,27 @@ const materials = {
   standardLink: null,
   attachments: [{ id: 81, fileName: '案例.txt', fileSize: 12, objectKey: 'existing' }],
 };
+
+test('material save timeouts and HTTP-success business errors retain uncertain writes', () => {
+  for (const status of [0, 200, 202, 408, 500, 502, 504])
+    assert.equal(
+      standardTrainingFailureIsUnknown(new ApiError(status, { code: 409, message: '结果未确认' })),
+      true,
+    );
+  for (const status of [400, 401, 403, 404, 409, 413, 422, 429])
+    assert.equal(
+      standardTrainingFailureIsUnknown(
+        new ApiError(status, { code: 'REJECTED', message: '明确拒绝' }),
+      ),
+      false,
+    );
+  for (const code of ['SESSION_CHANGED', 'INVALID_RESPONSE'])
+    assert.equal(
+      standardTrainingFailureIsUnknown(new ApiError(409, { code, message: '结果未确认' })),
+      true,
+    );
+  assert.equal(standardTrainingFailureIsUnknown(new Error('断网')), true);
+});
 
 test('materials preserve existing attachment IDs, new upload credentials and intentional removals', () => {
   const draft = standardTrainingDraft(materials);
@@ -40,18 +63,13 @@ test('materials preserve existing attachment IDs, new upload credentials and int
   draft.files = [];
   draft.standardContent = ' ';
   draft.standardLink = ' https://example.com/standard ';
-  assert.deepEqual(standardTrainingInput(materials, draft), {
-    projectId: 701,
-    standardContent: null,
-    standardLink: 'https://example.com/standard',
-    attachments: [],
-  });
+  assert.throws(() => standardTrainingInput(materials, draft), /请填写标准正文/);
 });
 
 test('materials reject empty content, incomplete uploads and oversized UTF-8 JSON including attachments', () => {
   const draft = standardTrainingDraft(materials);
   draft.standardContent = ' ';
-  assert.throws(() => standardTrainingInput(materials, draft), /至少填写一项/);
+  assert.throws(() => standardTrainingInput(materials, draft), /请填写标准正文/);
   draft.standardContent = '标准';
   draft.standardLink = 'a'.repeat(2001);
   assert.throws(() => standardTrainingInput(materials, draft), /2000/);

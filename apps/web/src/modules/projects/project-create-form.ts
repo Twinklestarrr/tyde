@@ -52,7 +52,7 @@ export function projectCreateValues(draft: ProjectDraft | null): ProjectCreateVa
     deadline: draft?.deadline?.slice(0, 10) ?? '',
     requiredHeadcount: draft?.requiredHeadcount?.toString() ?? '',
     educationRequirement: draft?.educationRequirement ?? 'BACHELOR',
-    employmentType: draft?.employmentType ?? (draft ? '' : 'UNLIMITED'),
+    employmentType: draft?.employmentType ?? (draft ? '' : 'FULL_TIME'),
     experienceRequirement: draft?.experienceRequirement ?? '',
     workSummary: draft?.workSummary ?? '',
     specialRequirement: draft?.specialRequirement ?? '',
@@ -79,13 +79,14 @@ export function validateProjectCreate(
     }
   if (values.projectName.trim().length > 128) errors.projectName = '项目名称最多 128 字';
   if (values.quantityUnit.trim().length > 30) errors.quantityUnit = '量级单位最多 30 字';
+  if (/[0-9０-９]/u.test(values.quantityUnit)) errors.quantityUnit = '量级单位不能包含数字';
   if (values.standardLink.trim().length > 2000) errors.standardLink = '文档链接最多 2000 字符';
   if (values.categoryLevel3Ids.length > 20) errors.categoryLevel3Ids = '最多选择 20 个三级类型';
   if (
     values.projectQuantity &&
-    (!Number.isFinite(Number(values.projectQuantity)) || Number(values.projectQuantity) <= 0)
+    (!Number.isSafeInteger(Number(values.projectQuantity)) || Number(values.projectQuantity) <= 0)
   )
-    errors.projectQuantity = '项目量级须大于 0';
+    errors.projectQuantity = '项目量级须为大于 0 的整数';
   if (
     values.requiredHeadcount &&
     (!Number.isInteger(Number(values.requiredHeadcount)) ||

@@ -244,13 +244,9 @@ function ProductionPlanEditor({
   }
 
   const stages = form.watch('stages');
-  const operatorCpd = form.watch('operatorCpd');
-  const estimates = stages.map(
-    (stage) => productionStageEstimate(stage, operatorCpd).expectedOutput,
-  );
-  const totalEstimate = estimates.every((value) => value !== null)
-    ? estimates.reduce<number>((sum, value) => sum + (value ?? 0), 0)
-    : null;
+  const totalEstimate =
+    stages.reduce((sum, stage) => sum + (productionStageEstimate(stage).expectedOutput ?? 0), 0) ||
+    null;
   return (
     <section aria-label="生产计划" className="space-y-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -306,9 +302,12 @@ function ProductionPlanEditor({
           {!plan.hasPlan &&
             totalEstimate !== null &&
             plan.projectReference.projectQuantity !== null &&
-            totalEstimate < plan.projectReference.projectQuantity && (
+            totalEstimate > plan.projectReference.projectQuantity && (
               <p className="mt-[4px] text-[var(--color-warning)]">
-                估算产出低于项目量级，请核对阶段安排。
+                合计预计产出 {productionPlanNumber(totalEstimate)}{' '}
+                {plan.projectReference.quantityUnit} 超过项目量级{' '}
+                {productionPlanNumber(plan.projectReference.projectQuantity)}{' '}
+                {plan.projectReference.quantityUnit}，请核对阶段安排。
               </p>
             )}
         </div>
