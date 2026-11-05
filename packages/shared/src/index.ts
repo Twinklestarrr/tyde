@@ -19,8 +19,13 @@ export * from './organizations.js';
 export * from './workbench.js';
 export * from './projects.js';
 export * from './project-materials.js';
+export * from './project-recruitment.js';
+export * from './project-personnel.js';
+export * from './project-production.js';
+export * from './project-board.js';
 export * from './expert-tasks.js';
 export * from './entrance-exams.js';
+export * from './attendance-clock.js';
 import type {
   BusinessLicenseUploadResult,
   OrganizationApi,
@@ -29,8 +34,13 @@ import type {
 import type { WorkbenchApi } from './workbench.js';
 import type { ProjectApi } from './projects.js';
 import type { ProjectStandardMaterialsApi } from './project-materials.js';
+import type { ProjectExpertRecruitmentApi } from './project-recruitment.js';
+import type { ProjectPersonnelApi } from './project-personnel.js';
+import type { ProjectProductionApi } from './project-production.js';
+import type { ProjectBoardApi } from './project-board.js';
 import type { ExpertTasksApi } from './expert-tasks.js';
 import type { EntranceExamApi } from './entrance-exams.js';
+import type { AttendanceClockApi } from './attendance-clock.js';
 
 /** 登录令牌由平台适配器保管，页面只接收登录状态或注册指引。 */
 export interface Authenticated {
@@ -107,8 +117,13 @@ export interface AuthApi
     WorkbenchApi,
     ProjectApi,
     ProjectStandardMaterialsApi,
+    ProjectExpertRecruitmentApi,
+    ProjectPersonnelApi,
+    ProjectProductionApi,
+    ProjectBoardApi,
     ExpertTasksApi,
-    EntranceExamApi {
+    EntranceExamApi,
+    AttendanceClockApi {
   health(): Promise<{ status: string }>;
   sendCode(input: SmsSendInput): Promise<string>;
   login(input: LoginInput): Promise<void>;
