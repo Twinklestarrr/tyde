@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { expertTaskExample } from '../../apps/server/src/modules/expert/expert-task.schema';
 import { projectCardExample } from '../../apps/server/src/modules/projects/project-list.schema';
+import { clockContextResponse } from '../../apps/server/src/modules/attendance/attendance-clock.schema';
 import type {
   AuthUser,
   WorkbenchAssignmentDetail,
@@ -272,6 +273,13 @@ async function backend(page: Page, desktop: boolean) {
     }
     const authenticated = state.signedIn && headers.cookie?.includes('view_session=active');
     if (!authenticated) return reply(null, 401);
+    if (path === '/api/v1/projects/workbench/statistics')
+      return reply({
+        mode: 'TASK',
+        pendingTaskCount: 0,
+        completedTaskCount: 0,
+        involvedProjectCount: 0,
+      });
     if (path === '/api/v1/users/me' && request.method() === 'GET') {
       sessionResponses.push({
         role: state.user.role,
@@ -280,6 +288,11 @@ async function backend(page: Page, desktop: boolean) {
       });
       return reply(state.user);
     }
+    if (path === '/api/v1/organizations/attendance/clock-context' && request.method() === 'GET')
+      return reply({
+        ...structuredClone(clockContextResponse.examples[0]),
+        orgId: url.searchParams.get('orgId'),
+      });
     if (path === '/api/v1/projects/manager/list' && request.method() === 'GET')
       return reply(state.strategistProjects);
     if (path === '/api/v1/expert-assignments/my-tasks' && request.method() === 'POST')
@@ -426,10 +439,141 @@ function expectRealRoles(
   ).toBe(true);
 }
 
+/** 挂起首个真实 HTTP 读取，让旧页面请求跨越路由卸载与重新挂载。 */
+async function holdWorkbenchRead(page: Page, path: string, data: unknown) {
+  let resume!: () => void;
+  let markStarted!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const snapshot = structuredClone(data);
+  let reads = 0;
+  await page.route(
+    (url) => url.pathname === path,
+    async (route) => {
+      reads += 1;
+      if (reads > 1) return route.fallback();
+      markStarted();
+      await gate;
+      await route.fulfill({ json: { code: 200, message: '操作成功', data: snapshot } });
+    },
+  );
+  return {
+    started,
+    count: () => reads,
+    release: async () => {
+      const response = page.waitForResponse((value) => new URL(value.url()).pathname === path);
+      resume();
+      await (await response).finished();
+    },
+  };
+}
+
+const remountTaskFixture = {
+  ...expertTaskExample,
+  assignmentId: 41,
+  sourceBizId: 41,
+  basicInfo: {
+    ...expertTaskExample.basicInfo,
+    projectId: 501,
+    projectName: '重新打开后保留的项目',
+  },
+};
+
 for (const [mode, desktop] of [
   ['Web 生产', false],
   ['Electron 运行配置', true],
 ] as const) {
+  for (const read of ['列表', '详情'] as const) {
+    test(`工作台重挂 ${mode} ${read}请求复用不误报身份变化`, async ({ page }) => {
+      const { state } = await backend(page, desktop);
+      state.tasks = [structuredClone(remountTaskFixture)];
+      state.detailStatus = 200;
+      const held = await holdWorkbenchRead(
+        page,
+        read === '列表'
+          ? '/api/v1/expert-assignments/my-tasks'
+          : '/api/v1/expert-assignments/detail',
+        read === '列表' ? state.tasks : assignmentFixture,
+      );
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(`${origin}/#/`);
+      const project = page.getByRole('article').filter({ hasText: '重新打开后保留的项目' });
+      if (read === '详情')
+        await project.getByRole('button', { name: '查看项目', exact: true }).click();
+      await held.started;
+      await openProfile(page);
+      await expect(page.getByRole('heading', { name: '我负责的项目', exact: true })).toHaveCount(0);
+      await page
+        .getByRole('navigation', { name: '主导航', exact: true })
+        .getByRole('link', { name: '工作台', exact: true })
+        .click();
+      if (read === '详情')
+        await project.getByRole('button', { name: '查看项目', exact: true }).click();
+      else
+        await expect(
+          page.getByRole('searchbox', { name: '筛选当前待办', exact: true }),
+        ).toBeVisible();
+      await held.release();
+      if (read === '详情') {
+        await page.getByRole('button', { name: '项目资料', exact: true }).click();
+        await expect(page.getByRole('dialog', { name: '项目详情', exact: true })).toContainText(
+          '真实分配详情',
+        );
+      } else {
+        await expect(
+          project.getByRole('heading', { name: '重新打开后保留的项目', exact: true }),
+        ).toBeVisible();
+      }
+      expect(held.count()).toBe(1);
+      await expect(page.getByText(/登录身份已变化/)).toHaveCount(0);
+    });
+  }
+
+  for (const change of ['账号', '角色'] as const) {
+    test(`工作台重挂 ${mode} ${change}真实变化后不展示旧待办响应`, async ({ page }) => {
+      const { state } = await backend(page, desktop);
+      const held = await holdWorkbenchRead(page, '/api/v1/expert-assignments/my-tasks', [
+        remountTaskFixture,
+      ]);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(`${origin}/#/`);
+      await held.started;
+      if (change === '角色') {
+        await chooseDesktop(page, '领航员');
+      } else {
+        await page.getByRole('button', { name: '账户菜单', exact: true }).click();
+        await page.getByRole('button', { name: '退出登录', exact: true }).click();
+        await expect(page).toHaveURL(/#\/auth$/);
+        state.user.id = '00000000-0000-4000-8000-000000000099';
+        state.user.uid = 'VIEW10099';
+        state.user.nickname = '更新后的另一账号';
+        await signIn(page);
+        await expect(page.getByText('暂无待办项目', { exact: true })).toBeVisible();
+      }
+      await held.release();
+      if (change === '角色') {
+        await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
+          '领航员',
+        );
+        await chooseDesktop(page, '执行专家');
+      } else {
+        await expect(page.getByRole('button', { name: '账户菜单', exact: true })).toContainText(
+          '更新后的另一账号',
+        );
+      }
+      await expect(page.getByText('暂无待办项目', { exact: true })).toBeVisible();
+      await expect(
+        page.getByRole('heading', { name: '重新打开后保留的项目', exact: true }),
+      ).toHaveCount(0);
+      await expect(page.getByText(/登录身份已变化/)).toHaveCount(0);
+      expect(held.count()).toBe(2);
+    });
+  }
+
   test(`三角色项目联调 ${mode} 非空列表、专家身份、搜索重试与转入详情`, async ({ page }) => {
     const { state, requests } = await backend(page, desktop);
     state.user.role = 'NAVIGATOR';
@@ -550,7 +694,7 @@ for (const [mode, desktop] of [
       page
         .getByRole('navigation', { name: '主导航' })
         .getByRole('link', { name: '我的组织', exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await chooseDesktop(page, '领航员');
     await expect(page.getByRole('searchbox', { name: '筛选当前待办', exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: /^(我的组织|组织管理|创建组织)$/ })).toHaveCount(0);
@@ -572,16 +716,16 @@ for (const [mode, desktop] of [
         .getByLabel('当前角色', { exact: true }),
     ).toHaveText('当前角色 · 策略官');
     await chooseDesktop(page, '执行专家');
-    await page.getByRole('tab', { name: '概览', exact: true }).click();
+    await page.getByRole('tab', { name: '我的项目', exact: true }).click();
     await expect(
       page.getByRole('tablist', { name: '个人中心设置', exact: true }).getByRole('tab'),
-    ).toHaveText(['概览', '个人资料', '账户安全', '我的项目', '排班考勤', '组织与申请']);
+    ).toHaveText(['我的项目', '排班考勤', '基本信息', '组织与申请', '个人资料']);
     await expect(
       page.getByRole('tablist', { name: '执行专家个人中心业务', exact: true }),
     ).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '查看全部项目', exact: true })).toBeVisible();
+    await expect(page.getByRole('tab', { name: '我的项目', exact: true })).toBeVisible();
     await expect(page.getByText('暂无参与项目', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '管理排班与考勤', exact: true }).click();
+    await page.getByRole('tab', { name: '排班考勤', exact: true }).click();
     await expect(page.getByRole('tab', { name: '排班考勤', exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -604,12 +748,12 @@ for (const [mode, desktop] of [
     expect(
       requests.find((request) => request.path === '/api/v1/organizations/calendar/holidays')?.query,
     ).toEqual({ month: attendanceCall.query.month });
-    await page.getByRole('tab', { name: '概览', exact: true }).click();
-    await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveAttribute(
+    await page.getByRole('tab', { name: '我的项目', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '我的项目', exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
     );
-    await page.getByRole('button', { name: '查看全部申请', exact: true }).click();
+    await page.getByRole('tab', { name: '组织与申请', exact: true }).click();
     await expect(page.getByRole('tab', { name: '组织与申请', exact: true })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -630,10 +774,7 @@ for (const [mode, desktop] of [
     await expect(page).toHaveURL(/#\/$/);
     expect(expertReads(requests)).toHaveLength(expertCount);
     await chooseDesktop(page, '执行专家');
-    await page
-      .getByRole('navigation', { name: '主导航' })
-      .getByRole('link', { name: '我的组织', exact: true })
-      .click();
+    await page.goto(`${origin}/#/organization`);
     await expect(page.getByRole('heading', { name: '我的组织', exact: true })).toBeVisible();
     await chooseDesktop(page, '策略官');
     await expect(page).toHaveURL(/#\/$/);
@@ -787,7 +928,7 @@ for (const [mode, desktop] of [
     await page.clock.fastForward(31_000);
     await openProfile(page);
     await expect(
-      page.getByRole('heading', { name: '第二位视图联调员', exact: true }),
+      page.getByRole('heading', { name: '第二位视图联调员（测试成员）', exact: true }),
     ).toBeVisible();
     await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
       '策略官',
@@ -811,114 +952,31 @@ for (const [mode, desktop] of [
   });
 }
 
-test('个人主页同屏排列项目、年度考勤、能力与申请，桌面双列项目且手机无溢出', async ({ page }) => {
-  const { state, requests } = await backend(page, false);
-  await page.clock.install({ time: new Date('2026-10-22T04:00:00.000Z') });
-  state.presentDate = '2026-10-02';
-  state.projects = Array.from({ length: 5 }, (_, index) => ({
-    assignmentId: 41 + index,
-    movementId: null,
-    projectId: 501 + index,
-    projectName: `主页布局项目 ${index + 1}`,
-    requesterName: '联调需求方',
-    needWrittenExam: false,
-    admissionStatus: 'PASSED',
-    currentNodeCode: 'PRODUCTION_TASK',
-  }));
-  await page.setViewportSize({ width: 1440, height: 1000 });
+test('个人中心默认本人项目，切换业务页签才读取对应服务且无额外概览', async ({ page }) => {
+  const { requests } = await backend(page, false);
   await page.goto(`${origin}/#/profile`);
-  const sidebar = page.getByRole('complementary', { name: '个人资料摘要', exact: true });
-  const projects = page.getByRole('region', { name: '所在项目', exact: true });
-  const attendance = page.getByRole('region', { name: '年度考勤', exact: true });
-  const capability = page.getByRole('region', { name: '履约与能力', exact: true });
-  const applications = page.getByRole('region', { name: '申请动态', exact: true });
-  for (const region of [projects, attendance, capability, applications])
-    await expect(region).toBeVisible();
-  await expect(capability.getByText('暂无能力评估数据', { exact: true })).toBeVisible();
-  await expect(
-    attendance.getByText('1 天正常出勤 · 已加载 10/10 个月', { exact: true }),
-  ).toBeVisible();
-  const attendanceMonths = () =>
-    requests
-      .filter((request) => request.path === '/api/v1/organizations/attendance')
-      .map((request) => request.query.month);
-  expect(attendanceMonths().sort()).toEqual(
-    Array.from({ length: 10 }, (_, index) => `2026-${String(index + 1).padStart(2, '0')}`),
-  );
-  await expect(
-    attendance.getByRole('button', { name: '2026-10-02 · 正常出勤，管理本月考勤', exact: true }),
-  ).toBeVisible();
-  await expect(
-    attendance.getByRole('button', { name: '2026-10-03 · 未排班，管理本月考勤', exact: true }),
-  ).toBeVisible();
-  await attendance.getByRole('combobox', { name: '年份', exact: true }).selectOption('2025');
-  await expect(
-    attendance.getByText('0 天正常出勤 · 已加载 12/12 个月', { exact: true }),
-  ).toBeVisible();
+  const projects = page.getByRole('tab', { name: '我的项目', exact: true });
+  await expect(projects).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveCount(0);
   expect(
-    attendanceMonths()
-      .filter((month) => month.startsWith('2025-'))
-      .sort(),
-  ).toEqual(Array.from({ length: 12 }, (_, index) => `2025-${String(index + 1).padStart(2, '0')}`));
-  await attendance.getByRole('combobox', { name: '年份', exact: true }).selectOption('2026');
-  await expect(
-    attendance.getByText('1 天正常出勤 · 已加载 10/10 个月', { exact: true }),
-  ).toBeVisible();
-  const cards = projects.getByRole('list', { name: '所在项目列表' }).getByRole('button');
-  await expect(cards).toHaveCount(4);
-  const sidebarBox = (await sidebar.boundingBox())!;
-  const projectsBox = (await projects.boundingBox())!;
-  const attendanceBox = (await attendance.boundingBox())!;
-  const capabilityBox = (await capability.boundingBox())!;
-  const applicationsBox = (await applications.boundingBox())!;
-  expect(sidebarBox.x + sidebarBox.width).toBeLessThan(projectsBox.x);
-  expect(projectsBox.y + projectsBox.height).toBeLessThan(attendanceBox.y);
-  expect(attendanceBox.y + attendanceBox.height).toBeLessThan(capabilityBox.y);
-  expect(capabilityBox.y + capabilityBox.height).toBeLessThan(applicationsBox.y);
-  const first = (await cards.nth(0).boundingBox())!;
-  const second = (await cards.nth(1).boundingBox())!;
-  const third = (await cards.nth(2).boundingBox())!;
-  expect(Math.abs(first.y - second.y)).toBeLessThan(1);
-  expect(first.x + first.width).toBeLessThan(second.x);
-  expect(third.y).toBeGreaterThan(first.y + first.height);
-  await page.screenshot({ path: 'artifacts/profile-overview-desktop.png', fullPage: true });
-  await page.setViewportSize({ width: 375, height: 812 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
-    true,
-  );
-  const mobileSidebarBox = (await sidebar.boundingBox())!;
-  const mobileProjectsBox = (await projects.boundingBox())!;
-  expect(mobileSidebarBox.y + mobileSidebarBox.height).toBeLessThan(mobileProjectsBox.y);
-  await page.screenshot({ path: 'artifacts/profile-overview-mobile.png', fullPage: true });
-  await page.getByRole('button', { name: '查看全部项目', exact: true }).click();
-  await expect(page.getByRole('tab', { name: '我的项目', exact: true })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  );
-  await expect(
-    page.getByRole('region', { name: '我的项目', exact: true }).getByRole('listitem'),
-  ).toHaveCount(5);
-  await page.getByRole('tab', { name: '概览', exact: true }).click();
-  await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  );
-  await expect(projects).toBeVisible();
-  await attendance
-    .getByRole('button', { name: '2026-10-02 · 正常出勤，管理本月考勤', exact: true })
-    .click();
-  await expect(page.getByRole('tab', { name: '排班考勤', exact: true })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  );
-  await expect(page.getByLabel('考勤月份', { exact: true })).toHaveValue('2026-10');
-  await page.getByRole('tab', { name: '概览', exact: true }).click();
-  await applications.getByRole('button', { name: '查看全部申请', exact: true }).click();
-  await expect(page.getByRole('tab', { name: '组织与申请', exact: true })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  );
-  await expect(page.getByRole('region', { name: '组织与申请', exact: true })).toBeVisible();
+    requests.filter((request) => request.path === '/api/v1/organizations/attendance'),
+  ).toHaveLength(0);
+  expect(
+    requests.filter((request) => request.path === '/api/v1/users/me/applications'),
+  ).toHaveLength(0);
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const name of ['排班考勤', '组织与申请', '基本信息', '我的项目']) {
+      await page.getByRole('tab', { name, exact: true }).click();
+      await expect(page.getByRole('tab', { name, exact: true })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
+      ).toBe(true);
+    }
+  }
 });
 
 test('当前角色移动账户菜单具备明确选中状态，320/375px均无横向溢出', async ({ page }) => {
@@ -955,9 +1013,12 @@ test('当前角色移动账户菜单具备明确选中状态，320/375px均无�
           .getByLabel('当前角色', { exact: true }),
       ).toHaveText(`当前角色 · ${next}`);
       await expect(page.getByRole('tab', { name: '个人资料', exact: true })).toBeVisible();
-      await expect(page.getByRole('tab', { name: '账户安全', exact: true })).toBeVisible();
-      for (const name of ['概览', '我的项目', '排班考勤', '组织与申请'])
-        await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(
+      const profileNavigation = page.getByRole('tablist', { name: '个人中心设置', exact: true });
+      await expect(profileNavigation.getByRole('tab', { name: '概览', exact: true })).toHaveCount(
+        0,
+      );
+      for (const name of ['基本信息', '我的项目', '排班考勤', '组织与申请'])
+        await expect(profileNavigation.getByRole('tab', { name, exact: true })).toHaveCount(
           next === '执行专家' ? 1 : 0,
         );
       expect(
@@ -970,7 +1031,12 @@ test('当前角色移动账户菜单具备明确选中状态，320/375px均无�
     requests.every(
       (request) =>
         (request.method === 'GET' &&
-          ['/api/v1/users/me', ...expertReadPaths].includes(request.path)) ||
+          [
+            '/api/v1/users/me',
+            '/api/v1/organizations/attendance/clock-context',
+            '/api/v1/projects/workbench/statistics',
+            ...expertReadPaths,
+          ].includes(request.path)) ||
         (request.method === 'POST' && request.path === '/api/v1/users/me/applications') ||
         (request.method === 'POST' && request.path === '/api/v1/expert-assignments/my-tasks') ||
         (request.method === 'POST' && request.path === '/api/v1/auth/switch-role'),
@@ -1003,12 +1069,12 @@ test('selectedRole 为空时读取后端 role，切回专家后重读项目以�
   );
   expect(expertReads(requests)).toHaveLength(0);
   await chooseDesktop(page, '执行专家');
-  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '我的项目', exact: true }).click();
   await expect(page.getByRole('button', { name: /角色切换前项目/ })).toBeVisible();
   await chooseDesktop(page, '策略官');
   state.projects[0]!.projectName = '角色切换后项目';
   await chooseDesktop(page, '执行专家');
-  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '我的项目', exact: true }).click();
   await expect(page.getByRole('button', { name: /角色切换后项目/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /角色切换前项目/ })).toHaveCount(0);
   expect(
@@ -1178,49 +1244,51 @@ test('跨标签消息的账号不匹配时保留当前身份，广播设施失�
   await expectNoPersistedView(page);
 });
 
-test('个人中心顶层业务入口在窄屏可用键盘直达，并与概览共用单一页签导航', async ({ page }) => {
-  await backend(page, false);
-  await page.setViewportSize({ width: 320, height: 812 });
+test('个人中心业务页签键盘顺序与旧版一致，基本信息保留本地草稿', async ({ page }) => {
+  const { requests } = await backend(page, false);
+  await page.setViewportSize({ width: 375, height: 812 });
   await page.goto(`${origin}/#/profile`);
   const navigation = page.getByRole('tablist', { name: '个人中心设置', exact: true });
-  await expect(page.getByRole('tablist')).toHaveCount(1);
   await expect(navigation.getByRole('tab')).toHaveText([
-    '概览',
-    '个人资料',
-    '账户安全',
     '我的项目',
     '排班考勤',
+    '基本信息',
     '组织与申请',
+    '个人资料',
   ]);
-  const security = navigation.getByRole('tab', { name: '账户安全', exact: true });
   const projects = navigation.getByRole('tab', { name: '我的项目', exact: true });
-  const attendance = navigation.getByRole('tab', { name: '排班考勤', exact: true });
-  const organization = navigation.getByRole('tab', { name: '组织与申请', exact: true });
-  for (const width of [320, 375]) {
-    await page.setViewportSize({ width, height: 812 });
-    await security.focus();
-    await security.press('ArrowRight');
-    await expect(projects).toBeFocused();
-    await expect(projects).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('region', { name: '我的项目', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '返回个人主页', exact: true })).toHaveCount(0);
-    await projects.press('ArrowRight');
-    await expect(attendance).toBeFocused();
-    await expect(attendance).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('heading', { name: '我的排班考勤', exact: true })).toBeVisible();
-    await attendance.press('ArrowRight');
-    await expect(organization).toBeFocused();
-    await expect(organization).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('region', { name: '组织与申请', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '返回个人主页', exact: true })).toHaveCount(0);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
-      true,
-    );
-    await page.getByRole('tab', { name: '概览', exact: true }).click();
-    await expect(navigation.getByRole('tab', { name: '概览', exact: true })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await expect(page.getByRole('region', { name: '所在项目', exact: true })).toBeVisible();
-  }
+  await projects.focus();
+  await projects.press('ArrowRight');
+  await expect(navigation.getByRole('tab', { name: '排班考勤', exact: true })).toBeFocused();
+  await navigation.getByRole('tab', { name: '基本信息', exact: true }).click();
+  await page.getByLabel('姓名', { exact: true }).fill('本地档案姓名');
+  await page.getByLabel('作品集 1名称', { exact: true }).fill('设计作品');
+  await page.getByRole('button', { name: '添加作品集（最多 8 个）', exact: true }).click();
+  await page.getByLabel('作品集 2名称', { exact: true }).fill('数据作品');
+  await page.getByRole('button', { name: '添加资格证书', exact: true }).click();
+  await expect(page.getByLabel('资格证书 2名称', { exact: true })).toBeDisabled();
+  await page.getByLabel('作品集 1文件', { exact: true }).setInputFiles({
+    name: 'design.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4 local test'),
+  });
+  await page.getByRole('button', { name: '存草稿', exact: true }).click();
+  await expect(page.getByText(/文字草稿已暂存/)).toBeVisible();
+  await navigation.getByRole('tab', { name: '组织与申请', exact: true }).click();
+  await navigation.getByRole('tab', { name: '基本信息', exact: true }).click();
+  await expect(page.getByLabel('姓名', { exact: true })).toHaveValue('本地档案姓名');
+  await page.reload();
+  await navigation.getByRole('tab', { name: '基本信息', exact: true }).click();
+  await expect(page.getByLabel('姓名', { exact: true })).toHaveValue('本地档案姓名');
+  await expect(page.getByText(/已恢复文字草稿/)).toBeVisible();
+  await expect(page.getByLabel('作品集 1名称', { exact: true })).toHaveValue('设计作品');
+  await expect(page.getByLabel('作品集 2名称', { exact: true })).toHaveValue('数据作品');
+  await expect(page.getByLabel('资格证书 2名称', { exact: true })).toBeDisabled();
+  await expect(page.getByText(/design.pdf/)).toHaveCount(0);
+  await page.getByRole('button', { name: '删除作品集 1', exact: true }).click();
+  await expect(page.getByLabel('作品集 1名称', { exact: true })).toHaveValue('数据作品');
+  await page.getByRole('button', { name: '删除作品集 1', exact: true }).click();
+  await expect(page.getByLabel('作品集 1名称', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('作品集 1文件', { exact: true })).toHaveCount(1);
+  expect(requests.filter((request) => /dossier|upload/.test(request.path))).toHaveLength(0);
 });

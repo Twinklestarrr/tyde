@@ -1,3 +1,5 @@
+import { ProjectCardPeople } from './ProjectCardPeople';
+import { WorkbenchStatistics } from './WorkbenchStatistics';
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
@@ -38,6 +40,7 @@ export function NavigatorProjectsPage({ user, created }: { user: AuthUser; creat
 
   return (
     <ProjectCardTransition direction="back" className="space-y-5">
+      <WorkbenchStatistics user={user} />
       <h1 className="sr-only">我创建的项目</h1>
       <div className="flex items-center gap-2 sm:gap-3">
         <SearchInput
@@ -164,6 +167,7 @@ export function NavigatorProjectsPage({ user, created }: { user: AuthUser; creat
                   >
                     {project.requesterName}
                   </p>
+                  <ProjectCardPeople project={project} />
                   <div className="mt-5 flex flex-wrap items-center gap-2">
                     <p
                       className="mr-auto text-xs text-muted-foreground"

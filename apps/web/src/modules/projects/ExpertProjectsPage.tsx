@@ -1,3 +1,4 @@
+import { WorkbenchStatistics } from './WorkbenchStatistics';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ArrowRight, FileText, FolderOpen, RefreshCw } from 'lucide-react';
@@ -16,10 +17,14 @@ import { SearchInput } from '@/components/ui/search-input';
 import { projectNodeLabel } from './ProjectWorkflow';
 import { ProjectDetailsDialog } from './ProjectDetailsDialog';
 import { ExpertTaskResponseDialog } from './ExpertTaskResponseDialog';
-import { ExpertExamPanel, EXPERT_EXAM_LEAVE_REQUEST } from './ExpertExamPanel';
-import { ExpertTrainingPanel, EXPERT_TRAINING_LEAVE_REQUEST } from './ExpertTrainingPanel';
+import { EXPERT_EXAM_LEAVE_REQUEST } from './ExpertExamPanel';
+import { EXPERT_TRAINING_LEAVE_REQUEST } from './ExpertTrainingPanel';
+import { ExpertProjectModules } from './ExpertProjectModules';
+import { EXPERT_PRODUCTION_LEAVE_REQUEST } from './expert-production-form';
+import { PERSONNEL_LEAVE_REQUEST } from './personnel-form';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { ProjectCardTransition } from './ProjectCardTransition';
+import { AttendanceClockPanel } from '@/modules/attendance/AttendanceClockPanel';
 
 const acceptanceLabels = {
   PENDING_ACCEPTANCE: '待接单',
@@ -146,14 +151,18 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
       mounted.current = false;
     };
   }, []);
-  const sessionMatches = () => {
+  const identityMatches = () => {
     const session = cache.getQueryData<AuthUser | null>(SESSION_KEY);
-    return (
-      mounted.current &&
-      session?.id === user.id &&
-      (session.selectedRole ?? session.role) === 'EXPERT'
-    );
+    return session?.id === user.id && (session.selectedRole ?? session.role) === 'EXPERT';
   };
+  const sessionMatches = () => mounted.current && identityMatches();
+  function requireIdentity() {
+    if (!identityMatches())
+      throw new ApiError(401, {
+        code: 'SESSION_CHANGED',
+        message: '登录身份已变化，请重新打开工作台。',
+      });
+  }
   function requireSession() {
     if (!sessionMatches())
       throw new ApiError(401, {
@@ -200,9 +209,10 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
   const projects = useQuery({
     queryKey: ['expert-projects', user.id, 'EXPERT', search],
     queryFn: async () => {
-      requireSession();
+      // 查询缓存跨页面挂载复用，不能用发起请求的旧组件是否挂载判断身份。
+      requireIdentity();
       const tasks = await api.getMyExpertTasks(search ? { keyword: search } : undefined);
-      requireSession();
+      requireIdentity();
       return tasks;
     },
     retry: false,
@@ -216,9 +226,9 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
       selected?.movementId,
     ],
     queryFn: async () => {
-      requireSession();
+      requireIdentity();
       const project = await api.getExpertAssignmentDetail(selected!);
-      requireSession();
+      requireIdentity();
       return project;
     },
     enabled: !!selected,
@@ -242,7 +252,10 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
     const latest =
       tasks.find(
         (item) =>
-          item.sourceBizType === task.sourceBizType && item.sourceBizId === task.sourceBizId,
+          item.sourceBizType === task.sourceBizType &&
+          item.sourceBizId === task.sourceBizId &&
+          item.basicInfo.projectId === task.basicInfo.projectId &&
+          item.basicInfo.organizationId === task.basicInfo.organizationId,
       ) ?? null;
     setSelected(latest);
     setDetailsOpen(false);
@@ -253,6 +266,7 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
     await Promise.allSettled([
       cache.invalidateQueries({ queryKey: ['expert-project-detail', user.id] }),
       cache.invalidateQueries({ queryKey: ['profile-workbench', user.id] }),
+      cache.invalidateQueries({ queryKey: ['workbench-statistics', user.id, 'EXPERT'] }),
     ]);
     requireSession();
     return latest;
@@ -262,6 +276,9 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
     if (!window.dispatchEvent(new Event(EXPERT_EXAM_LEAVE_REQUEST, { cancelable: true }))) return;
     if (!window.dispatchEvent(new Event(EXPERT_TRAINING_LEAVE_REQUEST, { cancelable: true })))
       return;
+    if (!window.dispatchEvent(new Event(EXPERT_PRODUCTION_LEAVE_REQUEST, { cancelable: true })))
+      return;
+    if (!window.dispatchEvent(new Event(PERSONNEL_LEAVE_REQUEST, { cancelable: true }))) return;
     setRefreshing(true);
     setRefreshError(null);
     try {
@@ -309,6 +326,25 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
     if (search === keyword.trim()) void projects.refetch();
     else setSearch(keyword.trim());
   }
+  async function businessChanged(task: ExpertTask, label: string) {
+    if (!sessionMatches()) return;
+    setRefreshRequired(true);
+    setRefreshing(true);
+    setRefreshError(null);
+    setNotice(`${label}已保存，正在读取后续待办。`);
+    try {
+      await readCurrentTask(task);
+      if (sessionMatches()) setNotice(`${label}已保存，后续待办已更新。`);
+    } catch (failure) {
+      if (sessionMatches()) {
+        setRefreshError(failure);
+        setNotice(`${label}已保存，最新待办读取失败，请重试读取项目。`);
+      }
+      throw failure;
+    } finally {
+      if (sessionMatches()) setRefreshing(false);
+    }
+  }
   return (
     <ProjectCardTransition
       direction={direction}
@@ -332,6 +368,14 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
                     new Event(EXPERT_TRAINING_LEAVE_REQUEST, { cancelable: true }),
                   )
                 )
+                  return;
+                if (
+                  !window.dispatchEvent(
+                    new Event(EXPERT_PRODUCTION_LEAVE_REQUEST, { cancelable: true }),
+                  )
+                )
+                  return;
+                if (!window.dispatchEvent(new Event(PERSONNEL_LEAVE_REQUEST, { cancelable: true })))
                   return;
                 setSelected(null);
                 setDetailsOpen(false);
@@ -410,24 +454,38 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
             </article>
           </Card>
           {detail.isFetching && <LoadingState>正在读取项目详情…</LoadingState>}
-          {selected.acceptanceStatus === 'ACCEPTED' &&
-            selected.branchNodeCode === 'ENTRANCE_EXAM' && (
-              <ExpertExamPanel
-                key={`${selected.sourceBizType}:${selected.sourceBizId}`}
-                user={user}
-                task={selected}
-                onChanged={() => refreshCurrentTask(selected)}
-              />
-            )}
-          {selected.acceptanceStatus === 'ACCEPTED' &&
-            selected.branchNodeCode === 'STANDARD_TRAINING' && (
-              <ExpertTrainingPanel
-                key={`${selected.sourceBizType}:${selected.sourceBizId}`}
-                user={user}
-                task={selected}
-                onConfirmed={() => trainingConfirmed(selected)}
-              />
-            )}
+          <ExpertProjectModules
+            key={`${selected.basicInfo.projectId}:${selected.basicInfo.organizationId}:${selected.sourceBizType}:${selected.sourceBizId}`}
+            user={user}
+            task={selected}
+            onExamChanged={() => refreshCurrentTask(selected)}
+            onExamCancelled={async () => {
+              if (!sessionMatches()) return;
+              setRefreshRequired(true);
+              setRefreshing(true);
+              setRefreshError(null);
+              setNotice('考试已取消，正在读取最新待办。');
+              try {
+                await readCurrentTask(selected);
+                if (sessionMatches()) {
+                  setSelected(null);
+                  setDirection('back');
+                  setNotice('考试已取消，已返回项目卡片。');
+                }
+              } catch (failure) {
+                if (sessionMatches()) {
+                  setRefreshError(failure);
+                  setNotice('考试已取消，最新待办读取失败，请重试读取项目。');
+                }
+                throw failure;
+              } finally {
+                if (sessionMatches()) setRefreshing(false);
+              }
+            }}
+            onTrainingConfirmed={() => trainingConfirmed(selected)}
+            onProductionChanged={() => businessChanged(selected, '生产操作')}
+            onPersonnelChanged={() => businessChanged(selected, '人员操作')}
+          />
           {detail.isError && (
             <div className="space-y-3">
               <ErrorNotice error={detail.error} />
@@ -439,10 +497,12 @@ export function ExpertProjectsPage({ user }: { user: AuthUser }) {
         </>
       ) : (
         <>
+          <h1 ref={heading} tabIndex={-1} className="sr-only">
+            我负责的项目
+          </h1>
+          <WorkbenchStatistics user={user} />
+          <AttendanceClockPanel user={user} compact />
           <section aria-label="执行专家待办项目" className="space-y-5">
-            <h1 ref={heading} tabIndex={-1} className="sr-only">
-              我负责的项目
-            </h1>
             <form onSubmit={submit} className="flex items-center gap-3">
               <SearchInput
                 id="expert-project-search"

@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState, type PropsWithChildren } from 'react';
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Building2, ChevronDown, LayoutDashboard, LogOut, UserRound } from 'lucide-react';
+import {
+  Building2,
+  ChevronDown,
+  FolderKanban,
+  LayoutDashboard,
+  LogOut,
+  UserRound,
+} from 'lucide-react';
 import type { AuthUser } from '@tyde/shared';
 import { TideIcon } from '@/components/icons';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -25,6 +32,7 @@ export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: Au
     pathname === '/' ||
     pathname.startsWith('/projects') ||
     pathname.startsWith('/strategist/projects');
+  const projectsActive = pathname.startsWith('/project-directory');
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -33,7 +41,9 @@ export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: Au
   const { view, setView, isPending: rolePending, error: roleError } = useWorkspaceView();
   const roleOptions = workspaceViewOptions.filter((option) => user.roles.includes(option.value));
   const showOrganization = view === 'EXPERT';
-  const name = user.nickname || user.realName;
+  const nickname = user.nickname?.trim();
+  const realName = user.realName?.trim();
+  const name = nickname && realName ? `${nickname}（${realName}）` : nickname || realName;
   const hasOrganization = typeof user.organization?.id === 'string';
   const managesOrganization =
     hasOrganization &&
@@ -89,9 +99,8 @@ export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: Au
       </a>
       <header className="sticky top-0 z-30 border-b bg-card">
         <div className="mx-auto flex h-[64px] max-w-[1280px] items-center gap-[12px] px-[16px] min-[400px]:gap-[24px] sm:gap-[40px] sm:px-[32px]">
-          <Link
-            to="/"
-            aria-label="Tyde 首页"
+          <span
+            aria-label="Tyde 品牌"
             className="flex shrink-0 items-center gap-[8px] rounded-[8px] focus-visible:outline-2 focus-visible:outline-ring"
           >
             <span className="grid size-[32px] place-items-center rounded-[8px] bg-primary text-primary-foreground">
@@ -103,7 +112,7 @@ export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: Au
             <span className="hidden border-l pl-[10px] text-[13px] text-[var(--color-neutral-strong)] sm:inline">
               潮汐
             </span>
-          </Link>
+          </span>
           <nav
             aria-label="主导航"
             className="flex h-full shrink-0 items-center gap-[8px] whitespace-nowrap sm:gap-[24px]"
@@ -116,7 +125,16 @@ export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: Au
               <LayoutDashboard className="hidden size-[18px] sm:block" aria-hidden />
               工作台
             </Link>
-            {showOrganization && (
+            <Link
+              to="/project-directory"
+              search={{}}
+              aria-current={projectsActive ? 'page' : undefined}
+              className={`relative flex h-full items-center gap-[8px] px-[4px] text-[13px] font-medium outline-offset-4 transition-colors hover:text-[var(--color-primary-strong)] ${projectsActive ? 'text-[var(--color-primary-strong)] after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:rounded-t after:bg-primary' : 'text-[var(--color-neutral-strong)]'}`}
+            >
+              <FolderKanban className="hidden size-[18px] sm:block" aria-hidden />
+              项目
+            </Link>
+            {showOrganization && managesOrganization && (
               <Link
                 to="/organization"
                 aria-current={pathname.startsWith('/organization') ? 'page' : undefined}
@@ -225,7 +243,7 @@ export function WorkspaceLayout({ user, children }: PropsWithChildren<{ user: Au
                     个人中心
                   </Link>
                 </Button>
-                {showOrganization && (
+                {showOrganization && managesOrganization && (
                   <Button
                     asChild
                     variant="ghost"

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { clockContextResponse } from '../../apps/server/src/modules/attendance/attendance-clock.schema';
 import type { AuthUser, OrganizationDetail } from '../../packages/shared/src/index';
 
 const timestamp = '2026-01-01T00:00:00.000Z';
@@ -122,6 +123,20 @@ for (const role of ['NAVIGATOR', 'PM', 'EXPERT'] as const) {
           route.fulfill({ json: { code: 200, message: '操作成功', data } });
         if (path === '/api/v1/users/me')
           return reply({ ...user, role, selectedRole: role, roles: ['NAVIGATOR', 'PM', 'EXPERT'] });
+        if (path === '/api/v1/projects/workbench/statistics' && request.method() === 'GET') {
+          expect(new URL(request.url()).searchParams.get('mode')).toBe('TASK');
+          return reply({
+            mode: 'TASK',
+            pendingTaskCount: 0,
+            completedTaskCount: 0,
+            involvedProjectCount: 0,
+          });
+        }
+        if (path === '/api/v1/organizations/attendance/clock-context' && request.method() === 'GET')
+          return reply({
+            ...structuredClone(clockContextResponse.examples[0]),
+            orgId: new URL(request.url()).searchParams.get('orgId'),
+          });
         if (path === '/api/v1/projects/draft/current')
           return reply({ hasDraft: false, draft: null });
         if (['/api/v1/projects/list', '/api/v1/projects/manager/list'].includes(path)) {

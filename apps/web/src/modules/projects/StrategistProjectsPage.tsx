@@ -1,3 +1,5 @@
+import { ProjectCardPeople } from './ProjectCardPeople';
+import { WorkbenchStatistics } from './WorkbenchStatistics';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
@@ -30,6 +32,7 @@ export function StrategistProjectsPage({ user }: { user: AuthUser }) {
   );
   return (
     <ProjectCardTransition direction="back" className="space-y-5">
+      <WorkbenchStatistics user={user} />
       <h1 className="sr-only">我负责的项目</h1>
       <div className="flex items-center gap-3">
         <SearchInput
@@ -108,6 +111,7 @@ export function StrategistProjectsPage({ user }: { user: AuthUser }) {
                     {project.requesterName} ·{' '}
                     {project.primaryProjectManager ? '主策略官' : '招募协作负责人'}
                   </p>
+                  <ProjectCardPeople project={project} />
                   <div className="mt-5 flex items-center justify-between gap-2">
                     <p
                       className="text-xs text-muted-foreground"
@@ -133,7 +137,18 @@ export function StrategistProjectsPage({ user }: { user: AuthUser }) {
                             ? { tab: 'ENTRANCE_EXAM' }
                             : node === 'STANDARD_TRAINING'
                               ? { tab: 'STANDARD_TRAINING' }
-                              : {}
+                              : node === 'RECRUIT_EXECUTION_EXPERT'
+                                ? { tab: 'RECRUIT_EXECUTION_EXPERT' }
+                                : node === 'PERSONNEL_MANAGEMENT'
+                                  ? {
+                                      tab: 'PERSONNEL_MANAGEMENT',
+                                      ...(project.branchNodeCode === 'MEMBER_MOVEMENT_APPROVAL'
+                                        ? { personnelView: 'movements' as const }
+                                        : {}),
+                                    }
+                                  : node === 'PRODUCTION_TASK'
+                                    ? { tab: 'PRODUCTION_TASK' }
+                                    : {}
                         }
                       >
                         <span className="sr-only">
@@ -141,7 +156,13 @@ export function StrategistProjectsPage({ user }: { user: AuthUser }) {
                             ? '准入考试'
                             : node === 'STANDARD_TRAINING'
                               ? '标准与培训'
-                              : '生产计划'}
+                              : node === 'RECRUIT_EXECUTION_EXPERT'
+                                ? '招募执行专家'
+                                : node === 'PERSONNEL_MANAGEMENT'
+                                  ? '人员管理'
+                                  : node === 'PRODUCTION_TASK'
+                                    ? '生产任务'
+                                    : '生产计划'}
                         </span>
                         <ArrowRight className="size-4" aria-hidden />
                       </Link>
