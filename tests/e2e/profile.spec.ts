@@ -167,6 +167,13 @@ async function profileBackend(page: Page, origin: string, signedIn = true) {
         'Set-Cookie': 'profile_session=; Max-Age=0; HttpOnly; Path=/; SameSite=Lax',
       });
     }
+    if (path === '/api/v1/projects/workbench/statistics')
+      return reply({
+        mode: 'TASK',
+        pendingTaskCount: 0,
+        completedTaskCount: 0,
+        involvedProjectCount: 0,
+      });
     if (path === '/api/v1/users/me' && request.method() === 'GET')
       return reply(state.meStatus === 200 ? state.user : null, state.meStatus);
     if (path === '/api/v1/auth/switch-role' && request.method() === 'POST') {
@@ -521,11 +528,11 @@ for (const [mode, origin, desktop] of [
     for (const file of [
       { name: 'unsupported.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg />') },
       { name: 'empty.png', mimeType: 'image/png', buffer: Buffer.alloc(0) },
-      { name: 'too-large.png', mimeType: 'image/png', buffer: Buffer.alloc(10 * 1024 * 1024 + 1) },
+      { name: 'too-large.png', mimeType: 'image/png', buffer: Buffer.alloc(2 * 1024 * 1024 + 1) },
     ]) {
       await fileInput.setInputFiles(file);
       await expect(
-        panel.getByText('请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片，最大 10 MiB', {
+        panel.getByText('请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片，最大 2 MiB', {
           exact: true,
         }),
       ).toBeVisible();
@@ -536,7 +543,7 @@ for (const [mode, origin, desktop] of [
     await fileInput.setInputFiles({
       name: 'first.png',
       mimeType: 'image/png',
-      buffer: avatarBytes,
+      buffer: Buffer.concat([avatarBytes, Buffer.alloc(2 * 1024 * 1024 - avatarBytes.length)]),
     });
     const preview = panel.getByRole('img', { name: `${fixtureUser.nickname}的头像`, exact: true });
     await expect(preview).toHaveAttribute('src', /^blob:/);
@@ -576,7 +583,7 @@ for (const [mode, origin, desktop] of [
       }, origin);
     const { state, requests } = await profileBackend(page, origin);
     await openProfile(page, origin);
-    await page.getByRole('tab', { name: '账户安全', exact: true }).click();
+    await page.getByRole('tab', { name: '个人资料', exact: true }).click();
     await expect(
       page.getByText('修改成功后，全部设备需重新登录，包括当前设备。', { exact: true }),
     ).toBeVisible();
@@ -950,15 +957,15 @@ test('个人中心登录保护、概览与资料表单在桌面和手机无横�
     { width: 812, height: 375 },
   ]) {
     await page.setViewportSize(viewport);
-    await page.getByRole('tab', { name: '概览', exact: true }).click();
+    await page.getByRole('tab', { name: '我的项目', exact: true }).click();
     await expect(
       page.getByRole('tablist', { name: '个人中心设置', exact: true }).getByRole('tab'),
-    ).toHaveText(['概览', '个人资料', '账户安全', '我的项目', '排班考勤', '组织与申请']);
+    ).toHaveText(['我的项目', '排班考勤', '基本信息', '组织与申请', '个人资料']);
     await expect(
       page.getByRole('tablist', { name: '执行专家个人中心业务', exact: true }),
     ).toHaveCount(0);
-    for (const name of ['查看全部项目', '管理排班与考勤', '查看全部申请'])
-      await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    for (const name of ['我的项目', '排班考勤', '组织与申请'])
+      await expect(page.getByRole('tab', { name, exact: true })).toBeVisible();
     await expect(page.getByText('示例数据', { exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(
       true,

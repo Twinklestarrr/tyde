@@ -1,7 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react';
 import {
   ApiError,
-  type OrganizationScheduleBatchInput,
   type OrganizationScheduleDay,
   type OrganizationScheduleDetailsInput,
   type OrganizationScheduleMember,
@@ -14,17 +13,9 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/shared/FormField';
 import { api } from '@/services/api';
 import { OrganizationDialog, orgControlClass } from './common';
+import { OrganizationBatchScheduleDialog } from './OrganizationBatchScheduleDialog';
 
-export function OrganizationScheduleDialog({
-  orgId,
-  month,
-  members,
-  day,
-  keys,
-  onClose,
-  onSaved,
-  onReload,
-}: {
+export type OrganizationScheduleDialogProps = {
   orgId: string;
   month: string;
   members: OrganizationScheduleMember[];
@@ -33,27 +24,39 @@ export function OrganizationScheduleDialog({
   onClose: () => void;
   onSaved: (result: OrganizationScheduleResult) => Promise<void>;
   onReload: () => Promise<void>;
-}) {
-  const [startDate, setStartDate] = useState(day?.scheduleDate ?? `${month}-01`);
-  const [endDate, setEndDate] = useState(() => {
-    const end = new Date(`${month}-01T00:00:00Z`);
-    end.setUTCMonth(end.getUTCMonth() + 1, 0);
-    return end.toISOString().slice(0, 10);
-  });
+};
+
+export function OrganizationScheduleDialog(props: OrganizationScheduleDialogProps) {
+  return props.day ? (
+    <DailyScheduleDialog {...props} day={props.day} />
+  ) : (
+    <OrganizationBatchScheduleDialog {...props} />
+  );
+}
+
+function DailyScheduleDialog({
+  orgId,
+  members,
+  day,
+  keys,
+  onClose,
+  onSaved,
+  onReload,
+}: OrganizationScheduleDialogProps & { day: OrganizationScheduleDay }) {
   const [dayType, setDayType] = useState<'WORK' | 'REST'>(day?.dayType ?? 'WORK');
   const [startTime, setStartTime] = useState(day?.shiftStartAt?.slice(11, 19) || '09:00');
   const [endTime, setEndTime] = useState(day?.shiftEndAt?.slice(11, 19) || '18:00');
   const [timezone, setTimezone] = useState(day?.timezone || 'Asia/Shanghai');
-  const [weekdays, setWeekdays] = useState([1, 2, 3, 4, 5]);
   const [overwrite, setOverwrite] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<unknown>();
   const [reloadError, setReloadError] = useState<unknown>();
   const submitting = useRef(false);
 
-  async function submit(event: FormEvent) {
+  async function submit(event: FormEvent, confirmed = false) {
     event.preventDefault();
     if (submitting.current) return;
     setError(undefined);
@@ -71,45 +74,22 @@ export function OrganizationScheduleDialog({
       setError(new Error('请输入有效的 IANA 时区，例如 Asia/Shanghai'));
       return;
     }
-    if (!day) {
-      const from = new Date(`${startDate}T00:00:00Z`),
-        to = new Date(`${endDate}T00:00:00Z`);
-      if (
-        !Number.isFinite(from.getTime()) ||
-        !Number.isFinite(to.getTime()) ||
-        from > to ||
-        Number(startDate.slice(0, 4)) < 1900 ||
-        to.getTime() - from.getTime() > 365 * 86400000
-      ) {
-        setError(new Error('日期范围须从 1900 年起，结束不早于开始，最多 366 天'));
-        return;
-      }
-      if (!weekdays.length) {
-        setError(new Error('请至少选择一个星期'));
-        return;
-      }
-    }
     const shift = {
       dayType,
       ...(dayType === 'WORK' ? { startTime, endTime } : {}),
       timezone: timezone.trim(),
     };
-    const input: OrganizationScheduleBatchInput | OrganizationScheduleDetailsInput = day
-      ? {
-          orgId,
-          schedules: [{ memberId: members[0]!.memberId, scheduleDate: day.scheduleDate, ...shift }],
-          overwrite,
-        }
-      : {
-          orgId,
-          memberIds: members.map((member) => member.memberId).sort(),
-          startDate,
-          endDate,
-          weekdays: [...weekdays].sort(),
-          ...shift,
-          overwrite,
-        };
-    const fingerprint = JSON.stringify([day ? 'DETAIL' : 'BATCH', input]);
+    const input: OrganizationScheduleDetailsInput = {
+      orgId,
+      schedules: [{ memberId: members[0]!.memberId, scheduleDate: day.scheduleDate, ...shift }],
+      overwrite,
+    };
+    if (!confirmed) {
+      setConfirming(true);
+      return;
+    }
+    setConfirming(false);
+    const fingerprint = JSON.stringify(['DETAIL', input]);
     let key = keys.get(fingerprint);
     if (!key) {
       key = crypto.randomUUID();
@@ -119,9 +99,7 @@ export function OrganizationScheduleDialog({
     setBusy(true);
     let result: OrganizationScheduleResult;
     try {
-      result = day
-        ? await api.batchOrganizationScheduleDetails(input as OrganizationScheduleDetailsInput, key)
-        : await api.batchOrganizationSchedules(input as OrganizationScheduleBatchInput, key);
+      result = await api.batchOrganizationScheduleDetails(input, key);
     } catch (failure) {
       setError(failure);
       setConflict(failure instanceof ApiError && failure.status === 409);
@@ -147,11 +125,7 @@ export function OrganizationScheduleDialog({
     }
   }
   return (
-    <OrganizationDialog
-      title={day ? '编辑每日排班' : '组织批量排班'}
-      busy={busy || reloading}
-      onClose={onClose}
-    >
+    <OrganizationDialog title="编辑每日排班" busy={busy || reloading} onClose={onClose}>
       <form onSubmit={(event) => void submit(event)} className="space-y-[20px]">
         <p className="text-[13px] leading-[22px] text-[var(--color-neutral-strong)]">
           已选 {members.length} 人：
@@ -171,34 +145,6 @@ export function OrganizationScheduleDialog({
           disabled={busy || reloading}
           className="grid grid-cols-1 gap-[16px] sm:grid-cols-2"
         >
-          {!day && (
-            <>
-              <FormField controlId="org-schedule-start-date" label="开始日期" required>
-                <Input
-                  id="org-schedule-start-date"
-                  size="profile"
-                  type="date"
-                  min="1900-01-01"
-                  max="9999-12-31"
-                  required
-                  value={startDate}
-                  onChange={(event) => setStartDate(event.target.value)}
-                />
-              </FormField>
-              <FormField controlId="org-schedule-end-date" label="结束日期" required>
-                <Input
-                  id="org-schedule-end-date"
-                  size="profile"
-                  type="date"
-                  min={startDate || '1900-01-01'}
-                  max="9999-12-31"
-                  required
-                  value={endDate}
-                  onChange={(event) => setEndDate(event.target.value)}
-                />
-              </FormField>
-            </>
-          )}
           <FormField controlId="org-schedule-day-type" label="日类型" required>
             <select
               id="org-schedule-day-type"
@@ -246,35 +192,6 @@ export function OrganizationScheduleDialog({
               </FormField>
             </>
           )}
-          {!day && (
-            <fieldset className="sm:col-span-2">
-              <legend className="mb-[8px] text-[13px] font-medium">排班星期</legend>
-              <div className="flex flex-wrap gap-[12px]">
-                {['一', '二', '三', '四', '五', '六', '日'].map((label, index) => (
-                  <label
-                    key={label}
-                    className="flex min-h-[44px] items-center gap-[6px] text-[13px]"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={weekdays.includes(index + 1)}
-                      onChange={(event) =>
-                        setWeekdays(
-                          event.target.checked
-                            ? [...weekdays, index + 1]
-                            : weekdays.filter((value) => value !== index + 1),
-                        )
-                      }
-                    />
-                    周{label}
-                  </label>
-                ))}
-              </div>
-              <p className="mt-[6px] text-[12px] leading-[20px] text-muted-foreground">
-                范围排班由服务端按所选星期展开，并排除法定放假日；调休工作日也按所选星期。若需指定节假日，请从月历点击某日编辑。
-              </p>
-            </fieldset>
-          )}
           <label className="flex min-h-[44px] items-center gap-[8px] text-[13px] sm:col-span-2">
             <input
               type="checkbox"
@@ -304,10 +221,33 @@ export function OrganizationScheduleDialog({
             取消
           </Button>
           <Button type="submit" size="settings" loading={busy} disabled={reloading || conflict}>
-            保存排班
+            提交排班
           </Button>
         </div>
       </form>
+      {confirming && (
+        <OrganizationDialog
+          title="确认提交组织排班"
+          busy={busy}
+          onClose={() => setConfirming(false)}
+        >
+          <p>
+            已选 {members.length} 人，日期 {day.scheduleDate}。
+          </p>
+          <p>
+            {dayType === 'WORK' ? `工作班次 ${startTime}–${endTime}` : '休息'}，时区 {timezone}；
+            {overwrite ? '覆盖已有排班' : '保留已有排班'}。
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="mobileTouch" onClick={() => setConfirming(false)}>
+              取消
+            </Button>
+            <Button size="mobileTouch" onClick={(event) => void submit(event, true)}>
+              确认提交
+            </Button>
+          </div>
+        </OrganizationDialog>
+      )}
     </OrganizationDialog>
   );
 }

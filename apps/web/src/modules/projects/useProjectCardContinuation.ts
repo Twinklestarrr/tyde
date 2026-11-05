@@ -12,12 +12,14 @@ export function useProjectCardContinuation({
   role,
   reloadDetail,
   onContinue,
+  origin = 'workbench',
 }: {
   user: AuthUser;
   projectId: number;
   role: 'NAVIGATOR' | 'PM';
   reloadDetail: () => Promise<unknown>;
   onContinue: (card: NavigatorProjectCard) => void;
+  origin?: 'workbench' | 'directory';
 }) {
   const cache = useQueryClient();
   const navigate = useNavigate();
@@ -44,6 +46,29 @@ export function useProjectCardContinuation({
       );
     };
     if (!active()) return;
+    if (origin === 'directory') {
+      await reloadDetail();
+      if (!active()) return;
+      await Promise.all([
+        cache.invalidateQueries(
+          { queryKey: ['project-directory', user.id, role], refetchType: 'none' },
+          { throwOnError: true },
+        ),
+        cache.invalidateQueries(
+          {
+            refetchType: 'none',
+            predicate: (query) =>
+              String(query.queryKey[0]).startsWith('project-board-') &&
+              query.queryKey[1] === user.id &&
+              query.queryKey[2] === role &&
+              query.queryKey[3] === projectId,
+          },
+          { throwOnError: true },
+        ),
+      ]);
+      if (active()) setTransition((value) => value + 1);
+      return;
+    }
     const queryKey = [role === 'PM' ? 'strategist-projects' : 'navigator-projects', user.id, role];
     await cache.cancelQueries({ queryKey });
     if (!active()) return;
@@ -52,6 +77,7 @@ export function useProjectCardContinuation({
       : api.listNavigatorProjects());
     if (!active()) return;
     cache.setQueryData(queryKey, cards);
+    await cache.invalidateQueries({ queryKey: ['workbench-statistics', user.id, role] });
     const card = cards.find((item) => item.id === projectId);
     if (!card) {
       await navigate({ to: role === 'PM' ? '/strategist/projects' : '/projects', replace: true });

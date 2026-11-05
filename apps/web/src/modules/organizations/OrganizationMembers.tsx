@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { FormField } from '@/components/ui/shared/FormField';
 import { api } from '@/services/api';
+import { OrganizationMemberDossier } from './OrganizationMemberDossier';
 import {
   OrganizationDialog,
   OrganizationPagination,
@@ -56,7 +57,10 @@ const shanghaiDate = (value: string | null) => {
     : '';
 };
 const displayName = (member: OrganizationMember) =>
-  member.realName || member.nickname || member.uid;
+  member.nickname && member.realName && member.nickname !== member.realName
+    ? `${member.nickname}（${member.realName}）`
+    : member.nickname || member.realName || '未命名成员';
+const memberLevels = ['未定义', '普通', '进阶1', '进阶2', '高阶', '特殊专家'];
 type MemberAction = { kind: 'edit' | 'role' | 'exit'; member: OrganizationMember };
 
 interface OrganizationMembersProps {
@@ -69,7 +73,12 @@ interface OrganizationMembersProps {
 
 /** 账号或组织变化时清除旧筛选、成员草稿和退出幂等键。 */
 export function OrganizationMembers(props: OrganizationMembersProps) {
-  return <OrganizationMembersPanel key={`${props.user.id}:${props.orgId}`} {...props} />;
+  return (
+    <OrganizationMembersPanel
+      key={`${props.user.id}:${props.orgId}:${props.position}`}
+      {...props}
+    />
+  );
 }
 
 function OrganizationMembersPanel({
@@ -88,6 +97,8 @@ function OrganizationMembersPanel({
   const [filterError, setFilterError] = useState<Error>();
   const [action, setAction] = useState<MemberAction>();
   const [notice, setNotice] = useState('');
+  const [levels, setLevels] = useState<Record<string, string>>({});
+  const [dossier, setDossier] = useState<OrganizationMember | null>(null);
   const members = useQuery({
     queryKey: ['organization', user.id, orgId, 'members', query],
     queryFn: () => api.listOrganizationMembers({ ...query, orgId }),
@@ -177,7 +188,7 @@ function OrganizationMembersPanel({
           <div className="grid grid-cols-2 items-center gap-[8px] min-[641px]:flex min-[641px]:flex-wrap">
             <div className="relative col-span-2 min-w-0 min-[641px]:min-w-[220px] min-[641px]:flex-1">
               <label htmlFor="org-member-keyword" className="sr-only">
-                姓名 / UID / 完整手机号
+                姓名 / 完整手机号
               </label>
               <Search
                 className="pointer-events-none absolute top-1/2 left-[12px] size-[15px] -translate-y-1/2 text-[var(--color-neutral-strong)]"
@@ -187,7 +198,7 @@ function OrganizationMembersPanel({
                 size="profile"
                 id="org-member-keyword"
                 className="rounded-[8px] bg-card pl-[36px] shadow-none"
-                placeholder="搜索真实姓名 / UID / 完整手机号"
+                placeholder="搜索真实姓名 / 完整手机号"
                 value={filters.keyword}
                 maxLength={100}
                 onChange={(event) => setFilter('keyword', event.target.value)}
@@ -346,6 +357,7 @@ function OrganizationMembersPanel({
                       '成员',
                       '人员属性',
                       '组织角色',
+                      '人员等级',
                       '成员状态',
                       '入组 / 离组时间',
                       '在项数',
@@ -367,12 +379,17 @@ function OrganizationMembersPanel({
                     const canEdit =
                       canWrite && (position === 'OWNER' || member.position === 'MEMBER' || self);
                     const canRole =
-                      canEdit && member.joinStatus === 'ACTIVE' && !(position === 'OWNER' && self);
+                      canWrite &&
+                      !self &&
+                      member.position !== 'OWNER' &&
+                      (position === 'OWNER' || member.position === 'MEMBER') &&
+                      ['ACTIVE', 'PENDING_ACTIVATION'].includes(String(member.joinStatus));
                     const canExit =
                       canWrite &&
                       member.joinStatus === 'ACTIVE' &&
                       member.position !== 'OWNER' &&
-                      (position === 'OWNER' || member.position === 'MEMBER' || self);
+                      !self &&
+                      (position === 'OWNER' || member.position === 'MEMBER');
                     return (
                       <TableRow key={member.memberId} className="group bg-card">
                         <TableHead
@@ -397,8 +414,8 @@ function OrganizationMembersPanel({
                               <div className="mt-[5px] flex min-w-0 items-center gap-[8px] text-[12px] text-[var(--color-neutral-strong)]">
                                 <span className="shrink-0 tabular-nums">{member.phoneMasked}</span>
                                 <span aria-hidden className="h-[10px] border-l" />
-                                <span className="truncate" title={`UID：${member.uid}`}>
-                                  UID：{member.uid}
+                                <span className="truncate" title={`用户 ID：${member.userId}`}>
+                                  用户 ID：{member.userId}
                                 </span>
                               </div>
                               {member.userStatus !== 'ACTIVE' && (
@@ -416,6 +433,23 @@ function OrganizationMembersPanel({
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
                           {positionLabels[member.position]}
+                        </TableCell>
+                        <TableCell>
+                          <select
+                            aria-label={`${displayName(member)}人员等级`}
+                            className={orgControlClass}
+                            value={levels[member.memberId] ?? '未定义'}
+                            onChange={(event) =>
+                              setLevels((current) => ({
+                                ...current,
+                                [member.memberId]: event.target.value,
+                              }))
+                            }
+                          >
+                            {memberLevels.map((level) => (
+                              <option key={level}>{level}</option>
+                            ))}
+                          </select>
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
                           <span
@@ -451,6 +485,13 @@ function OrganizationMembersPanel({
                         <TableCell className="tabular-nums">{member.activeProjectCount}</TableCell>
                         <TableCell className="border-l bg-card group-hover:bg-[var(--color-surface-muted)] min-[960px]:sticky min-[960px]:right-0">
                           <div className="flex flex-nowrap items-center gap-[4px] whitespace-nowrap">
+                            <Button
+                              variant="link"
+                              size="formCompactMobileTouch"
+                              onClick={() => setDossier(member)}
+                            >
+                              查看档案
+                            </Button>
                             {canEdit && (
                               <Button
                                 variant="link"
@@ -488,7 +529,7 @@ function OrganizationMembersPanel({
                   })}
                   {members.data.records.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={7} className="p-0">
+                      <TableCell colSpan={8} className="p-0">
                         <EmptyState title="暂无符合条件的人员" />
                       </TableCell>
                     </TableRow>
@@ -507,6 +548,16 @@ function OrganizationMembersPanel({
             </CardFooter>
           </>
         )}
+        {dossier && (
+          <OrganizationMemberDossier
+            member={dossier}
+            name={displayName(dossier)}
+            onClose={() => setDossier(null)}
+          />
+        )}
+        <p className="px-5 py-3 text-xs text-muted-foreground">
+          人员等级仅在当前视图暂存，刷新或离开后重置，未保存到服务器。
+        </p>
         {action && canWrite && (
           <MemberDialog
             key={`${action.kind}:${action.member.memberId}`}
@@ -583,6 +634,13 @@ function MemberDialog({
         await api.updateOrganizationMember(input);
         message = '成员资料已保存';
       } else if (kind === 'role') {
+        if (
+          self ||
+          member.position === 'OWNER' ||
+          (position !== 'OWNER' && member.position !== 'MEMBER') ||
+          (role === 'OWNER' && (position !== 'OWNER' || member.position !== 'ADMIN'))
+        )
+          throw new Error('当前身份不能执行该岗位变更');
         if (role === member.position) throw new Error('请选择需要变更的组织角色');
         if (role === 'OWNER' && !confirmed) throw new Error('请确认主管转让后果');
         await api.changeOrganizationMemberRole({
@@ -590,7 +648,7 @@ function MemberDialog({
           memberId: member.memberId,
           position: role,
         });
-        message = role === 'OWNER' ? '主管已转让，当前账户已变为管理员' : '组织角色已更新';
+        message = role === 'OWNER' ? '主管已转让，正在读取最新组织身份' : '组织角色已更新';
       } else {
         if (!reason.trim()) throw new Error('请填写退出原因');
         const fingerprint = JSON.stringify([member.memberId, reason.trim(), leaveDate]);
@@ -670,7 +728,9 @@ function MemberDialog({
                 >
                   <option value="MEMBER">成员</option>
                   <option value="ADMIN">管理员</option>
-                  {position === 'OWNER' && !self && <option value="OWNER">主管（转让）</option>}
+                  {position === 'OWNER' && member.position === 'ADMIN' && !self && (
+                    <option value="OWNER">主管（转让）</option>
+                  )}
                 </select>
               </FormField>
               {role === 'OWNER' && (
@@ -702,7 +762,7 @@ function MemberDialog({
               <p className="rounded-[8px] bg-muted p-[12px] text-[13px] leading-[22px]">
                 {self
                   ? '本人退出需主管审批；审批通过后按拟离职日期生效。'
-                  : '当天移出将立即离组，未来日期将进入待离职。'}
+                  : '当天移出将立即离组；未来日期先进入待离职，在离职日期 0 点生效，无需审批。'}
                 此操作仅处理组织关系，项目与排班的退出尚未联动。
               </p>
               <FormField controlId="org-exit-date" label="拟离职日期（上海）" required>

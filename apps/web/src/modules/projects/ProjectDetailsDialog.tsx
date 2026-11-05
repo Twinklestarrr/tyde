@@ -1,6 +1,8 @@
-import { useMutation } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
-import type { WorkbenchProjectDetail } from '@tyde/shared';
+import type { AuthUser, WorkbenchProjectDetail } from '@tyde/shared';
+import { SESSION_KEY } from '@/hooks/useSession';
 import { api } from '@/services/api';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { Button } from '@/components/ui/button';
@@ -33,9 +35,31 @@ export function ProjectDetailsDialog({
   project: WorkbenchProjectDetail;
   onClose: () => void;
 }) {
+  const cache = useQueryClient();
+  const identity = useRef(cache.getQueryData<AuthUser | null>(SESSION_KEY));
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  function requireIdentity() {
+    const current = cache.getQueryData<AuthUser | null>(SESSION_KEY);
+    if (
+      !mounted.current ||
+      !current ||
+      current.id !== identity.current?.id ||
+      (current.selectedRole ?? current.role) !==
+        (identity.current?.selectedRole ?? identity.current?.role)
+    )
+      throw new Error('当前页面或身份已变化，请重新打开项目附件。');
+  }
   const download = useMutation({
     mutationFn: async (file: WorkbenchProjectDetail['attachments'][number]) => {
+      requireIdentity();
       const blob = await api.readProjectAttachment(file.objectKey);
+      requireIdentity();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;

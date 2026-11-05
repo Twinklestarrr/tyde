@@ -37,7 +37,7 @@ export function productionPlanToday(now = new Date()) {
     .join('-');
 }
 
-/** 空阶段不自动继承人数；CPD 留空由后端继承计划值。 */
+/** 新阶段的 CPD 由表单填入当时的顶部值，已有阶段按接口原值加载。 */
 export function emptyProductionStage(stageName = ''): ProductionPlanValues['stages'][number] {
   return {
     stageName,
@@ -187,9 +187,7 @@ export function productionPlanInput(
     if (stage.workdayCountSource === 'AUTO' && workdayCount < 1)
       errors[`stages.${index}.workdayCount`] = '自动工作日为 0，请调整日期或手动填写有效天数';
     const headcount = integer(stage.operatorHeadcount, `stages.${index}.operatorHeadcount`);
-    const cpd = stage.operatorCpd.trim()
-      ? decimal(stage.operatorCpd, `stages.${index}.operatorCpd`)
-      : operatorCpd;
+    const cpd = decimal(stage.operatorCpd, `stages.${index}.operatorCpd`);
     const accuracyRate = stage.accuracyRate.trim()
       ? decimal(stage.accuracyRate, `stages.${index}.accuracyRate`, true).number
       : null;
@@ -212,7 +210,7 @@ export function productionPlanInput(
       workdayCountSource: stage.workdayCountSource,
       ...(stage.workdayCountSource === 'MANUAL' ? { workdayCount } : {}),
       operatorHeadcount: headcount,
-      operatorCpd: stage.operatorCpd.trim() ? cpd.number : null,
+      operatorCpd: cpd.number,
       accuracyRate,
     };
   });
@@ -236,14 +234,11 @@ export function productionPlanInput(
 }
 
 /** 未确认的数值只作页面估算，不能覆盖服务端已确认的精确计算结果。 */
-export function productionStageEstimate(
-  stage: ProductionPlanValues['stages'][number],
-  operatorCpd: string,
-) {
+export function productionStageEstimate(stage: ProductionPlanValues['stages'][number]) {
   const dates = productionWorkdays(stage.startDate, stage.endDate);
   const days = stage.workdayCountSource === 'AUTO' ? dates?.workdays : Number(stage.workdayCount);
   const headcount = Number(stage.operatorHeadcount),
-    cpd = Number(stage.operatorCpd.trim() || operatorCpd);
+    cpd = Number(stage.operatorCpd);
   const output = days && headcount > 0 && cpd > 0 ? days * headcount * cpd : null;
   return {
     naturalDays: dates?.naturalDays ?? null,

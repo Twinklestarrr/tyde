@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { afterEach, expect, test, vi } from 'vitest';
 import { PersonnelMovementService } from '../src/modules/personnel/personnel-movement.service.js';
+import * as transfer from '../src/modules/personnel/personnel-transfer.js';
 import { AuthService, type AuthPrincipal } from '../src/modules/auth/auth.service.js';
 import { createApp } from '../src/application.js';
 import { readConfig } from '../src/config/index.js';
@@ -157,6 +158,122 @@ test('movement filters reject malformed dates, reversed ranges, invalid IDs and 
     status: 400,
   });
   expect(f.db.$transaction).not.toHaveBeenCalled();
+});
+test('movement actionable node selects only this actor among parallel manual candidates for the current role', async () => {
+  const f = fixture();
+  vi.spyOn(transfer, 'requireTransferStage').mockResolvedValue(undefined);
+  vi.spyOn(transfer, 'requireTransferPassed').mockReturnValue(undefined);
+  vi.spyOn(transfer, 'currentApprovers').mockResolvedValue([{ id: p.userId }] as never);
+  const ownNodeId = '00000000-0000-4000-8000-000000000002';
+  for (const [code, role] of [
+    ['SOURCE_ORG_OWNER', 'EXPERT'],
+    ['TARGET_ORG_OWNER', 'EXPERT'],
+    ['TARGET_MANAGER', 'PM'],
+  ] as const) {
+    const node = {
+      id: ownNodeId,
+      nodeSeq: 2,
+      nodeCode: code,
+      nodeStatus: 'PENDING',
+      approverId: p.userId,
+      versionNo: 3,
+      actions: [],
+    };
+    f.tx.projectMemberMovement.findMany.mockResolvedValue([
+      {
+        ...f.row,
+        movementType: 'TRANSFER',
+        status: 'PROCESSING',
+        targetProjectId: 2,
+        flow: {
+          flowNo: 'TF1',
+          status: 'PENDING',
+          versionNo: 4,
+          currentNode: 2,
+          currentNodeCode: code,
+          nodes: [
+            { ...node, id: '00000000-0000-4000-8000-000000000003', approverId: 'other' },
+            { ...node, id: '00000000-0000-4000-8000-000000000004', nodeSeq: 1 },
+            { ...node, id: '00000000-0000-4000-8000-000000000005', nodeStatus: 'CANCELED' },
+            node,
+          ],
+        },
+      },
+    ] as never);
+    const result = (await f.service.list({ projectId: 2 }, { ...p, role })).records[0]!;
+    expect(result.allowedActions).toEqual(['APPROVE', 'REJECT']);
+    expect(result.actionableNodeId).toBe(ownNodeId);
+    expect(result.approvalSteps).toHaveLength(4);
+    expect(result.approvalSteps.every((step) => !Object.hasOwn(step, 'approverId'))).toBe(true);
+  }
+});
+test('movement actionable node stays null for lost permission, wrong role, business waits and ambiguous own candidates', async () => {
+  const f = fixture();
+  vi.spyOn(transfer, 'requireTransferStage').mockResolvedValue(undefined);
+  vi.spyOn(transfer, 'requireTransferPassed').mockReturnValue(undefined);
+  const approvers = vi
+    .spyOn(transfer, 'currentApprovers')
+    .mockResolvedValue([{ id: p.userId }] as never);
+  const node = {
+    id: '00000000-0000-4000-8000-000000000002',
+    nodeSeq: 1,
+    nodeCode: 'SOURCE_ORG_OWNER',
+    nodeStatus: 'PENDING',
+    approverId: p.userId,
+    versionNo: 0,
+    actions: [],
+  };
+  const row = {
+    ...f.row,
+    movementType: 'TRANSFER',
+    status: 'PROCESSING',
+    targetProjectId: 2,
+    flow: {
+      flowNo: 'TF1',
+      status: 'PENDING',
+      versionNo: 0,
+      currentNode: 1,
+      currentNodeCode: 'SOURCE_ORG_OWNER',
+      nodes: [node],
+    },
+  };
+  f.tx.projectMemberMovement.findMany.mockResolvedValue([row] as never);
+  expect((await f.service.list({ projectId: 2 }, p)).records[0]).toMatchObject({
+    actionableNodeId: null,
+    allowedActions: [],
+  });
+  approvers.mockResolvedValue([{ id: 'other' }] as never);
+  expect(
+    (await f.service.list({ projectId: 2 }, { ...p, role: 'EXPERT' })).records[0],
+  ).toMatchObject({
+    actionableNodeId: null,
+    allowedActions: [],
+  });
+  approvers.mockResolvedValue([{ id: p.userId }] as never);
+  for (const code of ['MEMBER_CONFIRM', 'TARGET_ENTRANCE_EXAM']) {
+    row.flow.currentNodeCode = code;
+    row.flow.nodes = [{ ...node, nodeCode: code }];
+    const result = (await f.service.list({ projectId: 2 }, { ...p, role: 'EXPERT' })).records[0]!;
+    expect(result.actionableNodeId).toBeNull();
+    expect(result.allowedActions).toEqual(
+      code === 'MEMBER_CONFIRM' ? ['ACCEPT_TRANSFER', 'REJECT_TRANSFER'] : ['TAKE_TARGET_EXAM'],
+    );
+  }
+  row.flow.currentNodeCode = 'SOURCE_ORG_OWNER';
+  row.flow.nodes = [node, { ...node, id: '00000000-0000-4000-8000-000000000003' }];
+  const ambiguous = (await f.service.list({ projectId: 2 }, { ...p, role: 'EXPERT' })).records[0]!;
+  expect(ambiguous.allowedActions).toEqual(['APPROVE', 'REJECT']);
+  expect(ambiguous.actionableNodeId).toBeNull();
+  row.flow.currentNodeCode = 'TARGET_MANAGER';
+  row.flow.nodes = [{ ...node, nodeCode: 'TARGET_MANAGER' }];
+  f.tx.projectManagerRecruitment.findFirst.mockResolvedValue({
+    candidateUserId: 'other',
+    expertRecruitmentHandlerUserId: p.userId,
+  } as never);
+  expect((await f.service.list({ projectId: 2 }, p)).records[0]).toMatchObject({
+    actionableNodeId: null,
+    allowedActions: [],
+  });
 });
 test('movement read contracts describe nested fields, validate examples, serialize only public fields and reject malformed HTTP filters', async () => {
   vi.spyOn(AuthService.prototype, 'authenticate').mockResolvedValue(p);

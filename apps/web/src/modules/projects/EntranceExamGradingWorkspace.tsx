@@ -29,8 +29,10 @@ import { EntranceExamFiles } from './EntranceExamFiles';
 import { EntranceExamText } from './EntranceExamText';
 import {
   entranceExamGradingActions,
+  entranceExamGradingFailureIsUnknown,
   entranceExamGradingInput,
   entranceExamGradingPreview,
+  entranceExamGradingSourceMatches,
   entranceExamGradingValues,
   type EntranceExamGradingValues,
 } from './entrance-exam-grading';
@@ -41,6 +43,8 @@ interface EntranceExamGradingWorkspaceProps {
   examId: number;
   attemptId: number;
   canManage: boolean;
+  candidateUserId?: string;
+  role?: 'PM' | 'NAVIGATOR';
   onChanged: (written?: boolean) => Promise<void>;
   onBack: () => void;
 }
@@ -50,7 +54,15 @@ type Write =
   | { kind: 'retry'; input: EntranceExamAutoRetryInput }
   | { kind: 'compensate'; input: EntranceExamAutoCompensateInput };
 type Lock = 'unknown' | 'conflict' | 'success' | 'access';
-type LockMap = Record<string, Lock>;
+interface GradingWrite {
+  id: string;
+  originRole: 'PM' | 'NAVIGATOR';
+  status: Lock;
+  write: Write;
+  values: EntranceExamGradingValues;
+}
+// 读取缓存可按角色清空，未核实命令仍按账号和真实判卷记录互斥；刷新不持久化。
+const pendingWrites = new Map<string, GradingWrite>();
 
 const statusLabel = {
   WAITING: '等待前轮完成',
@@ -71,7 +83,7 @@ function gradingKey(props: EntranceExamGradingWorkspaceProps, roundNo: number) {
   return [
     'entrance-exam-grading',
     props.user.id,
-    'PM',
+    props.role ?? 'PM',
     props.projectId,
     props.examId,
     props.attemptId,
@@ -81,23 +93,34 @@ function gradingKey(props: EntranceExamGradingWorkspaceProps, roundNo: number) {
 
 /** 正文由名单所在弹框承载；每个轮次均读取本次应试绑定的历史试卷。 */
 export function EntranceExamGradingWorkspace(props: EntranceExamGradingWorkspaceProps) {
+  const cache = useQueryClient();
+  const role = props.role ?? 'PM';
+  function requireSession() {
+    const current = cache.getQueryData<AuthUser | null>(SESSION_KEY);
+    if (current?.id !== props.user.id || (current.selectedRole ?? current.role) !== role)
+      throw new Error('当前身份已变化，请重新打开阅卷详情。');
+  }
   const [roundNo, setRoundNo] = useState(1);
   const query = useQuery({
     queryKey: gradingKey(props, roundNo),
-    queryFn: () =>
-      api.getEntranceExamGradingDetail({
+    queryFn: async () => {
+      requireSession();
+      const result = await api.getEntranceExamGradingDetail({
         projectId: props.projectId,
         examId: props.examId,
         attemptId: props.attemptId,
         roundNo,
-      }),
-    enabled: (props.user.selectedRole ?? props.user.role) === 'PM',
+      });
+      requireSession();
+      return result;
+    },
+    enabled: (props.user.selectedRole ?? props.user.role) === role,
     retry: false,
     refetchOnMount: 'always',
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-  if ((props.user.selectedRole ?? props.user.role) !== 'PM') return null;
+  if ((props.user.selectedRole ?? props.user.role) !== role) return null;
   if (query.isError)
     return (
       <section aria-label="阅卷详情" className="space-y-4">
@@ -123,7 +146,7 @@ export function EntranceExamGradingWorkspace(props: EntranceExamGradingWorkspace
     );
   return (
     <GradingRound
-      key={`${props.user.id}:${props.projectId}:${props.examId}:${props.attemptId}:${roundNo}`}
+      key={`${props.user.id}:${role}:${props.projectId}:${props.examId}:${props.attemptId}:${roundNo}`}
       {...props}
       detail={query.data}
       roundNo={roundNo}
@@ -141,22 +164,24 @@ function GradingRound(
 ) {
   const { user, projectId, examId, attemptId, detail, roundNo, canManage } = props;
   const cache = useQueryClient();
-  const locksKey = [
-    'entrance-exam-grading-write-locks',
-    user.id,
-    'PM',
-    projectId,
-    examId,
-    attemptId,
-  ];
-  const locks = useQuery<LockMap>({
-    queryKey: locksKey,
-    queryFn: async () => ({}),
-    initialData: {},
+  const role = props.role ?? 'PM';
+  const round = detail.selectedRound;
+  const recordId = round.gradingRecordId;
+  const writeKey = JSON.stringify([user.id, recordId]);
+  const lockKey = ['entrance-exam-grading-write', user.id, role, recordId];
+  const retained = useQuery<GradingWrite | null>({
+    queryKey: lockKey,
+    queryFn: async () => null,
+    initialData: () => pendingWrites.get(writeKey) ?? null,
     enabled: false,
     gcTime: Infinity,
   });
-  const [values, setValues] = useState(() => entranceExamGradingValues(detail));
+  const pending = retained.data;
+  const foreignLock = !!pending && pending.originRole !== role;
+  const lock = pending?.status;
+  const [values, setValues] = useState(() =>
+    pending && !foreignLock ? pending.values : entranceExamGradingValues(detail),
+  );
   const initial = useRef(JSON.stringify(values));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [compensating, setCompensating] = useState(false);
@@ -166,12 +191,10 @@ function GradingRound(
   const [readError, setReadError] = useState<unknown>(null);
   const [notice, setNotice] = useState('');
   const [portal, setPortal] = useState<HTMLElement | null>(null);
-  const mounted = useRef(false);
+  const mounted = useRef(true);
   const working = useRef(false);
-  const round = detail.selectedRound;
-  const recordId = round.gradingRecordId;
-  const lock = recordId === null ? undefined : locks.data[String(recordId)];
-  const actions = entranceExamGradingActions(detail, canManage);
+  const allowLeave = useRef(false);
+  const actions = entranceExamGradingActions(detail, canManage, role);
   const mutation = useMutation({
     mutationFn: (write: Write) =>
       write.kind === 'manual'
@@ -183,9 +206,11 @@ function GradingRound(
     networkMode: 'always',
   });
   const busy = reading || mutation.isPending;
-  const editable = (actions.manual || (compensating && actions.compensate)) && !lock;
+  const accessDenied = readError instanceof ApiError && [401, 403, 404].includes(readError.status);
+  const editable =
+    (actions.manual || (compensating && actions.compensate)) && !lock && !accessDenied;
   const disabled = !editable || busy || confirming !== null;
-  const dirty = JSON.stringify(values) !== initial.current;
+  const dirty = !lock && JSON.stringify(values) !== initial.current;
   const preview = entranceExamGradingPreview(detail, values);
 
   useEffect(() => {
@@ -195,21 +220,22 @@ function GradingRound(
     };
   }, []);
 
-  function sessionMatches() {
+  function sameIdentity() {
     const current = cache.getQueryData<AuthUser | null>(SESSION_KEY);
-    return (
-      mounted.current && current?.id === user.id && (current.selectedRole ?? current.role) === 'PM'
-    );
+    return current?.id === user.id && (current.selectedRole ?? current.role) === role;
   }
-
+  function sessionMatches() {
+    return mounted.current && sameIdentity();
+  }
+  function requireSession() {
+    if (!sessionMatches()) throw new Error('当前身份已变化，请重新打开阅卷详情。');
+  }
   function mayLeave(message = '未提交的阅卷内容将会丢失，确认离开？') {
-    return !working.current && (!dirty || window.confirm(message));
+    return allowLeave.current || (!working.current && (!dirty || window.confirm(message)));
   }
-
   useEffect(() => {
     function beforeLeave(event: Event) {
-      if (working.current || (dirty && !window.confirm('未提交的阅卷内容将会丢失，确认离开？')))
-        event.preventDefault();
+      if (sameIdentity() && !mayLeave()) event.preventDefault();
     }
     window.addEventListener(WORKSPACE_ROLE_SWITCH_REQUEST, beforeLeave);
     window.addEventListener(ENTRANCE_EXAM_LEAVE_REQUEST, beforeLeave);
@@ -217,75 +243,107 @@ function GradingRound(
       window.removeEventListener(WORKSPACE_ROLE_SWITCH_REQUEST, beforeLeave);
       window.removeEventListener(ENTRANCE_EXAM_LEAVE_REQUEST, beforeLeave);
     };
-  }, [dirty]);
-
+  }, [dirty, role, user.id]);
   useBlocker({
-    shouldBlockFn: () => {
-      const current = cache.getQueryData<AuthUser | null>(SESSION_KEY);
-      if (current && (current.id !== user.id || (current.selectedRole ?? current.role) !== 'PM'))
-        return false;
-      return working.current || (dirty && !window.confirm('未提交的阅卷内容将会丢失，确认离开？'));
-    },
-    enableBeforeUnload: () => working.current || dirty,
+    shouldBlockFn: () => sameIdentity() && !mayLeave(),
+    enableBeforeUnload: () => sameIdentity() && !allowLeave.current && (working.current || dirty),
   });
-
-  /** 关闭、切轮或重开弹框均保留尚未核实的写入结果，不提供直接重发入口。 */
-  function setLock(next: Lock | null) {
-    if (recordId === null) return;
-    cache.setQueryData<LockMap>(locksKey, (current = {}) => {
-      const result = { ...current };
-      if (next) result[String(recordId)] = next;
-      else delete result[String(recordId)];
-      return result;
-    });
+  function requireOrigin() {
+    const state = pendingWrites.get(writeKey);
+    if (state && state.originRole !== role)
+      throw new Error('本轮存在其他角色的待核实阅卷，请切回原角色核实；不能换角色清锁或重复提交。');
   }
-
-  async function readFresh(written = false) {
-    const previousLock =
-      recordId === null ? undefined : cache.getQueryData<LockMap>(locksKey)?.[String(recordId)];
-    const confirmed = written || previousLock === 'success';
-    try {
-      if (confirmed) {
-        setLock(null);
-        // 回读恢复也可能返回项目列表，不能沿用“正在写入”的离开拦截。
-        working.current = false;
-        await props.onChanged(true);
-        if (!sessionMatches()) return;
-      }
-      const result = await api.getEntranceExamGradingDetail({
-        projectId,
-        examId,
-        attemptId,
-        roundNo,
-      });
-      if (!sessionMatches()) return;
+  function setPending(next: GradingWrite | null, expectedId?: string) {
+    if (recordId === null) return;
+    const previous = pendingWrites.get(writeKey);
+    if (expectedId && previous?.id !== expectedId) return;
+    if (previous && previous.originRole !== role) return;
+    if (next) pendingWrites.set(writeKey, next);
+    else pendingWrites.delete(writeKey);
+    cache.setQueryData(lockKey, next);
+    cache.setQueriesData(
+      {
+        queryKey: ['entrance-exam-grading-write', user.id],
+        predicate: (query) => query.queryKey[3] === recordId,
+      },
+      next,
+    );
+  }
+  async function freshDetail() {
+    requireSession();
+    const result = await api.getEntranceExamGradingDetail({
+      projectId,
+      examId,
+      attemptId,
+      roundNo,
+    });
+    requireSession();
+    return result;
+  }
+  async function readFresh() {
+    const previous = pendingWrites.get(writeKey);
+    if (previous?.originRole !== undefined && previous.originRole !== role) {
+      const result = await freshDetail();
       cache.setQueryData(gradingKey(props, roundNo), result);
+      requireOrigin();
+      return;
+    }
+    if (previous?.status === 'success') {
+      allowLeave.current = true;
+      try {
+        await props.onChanged(true);
+        if (!sameIdentity()) return;
+        if (mounted.current) {
+          const result = await freshDetail();
+          cache.setQueryData(gradingKey(props, roundNo), result);
+          const next = entranceExamGradingValues(result);
+          initial.current = JSON.stringify(next);
+          setValues(next);
+        }
+        setPending(null, previous.id);
+        if (sessionMatches()) {
+          setCompensating(false);
+          setConfirming(null);
+          setErrors({});
+          setError(null);
+          setReadError(null);
+          setNotice('已读取最新阅卷状态，请核对本轮与最终准入结果。');
+        }
+      } finally {
+        allowLeave.current = false;
+      }
+      return;
+    }
+    const result = await freshDetail();
+    cache.setQueryData(gradingKey(props, roundNo), result);
+    if (previous?.status === 'unknown') {
+      setNotice('已读取当前轮次，上次命令结果仍无法精确确认；原阅卷内容保留，继续暂停重发。');
+      return;
+    }
+    if (previous) {
+      allowLeave.current = true;
+      try {
+        await props.onChanged();
+        if (!sameIdentity()) return;
+        requireOrigin();
+        setPending(null, previous.id);
+      } finally {
+        allowLeave.current = false;
+      }
+    } else {
       const next = entranceExamGradingValues(result);
       initial.current = JSON.stringify(next);
       setValues(next);
+    }
+    if (sessionMatches()) {
       setCompensating(false);
       setConfirming(null);
       setErrors({});
-      if (!confirmed) {
-        // 先核实未知写入的实际轮次；详情可读不证明历史轮次的写权限。
-        if (previousLock !== 'access') setLock(null);
-        working.current = false;
-        await props.onChanged();
-        if (!sessionMatches()) return;
-      }
       setError(null);
       setReadError(null);
-      setNotice(
-        previousLock === 'access'
-          ? '当前账号没有本轮写入权限，仅可查看。'
-          : '已读取最新阅卷状态，请核对本轮与最终准入结果。',
-      );
-    } catch (failure) {
-      if (sessionMatches() && previousLock) setLock(previousLock);
-      throw failure;
+      setNotice('已读取最新阅卷状态，请核对本轮与最终准入结果。');
     }
   }
-
   async function reread() {
     if (reading || working.current || !sessionMatches()) return;
     if (!mayLeave('重新读取将替换未提交的阅卷内容，确认继续？')) return;
@@ -295,13 +353,10 @@ function GradingRound(
     try {
       await readFresh();
     } catch (failure) {
-      if (sessionMatches()) {
-        setReadError(failure);
-        if (failure instanceof ApiError && [401, 403, 404].includes(failure.status))
-          setLock('access');
-      }
+      if (sessionMatches()) setReadError(failure);
     } finally {
       working.current = false;
+      allowLeave.current = false;
       if (mounted.current) setReading(false);
     }
   }
@@ -313,32 +368,44 @@ function GradingRound(
     const result = entranceExamGradingInput(detail, values, kind === 'compensate');
     setErrors(result.errors);
     if (!result.input) return null;
-    return kind === 'manual'
-      ? {
-          kind,
-          input: {
-            ...base,
-            attemptId,
-            conclusionSummary: result.input.summary,
-            items: result.input.items,
-          },
-        }
-      : { kind, input: { ...base, ...result.input } };
+    const write: Write =
+      kind === 'manual'
+        ? {
+            kind,
+            input: {
+              ...base,
+              attemptId,
+              conclusionSummary: result.input.summary,
+              items: result.input.items,
+            },
+          }
+        : { kind, input: { ...base, ...result.input } };
+    if (
+      write.kind === 'manual' &&
+      new TextEncoder().encode(JSON.stringify(write.input)).byteLength > 16 * 1024
+    ) {
+      setError(new Error('阅卷内容超过当前可提交大小，请缩短阅卷意见或本轮总结后重试。'));
+      return null;
+    }
+    return write;
   }
 
   function permitted(kind: Write['kind']) {
     return (
-      !lock &&
+      !pendingWrites.has(writeKey) &&
+      !accessDenied &&
       (kind === 'manual' ? actions.manual : kind === 'retry' ? actions.retry : actions.compensate)
     );
   }
 
   function confirm(kind: Write['kind']) {
-    if (working.current || !sessionMatches() || !permitted(kind) || !payload(kind)) return;
+    if (working.current || !sessionMatches() || !permitted(kind)) return;
+    setError(null);
+    if (!payload(kind)) return;
     setConfirming(kind);
   }
 
-  /** 每次意图只写一次；成功后的回读失败和未知结果都保留锁，恢复动作只有读取。 */
+  /** 先重读同一绑定来源；写前保留原稿，角色切换或回读失败均不能再次发送。 */
   async function submit() {
     if (!confirming || working.current || !sessionMatches() || !permitted(confirming)) return;
     const write = payload(confirming);
@@ -347,44 +414,71 @@ function GradingRound(
       return;
     }
     working.current = true;
+    setReading(true);
     setError(null);
     setReadError(null);
     setNotice('');
+    let state: GradingWrite | undefined;
+    let written = false;
     try {
-      try {
-        await mutation.mutateAsync(write);
-      } catch (failure) {
-        if (sessionMatches()) {
-          setError(failure);
-          if (failure instanceof ApiError && [401, 403, 404].includes(failure.status))
-            setLock('access');
-          else if (failure instanceof ApiError && failure.status === 409) setLock('conflict');
-          else if (!(failure instanceof ApiError) || failure.status === 0 || failure.status >= 500)
-            setLock('unknown');
-        }
-        return;
-      }
+      requireOrigin();
+      const latest = await freshDetail();
+      if (!entranceExamGradingSourceMatches(detail, latest))
+        throw new Error('应试绑定轮次、记录或题目已变化，请重新读取阅卷状态。');
+      const latestActions = entranceExamGradingActions(latest, canManage, role);
+      const eligible =
+        write.kind === 'manual'
+          ? latestActions.manual
+          : write.kind === 'retry'
+            ? latestActions.retry
+            : latestActions.compensate;
+      if (!eligible) throw new Error('本轮状态或阅卷资格已变化，请重新读取阅卷状态。');
+      requireSession();
+      if (pendingWrites.has(writeKey)) return;
+      state = {
+        id: crypto.randomUUID(),
+        originRole: role,
+        status: 'unknown',
+        write,
+        values: structuredClone(values),
+      };
+      setPending(state);
+      await mutation.mutateAsync(write);
+      written = true;
+      setPending({ ...state, status: 'success' }, state.id);
       if (!sessionMatches()) return;
-      setLock('success');
       initial.current = JSON.stringify(values);
-      // 写入已完成，后续列表核对可能离开此项目；保留结果锁，解除写入中的离开拦截。
-      working.current = false;
+      setConfirming(null);
       setNotice(
         write.kind === 'retry'
           ? '模拟阅卷重试已提交，正在读取最新结果。'
           : '阅卷结果已提交，正在读取最新结果。',
       );
-      setReading(true);
-      try {
-        await readFresh(true);
-      } catch (failure) {
-        if (sessionMatches()) {
+      await readFresh();
+    } catch (failure) {
+      if (state && !written) {
+        const unknown = entranceExamGradingFailureIsUnknown(failure);
+        setPending(
+          {
+            ...state,
+            status: unknown
+              ? 'unknown'
+              : failure instanceof ApiError && [401, 403, 404].includes(failure.status)
+                ? 'access'
+                : 'conflict',
+          },
+          state.id,
+        );
+      }
+      if (sessionMatches()) {
+        if (written) {
           setReadError(failure);
           setNotice('操作已成功提交，最新状态读取失败。请重新读取阅卷状态，不能重复提交。');
-        }
+        } else setError(failure);
       }
     } finally {
       working.current = false;
+      allowLeave.current = false;
       if (mounted.current) {
         setReading(false);
         setConfirming(null);
@@ -430,7 +524,12 @@ function GradingRound(
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold">{detail.candidateName}的阅卷详情</h3>
-          <p className="mt-1 break-all text-xs text-muted-foreground">UID：{detail.candidateUid}</p>
+          {props.candidateUserId && (
+            <p className="mt-1 break-all text-xs text-muted-foreground">
+              用户 ID：{props.candidateUserId}
+            </p>
+          )}
+
           <p className="mt-2 text-sm">最终准入结果：{finalLabel[detail.finalResult]}</p>
         </div>
         <div className="w-full space-y-2 sm:w-64">
@@ -461,7 +560,7 @@ function GradingRound(
       <div className="rounded-xl border bg-muted/30 p-4 text-sm">
         <p>
           第{round.roundNo}轮 · {round.gradingMode === 'AUTO' ? '模拟自动阅卷' : '人工阅卷'} ·{' '}
-          {round.status ? statusLabel[round.status] : '尚未生成阅卷记录'}
+          {(round.status && statusLabel[round.status]) || '状态待确认'}
         </p>
         <p className="mt-2">
           本轮得分：{round.score === null ? '待确定' : `${round.score}分`} · 通过分数：
@@ -483,11 +582,22 @@ function GradingRound(
           </div>
         )}
       </div>
-      {!canManage && <Alert>当前为协作查看，仅可读取应试和阅卷结果。</Alert>}
+      {role === 'NAVIGATOR' && !actions.manual && (
+        <Alert>当前仅可查看绑定的历史阅卷；人工提交须匹配本人当前可核实的配置轮次资格。</Alert>
+      )}
+      {role === 'PM' && !canManage && (
+        <Alert>
+          当前人工阅卷资格由提交接口核验；考试配置、自动阅卷重试与补偿仍由主策略官维护。
+        </Alert>
+      )}
       {!actions.previousComplete && <Alert>前轮阅卷尚未全部完成，本轮暂不可操作。</Alert>}
       {round.status === 'WAITING' && <Alert>本轮正在等待前轮完成，请稍后重新读取阅卷状态。</Alert>}
       {round.gradingMode === 'AUTO' && (
-        <Alert>自动阅卷使用现有模拟处理接口。失败时可重试模拟阅卷，或填写原因进行人工补偿。</Alert>
+        <Alert>
+          {role === 'PM'
+            ? '自动阅卷使用现有模拟处理接口。失败时可重试模拟阅卷，或填写原因进行人工补偿。'
+            : '自动阅卷轮次仅可查看；领航员不开放重试或人工补偿。'}
+        </Alert>
       )}
       {actions.manual && !lock && (
         <p className="text-xs text-muted-foreground">
@@ -496,11 +606,13 @@ function GradingRound(
       )}
       {lock && (
         <Alert>
-          {lock === 'success'
-            ? '操作已成功提交，等待核实最新状态，当前不能重复提交。'
-            : lock === 'access'
-              ? '当前账号没有本轮写入权限，仅可查看。'
-              : '上次操作结果尚未核实，已暂停写入。请先重新读取阅卷状态。'}
+          {foreignLock
+            ? '本轮存在其他角色的待核实操作，请切回原角色核实；当前不展示原稿，也不能清锁或重发。'
+            : lock === 'success'
+              ? '操作已成功提交，等待核实最新状态，当前不能重复提交。'
+              : lock === 'access'
+                ? '当前账号没有本轮写入权限，仅可查看。'
+                : '上次操作结果尚未核实，已暂停写入。请先重新读取阅卷状态。'}
         </Alert>
       )}
       {notice && <Alert>{notice}</Alert>}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, UserRound } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { ApiError, type AuthUser, type ProjectManagerCandidate } from '@tyde/shared';
 import { api } from '@/services/api';
 import { SESSION_KEY } from '@/hooks/useSession';
@@ -347,7 +347,7 @@ function CandidateInfo({ candidate }: { candidate: ProjectManagerCandidate }) {
   return (
     <div className="flex min-w-0 items-center gap-3">
       <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent text-primary">
-        <UserRound className="size-5" aria-hidden />
+        <span aria-hidden>{candidate.name.trim().slice(0, 1) || '策'}</span>
         {candidate.avatarUrl && (
           <img
             src={candidate.avatarUrl}

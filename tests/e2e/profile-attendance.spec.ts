@@ -153,12 +153,42 @@ async function backend(page: Page, position: 'MEMBER' | 'ADMIN' | 'OWNER' | null
           data,
         },
       });
+    if (path === '/api/v1/projects/workbench/statistics')
+      return reply({
+        mode: 'TASK',
+        pendingTaskCount: 0,
+        completedTaskCount: 0,
+        involvedProjectCount: 0,
+      });
     if (path === '/api/v1/users/me') return reply(user);
     if (path === '/api/v1/expert-assignments/my-projects') return reply([]);
     if (path === '/api/v1/organizations/attendance')
       return reply(calendar(url.searchParams.get('month')!));
     if (path === '/api/v1/organizations/calendar/holidays')
-      return reply({ month: url.searchParams.get('month'), days: [] });
+      return reply({
+        month: url.searchParams.get('month'),
+        days:
+          url.searchParams.get('month') === '2026-10'
+            ? [
+                {
+                  date: '2026-10-02',
+                  dayOfWeek: 5,
+                  weekName: '星期五',
+                  calendarDayType: 'PUBLIC_HOLIDAY',
+                  holidayName: '节假日',
+                  defaultScheduleDayType: 'REST',
+                },
+                {
+                  date: '2026-10-10',
+                  dayOfWeek: 6,
+                  weekName: '星期六',
+                  calendarDayType: 'MAKEUP_WORKDAY',
+                  holidayName: '调休',
+                  defaultScheduleDayType: 'WORK',
+                },
+              ]
+            : [],
+      });
     if (path === '/api/v1/organizations/schedules')
       return reply({ month: body.month, total: 0, pages: 0, current: 1, size: 20, members: [] });
     if (path === '/api/v1/organizations')
@@ -180,7 +210,7 @@ async function backend(page: Page, position: 'MEMBER' | 'ADMIN' | 'OWNER' | null
         state.scheduleStatus === 200
           ? {
               batchNo: 'SELF-ATTENDANCE-BATCH',
-              createdCount: 1,
+              createdCount: (body.schedules as unknown[]).length - 1,
               updatedCount: 0,
               skippedCount: 1,
               conflicts: [{ scheduleDate: '2026-10-02', scheduleId: 51, versionNo: 2 }],
@@ -264,37 +294,53 @@ for (const desktop of [false, true])
     ).toHaveCount(0);
     await attendance.getByRole('button', { name: '为自己排班', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '为自己排班', exact: true });
-    await dialog.getByLabel('排班结束日期').fill('2026-10-02');
-    await expectPickerOnBodyClick(dialog.getByLabel('排班开始日期', { exact: true }));
-    await expectPickerOnBodyClick(dialog.getByLabel('排班结束日期', { exact: true }));
+    await expectPickerOnBodyClick(dialog.getByLabel('排班目标月份', { exact: true }));
     await expectPickerOnBodyClick(dialog.getByLabel('默认上班时间', { exact: true }));
     await expectPickerOnBodyClick(dialog.getByLabel('默认下班时间', { exact: true }));
-    await dialog.getByRole('button', { name: '生成排班日期' }).click();
+    await dialog.getByRole('button', { name: '一键排班', exact: true }).click();
     await expectPickerOnBodyClick(dialog.getByLabel('2026-10-01 上班时间', { exact: true }));
     await expectPickerOnBodyClick(dialog.getByLabel('2026-10-01 下班时间', { exact: true }));
-    await dialog.getByLabel('2026-10-02 日类型').selectOption('REST');
-    await dialog.getByRole('button', { name: '保存排班' }).click();
+    await expect(dialog.getByLabel('2026-10-02 日类型')).toHaveValue('REST');
+    await expect(dialog.getByLabel('2026-10-10 日类型')).toHaveValue('WORK');
+    await expect(dialog.getByLabel('2026-10-11 日类型')).toHaveValue('REST');
+    await dialog.getByRole('button', { name: '提交排班' }).click();
+    await page
+      .getByRole('dialog', { name: '确认提交个人排班', exact: true })
+      .getByRole('button', { name: '确认提交', exact: true })
+      .click();
     await expect(dialog.getByText('考勤写入暂不可用', { exact: true })).toBeVisible();
     const writes = () => requests.filter(({ path }) => path.endsWith('/schedules/batch'));
     expect(writes()).toHaveLength(1);
-    await dialog.getByRole('button', { name: '保存排班' }).click();
+    await dialog.getByRole('button', { name: '提交排班' }).click();
+    await page
+      .getByRole('dialog', { name: '确认提交个人排班', exact: true })
+      .getByRole('button', { name: '确认提交', exact: true })
+      .click();
     await expect.poll(() => writes().length).toBe(2);
     expect(writes()[1].headers['idempotency-key']).toBe(writes()[0].headers['idempotency-key']);
-    await expect(dialog.getByRole('button', { name: '保存排班' })).toBeEnabled();
+    await expect(dialog.getByRole('button', { name: '提交排班' })).toBeEnabled();
     await dialog.getByLabel('2026-10-01 上班时间').fill('10:00');
     state.scheduleStatus = 200;
-    await dialog.getByRole('button', { name: '保存排班' }).click();
-    await expect(dialog.getByText(/已有排班未覆盖：2026-10-02/)).toBeVisible();
+    await dialog.getByRole('button', { name: '提交排班' }).click();
+    await page
+      .getByRole('dialog', { name: '确认提交个人排班', exact: true })
+      .getByRole('button', { name: '确认提交', exact: true })
+      .click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByText('有 1 条已有排班冲突未覆盖', { exact: true })).toBeVisible();
+    await expect(page.getByText(/排班已保存：新增/)).toHaveCount(0);
     expect(writes()).toHaveLength(3);
     expect(writes()[2].method).toBe('PUT');
     expect(writes()[2].headers['idempotency-key']).not.toBe(writes()[1].headers['idempotency-key']);
     expect(writes()[2].body).toMatchObject({
       overwrite: false,
       timezone: 'Asia/Shanghai',
-      schedules: [
-        { scheduleDate: '2026-10-01', dayType: 'WORK', startTime: '10:00' },
-        { scheduleDate: '2026-10-02', dayType: 'REST' },
-      ],
+    });
+    expect(writes()[2].body.schedules).toHaveLength(31);
+    expect((writes()[2].body.schedules as unknown[])[0]).toMatchObject({
+      scheduleDate: '2026-10-01',
+      dayType: 'WORK',
+      startTime: '10:00',
     });
     expect((writes()[2].body.schedules as unknown[])[1]).toEqual({
       scheduleDate: '2026-10-02',
@@ -432,15 +478,18 @@ test('管理员本人日考勤可直接修正，只发送dailyId与dailyVersionN
 test('主管概览与顶层入口保留考勤和申请，隐藏项目且不请求专家项目列表', async ({ page }) => {
   const { requests } = await backend(page, 'OWNER');
   await page.goto(`${origin}/#/profile`);
-  await page.getByRole('tab', { name: '概览', exact: true }).click();
+  await page.getByRole('tab', { name: '排班考勤', exact: true }).click();
   await expect(
     page.getByRole('tablist', { name: '个人中心设置', exact: true }).getByRole('tab'),
-  ).toHaveText(['概览', '个人资料', '账户安全', '排班考勤', '组织与申请']);
+  ).toHaveText(['排班考勤', '基本信息', '组织与申请', '个人资料']);
   await expect(page.getByRole('tab', { name: '我的项目', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '查看全部项目', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '管理排班与考勤', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '查看全部申请', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '管理排班与考勤', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '排班考勤', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('tab', { name: '组织与申请', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: '排班考勤', exact: true }).click();
   await expect(page.getByRole('tab', { name: '排班考勤', exact: true })).toHaveAttribute(
     'aria-selected',
     'true',
@@ -455,8 +504,8 @@ test('主管概览与顶层入口保留考勤和申请，隐藏项目且不请�
   ).toBeVisible();
   await expect(attendance.getByRole('link', { name: '管理组织排班', exact: true })).toBeVisible();
   await expect(attendance.getByRole('button', { name: '为自己排班', exact: true })).toHaveCount(0);
-  await page.getByRole('tab', { name: '概览', exact: true }).click();
-  await expect(page.getByRole('tab', { name: '概览', exact: true })).toHaveAttribute(
+  await page.getByRole('tab', { name: '排班考勤', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '排班考勤', exact: true })).toHaveAttribute(
     'aria-selected',
     'true',
   );

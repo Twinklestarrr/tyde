@@ -130,7 +130,7 @@ export function ProjectCreatePage({ user }: { user: AuthUser }) {
       categoriesLoading={categories.isFetching}
       categoriesError={categories.error}
       onReloadCategories={() => void categories.refetch()}
-      requesterName={requester.data.requesterName}
+      requesterName={user.realName?.trim() || user.nickname?.trim() || ''}
     />
   );
 }
@@ -351,9 +351,9 @@ function ProjectCreateForm({
     for (const item of chosen) void uploadAttachment(item);
   }
 
-  /** 已认领附件经过登录文件代理下载，不拼接敏感对象的公开地址。 */
+  /** 上传成功的附件通过登录文件代理下载，由后端校验本人未认领/项目附件权限。 */
   async function download(item: Attachment) {
-    if (!item.id || !item.objectKey || downloading) return;
+    if (item.status !== 'ready' || !item.objectKey || downloading) return;
     setDownloading(item.key);
     setFileError(null);
     try {
@@ -535,15 +535,14 @@ function ProjectCreateForm({
                 </legend>
                 <ProjectCreateFields
                   form={form}
+                  disabled={locked}
                   step={step}
                   categories={categories}
                   categoriesLoading={categoriesLoading}
                   categoriesError={categoriesError}
                   onReloadCategories={onReloadCategories}
                   requesterName={requesterName}
-                  creatorName={
-                    user.nickname ? `${user.nickname}（${user.realName}）` : user.realName
-                  }
+                  creatorName={user.realName?.trim() || user.nickname?.trim() || ''}
                 />
                 {step === 2 && (
                   <FormField
@@ -604,7 +603,7 @@ function ProjectCreateForm({
                                 重试上传
                               </Button>
                             )}
-                            {item.id && (
+                            {item.status === 'ready' && item.objectKey && (
                               <Button
                                 size="iconTouch"
                                 variant="ghost"

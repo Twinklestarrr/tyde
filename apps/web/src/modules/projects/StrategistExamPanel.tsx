@@ -14,15 +14,15 @@ import { api } from '@/services/api';
 import { SESSION_KEY } from '@/hooks/useSession';
 import { WORKSPACE_ROLE_SWITCH_REQUEST } from '@/layouts/WorkspaceView';
 import { Button } from '@/components/ui/button';
-import { Card, CardTitle } from '@/components/ui/card';
+import { CardTitle } from '@/components/ui/card';
 import { EmptyState, LoadingState } from '@/components/ui/empty-state';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { EntranceExamDialog, ENTRANCE_EXAM_LEAVE_REQUEST } from './EntranceExamDialog';
-import { EntranceExamAdmissions, EntranceExamRoster } from './EntranceExamRosterViews';
+import { EntranceExamAdmissions } from './EntranceExamRosterViews';
 import { EntranceExamConfigurationView } from './EntranceExamConfigurationView';
-import { EntranceExamGradingWorkspace } from './EntranceExamGradingWorkspace';
+import { EntranceExamReview } from './EntranceExamReview';
 import { StrategistExamEditor } from './StrategistExamEditor';
 
 type Editor = { kind: 'create' } | { kind: 'edit'; config: EntranceExamConfiguration };
@@ -58,10 +58,19 @@ export function StrategistExamPanel({
   });
   const lock = lockState.data;
   const setLock = (value: WriteLock | null) => cache.setQueryData(lockKey, value);
+  const plan = useQuery({
+    queryKey: ['project-production-plan', user.id, 'PM', projectId],
+    queryFn: () => api.getProjectProductionPlan(projectId),
+    enabled: isPm,
+    retry: false,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
   const management = useQuery({
     queryKey: [...scope, 'management'],
     queryFn: () => api.getEntranceExamManagement(projectId),
-    enabled: isPm,
+    enabled: isPm && plan.isSuccess && plan.data.needWrittenExam,
     retry: false,
     refetchOnMount: 'always',
     refetchOnWindowFocus: false,
@@ -71,7 +80,7 @@ export function StrategistExamPanel({
   const reviewers = useQuery({
     queryKey: [...scope, 'reviewers'],
     queryFn: () => api.listEntranceExamReviewers(projectId),
-    enabled: isPm,
+    enabled: isPm && plan.isSuccess && plan.data.needWrittenExam,
     retry: false,
     refetchOnMount: 'always',
     refetchOnWindowFocus: false,
@@ -80,9 +89,6 @@ export function StrategistExamPanel({
   const [view, setView] = useState('admission');
   const [editor, setEditor] = useState<Editor | null>(null);
   const [configuration, setConfiguration] = useState<EntranceExamConfiguration | null>(null);
-  const [workspace, setWorkspace] = useState<{ exam: EntranceExamCard; attemptId?: number } | null>(
-    null,
-  );
   const [closing, setClosing] = useState<{ exam: EntranceExamCard; reason: string } | null>(null);
   const [loadingConfig, setLoadingConfig] = useState<number | null>(null);
   const [reading, setReading] = useState(false);
@@ -113,6 +119,14 @@ export function StrategistExamPanel({
     !reviewers.isError &&
     !reviewers.isFetching;
   const writeDisabled = !canManage || Boolean(lock) || busy || reading || loadingConfig !== null;
+  const createDisabled =
+    !management.isSuccess ||
+    management.isFetching ||
+    management.data.canCreateExam !== true ||
+    Boolean(lock) ||
+    busy ||
+    reading ||
+    loadingConfig !== null;
   const expectedReadOnly = reviewers.error instanceof ApiError && reviewers.error.status === 403;
 
   useEffect(() => {
@@ -172,12 +186,11 @@ export function StrategistExamPanel({
       if (!list.value.data) throw new Error('考试状态未读取完整，请重试。');
       if (permission.status === 'rejected') {
         if (permission.reason instanceof ApiError && permission.reason.status === 403) {
-          setLock({ source: lock?.source ?? 'edit', status: 'access' });
-          setNotice('当前仅可查看考试信息，由生效主策略官维护。');
-          if (propagateFailure) throw permission.reason;
-          return;
+          setNotice('考试配置由生效主策略官维护，阅卷资格由实际阅卷接口校验。');
+        } else if (!propagateFailure) {
+          // 人工阅卷的回读不依赖主PM配置候选接口。
+          throw permission.reason;
         }
-        throw permission.reason;
       }
       const exams = list.value.data.exams;
       if (restoreEditor && editor?.kind === 'edit') {
@@ -229,7 +242,7 @@ export function StrategistExamPanel({
   }
 
   async function saveConfig(input: EntranceExamConfigInput | EntranceExamEditInput) {
-    if (writing.current || writeDisabled || !sameSession())
+    if (writing.current || ('examId' in input ? writeDisabled : createDisabled) || !sameSession())
       throw new Error('请先读取最新考试状态与管理权限。');
     const action: Omit<WriteLock, 'status'> = {
       source: 'examId' in input ? 'edit' : 'create',
@@ -301,10 +314,6 @@ export function StrategistExamPanel({
     }
   }
 
-  function closeWorkspace() {
-    if (window.dispatchEvent(new Event(ENTRANCE_EXAM_LEAVE_REQUEST, { cancelable: true })))
-      setWorkspace(null);
-  }
   function closeCloseDialog() {
     if (writing.current) return;
     if (!closing?.reason.trim() || window.confirm('关闭原因尚未提交，确认放弃填写？'))
@@ -312,6 +321,20 @@ export function StrategistExamPanel({
   }
 
   if (!isPm) return null;
+  if (plan.isPending) return <LoadingState>正在读取考试安排…</LoadingState>;
+  if (plan.isError)
+    return (
+      <section aria-label="准入考试">
+        <ErrorNotice error={plan.error} />
+        <Button onClick={() => void plan.refetch()}>重新读取考试安排</Button>
+      </section>
+    );
+  if (!plan.data.needWrittenExam || management.data?.needWrittenExam === false)
+    return (
+      <section aria-label="准入考试">
+        <EmptyState title="本项目不需要准入考试" />
+      </section>
+    );
   return (
     <section aria-label="准入考试" className="space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -336,7 +359,7 @@ export function StrategistExamPanel({
           </Button>
           <Button
             size="mobileTouch"
-            disabled={writeDisabled || management.data?.canCreateExam !== true}
+            disabled={createDisabled}
             onClick={() => {
               setError(null);
               setEditor({ kind: 'create' });
@@ -394,19 +417,27 @@ export function StrategistExamPanel({
         management.data && (
           <>
             {(!management.data.needWrittenExam ||
-              management.data.createDisabledReason ||
+              (!management.data.canCreateExam && management.data.createDisabledReason) ||
               expectedReadOnly) && (
               <div className="space-y-1 text-[13px] text-muted-foreground">
                 {!management.data.needWrittenExam && (
                   <p>生产计划未配置准入考试，当前不能组织新考试；历史名单仍可查看。</p>
                 )}
-                {management.data.createDisabledReason && (
+                {!management.data.canCreateExam && management.data.createDisabledReason && (
                   <p>{management.data.createDisabledReason}</p>
                 )}
                 {expectedReadOnly && <p>当前仅可查看，考试由生效主策略官维护。</p>}
               </div>
             )}
-            <Tabs value={view} onValueChange={setView}>
+            <Tabs
+              value={view}
+              onValueChange={(next) => {
+                if (
+                  window.dispatchEvent(new Event(ENTRANCE_EXAM_LEAVE_REQUEST, { cancelable: true }))
+                )
+                  setView(next);
+              }}
+            >
               <TabsList aria-label="考试视图" variant="business">
                 <TabsTrigger variant="business" value="admission">
                   准入情况
@@ -419,82 +450,49 @@ export function StrategistExamPanel({
                 <EntranceExamAdmissions user={user} projectId={projectId} />
               </TabsContent>
               <TabsContent value="grading">
-                <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-                  {management.data.exams.map((exam) => (
-                    <Card asChild key={exam.examId}>
-                      <article className="space-y-3 p-5">
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-xs text-muted-foreground">{exam.examNo}</p>
-                            <CardTitle asChild className="mt-1">
-                              <h3>{exam.examName}</h3>
-                            </CardTitle>
-                          </div>
-                          <span className="rounded-md bg-accent px-2 py-1 text-xs text-primary">
-                            {exam.status === 'ACTIVE' ? '进行中' : '已关闭'}
-                          </span>
-                        </div>
-                        <p className="text-[13px] text-muted-foreground">
-                          已交卷 {exam.examineeCount} 人 · 考试通过 {exam.admittedCount} 人 · 通过率{' '}
-                          {exam.admissionRate}%
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          创建：{exam.createdAt}（上海时间）
-                          {exam.closedAt ? ` · 关闭：${exam.closedAt}` : ''}
-                        </p>
-                        <div className="flex flex-wrap gap-2 border-t pt-3">
+                <EntranceExamReview
+                  user={user}
+                  projectId={projectId}
+                  exams={management.data.exams}
+                  canManage={canManage && !lock && !management.isError}
+                  onChanged={(written) => refresh(false, true, written)}
+                  renderActions={(exam) => (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="mobileTouch"
+                        disabled={exam.status === 'CLOSED' || loadingConfig !== null}
+                        loading={loadingConfig === exam.examId}
+                        onClick={() => void openConfig(exam, false)}
+                      >
+                        查看配置
+                      </Button>
+                      {canManage && exam.status === 'ACTIVE' && (
+                        <>
                           <Button
                             variant="outline"
                             size="mobileTouch"
-                            disabled={exam.status === 'CLOSED' || loadingConfig !== null}
-                            loading={loadingConfig === exam.examId}
-                            onClick={() => void openConfig(exam, false)}
+                            disabled={writeDisabled}
+                            onClick={() => void openConfig(exam, true)}
                           >
-                            查看配置
+                            编辑考试
                           </Button>
                           <Button
-                            variant="primaryOutline"
+                            variant="dangerGhost"
                             size="mobileTouch"
-                            onClick={() => setWorkspace({ exam })}
+                            disabled={writeDisabled}
+                            onClick={() => {
+                              setError(null);
+                              setClosing({ exam, reason: '' });
+                            }}
                           >
-                            查看名单
+                            关闭考试
                           </Button>
-                          {canManage && exam.status === 'ACTIVE' && (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="mobileTouch"
-                                disabled={writeDisabled}
-                                onClick={() => void openConfig(exam, true)}
-                              >
-                                编辑考试
-                              </Button>
-                              <Button
-                                variant="dangerGhost"
-                                size="mobileTouch"
-                                disabled={writeDisabled}
-                                onClick={() => {
-                                  setError(null);
-                                  setClosing({ exam, reason: '' });
-                                }}
-                              >
-                                关闭考试
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                        {exam.status === 'CLOSED' && (
-                          <p className="text-xs text-muted-foreground">
-                            已关闭配置不可编辑，名单保留考生绑定的原卷与判卷记录。
-                          </p>
-                        )}
-                      </article>
-                    </Card>
-                  ))}
-                  {management.data.exams.length === 0 && (
-                    <EmptyState className="col-span-full" title="暂无考试" />
+                        </>
+                      )}
+                    </>
                   )}
-                </div>
+                />
               </TabsContent>
             </Tabs>
           </>
@@ -530,32 +528,6 @@ export function StrategistExamPanel({
           onClose={() => setConfiguration(null)}
         >
           <EntranceExamConfigurationView config={configuration} />
-        </EntranceExamDialog>
-      )}
-      {workspace && (
-        <EntranceExamDialog
-          label={workspace.attemptId ? '阅卷详情' : '考试名单'}
-          title={`${workspace.attemptId ? '阅卷详情' : '考试名单'} · ${workspace.exam.examName}`}
-          onClose={closeWorkspace}
-        >
-          <EntranceExamRoster
-            user={user}
-            projectId={projectId}
-            examId={workspace.exam.examId}
-            hidden={Boolean(workspace.attemptId)}
-            onSelect={(row) => setWorkspace({ ...workspace, attemptId: row.attemptId })}
-          />
-          {workspace.attemptId && (
-            <EntranceExamGradingWorkspace
-              user={user}
-              projectId={projectId}
-              examId={workspace.exam.examId}
-              attemptId={workspace.attemptId}
-              canManage={canManage && !lock && !management.isError}
-              onChanged={(written) => refresh(false, true, written)}
-              onBack={() => setWorkspace({ exam: workspace.exam })}
-            />
-          )}
         </EntranceExamDialog>
       )}
       {closing && (

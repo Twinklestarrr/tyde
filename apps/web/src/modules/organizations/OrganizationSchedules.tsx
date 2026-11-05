@@ -72,6 +72,7 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
   });
   const [filters, setFilters] = useState(emptyFilters);
   const [selected, setSelected] = useState<string[]>([]);
+  const selectedMembers = useRef(new Map<string, OrganizationScheduleMember>());
   const [action, setAction] = useState<ScheduleAction>();
   const [error, setError] = useState<Error>();
   const [savedResult, setSavedResult] = useState<OrganizationScheduleResult>();
@@ -82,10 +83,18 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
     retry: false,
     refetchOnWindowFocus: false,
   });
+  const holidays = useQuery({
+    queryKey: ['organization', user.id, orgId, 'holidays', query.month],
+    queryFn: () => api.getAttendanceHolidays({ orgId, month: query.month }),
+    retry: false,
+  });
   const members = schedules.data?.members ?? [];
-  // 选择始终以当前响应的真实权限为准，不跨页累积成员。
+  // 按组织和月份保留跨页选择；提交仍由服务端复验成员排班权限。
   const selectable = members.filter((member) => member.canSchedule);
-  const chosen = selectable.filter((member) => selected.includes(member.memberId));
+  const chosen = selected.flatMap((id) => {
+    const member = members.find((item) => item.memberId === id) ?? selectedMembers.current.get(id);
+    return member?.canSchedule ? [member] : [];
+  });
   const dayCount = new Date(`${query.month}-01T00:00:00Z`);
   dayCount.setUTCMonth(dayCount.getUTCMonth() + 1, 0);
   const dates = Array.from(
@@ -94,7 +103,10 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
   );
 
   function changeQuery(next: OrganizationSchedulesInput) {
-    setSelected([]);
+    if (next.month !== query.month) {
+      setSelected([]);
+      selectedMembers.current.clear();
+    }
     setError(undefined);
     setQuery(next);
   }
@@ -170,7 +182,9 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
             </Button>
             <Button
               size="settings"
-              disabled={!chosen.length || schedules.isFetching || schedules.isError}
+              disabled={
+                !chosen.length || schedules.isFetching || schedules.isError || !holidays.isSuccess
+              }
               onClick={() => setAction({ members: chosen })}
             >
               <CalendarDays className="size-[15px]" aria-hidden />
@@ -178,6 +192,14 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
             </Button>
           </div>
         </CardHeader>
+        {holidays.isError && (
+          <div className="px-5">
+            <ErrorNotice error={holidays.error} />
+            <Button variant="outline" size="mobileTouch" onClick={() => void holidays.refetch()}>
+              重新读取节假日
+            </Button>
+          </div>
+        )}
         <form
           onSubmit={search}
           className="grid grid-cols-2 items-end gap-[12px] p-[20px] min-[900px]:grid-cols-4"
@@ -197,7 +219,7 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
               }}
             />
           </FormField>
-          <FormField controlId="org-schedule-keyword" label="姓名 / UID / 完整手机号">
+          <FormField controlId="org-schedule-keyword" label="姓名 / 完整手机号">
             <Input
               id="org-schedule-keyword"
               size="profile"
@@ -258,19 +280,9 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
           <ErrorNotice error={error} />
           {savedResult && (
             <Alert>
-              排班已保存：新增 {savedResult.createdCount} 条，覆盖 {savedResult.updatedCount}{' '}
-              条，跳过已有排班 {savedResult.skippedCount} 条。批次：{savedResult.batchNo}
-              {savedResult.conflicts.length > 0 && (
-                <span className="block">
-                  已跳过：
-                  {savedResult.conflicts
-                    .map(
-                      (item) =>
-                        `${members.find((member) => member.memberId === item.memberId) ? memberName(members.find((member) => member.memberId === item.memberId)!) : item.memberId} ${item.scheduleDate}`,
-                    )
-                    .join('、')}
-                </span>
-              )}
+              {savedResult.skippedCount > 0
+                ? `有 ${savedResult.skippedCount} 条已有排班冲突未覆盖`
+                : `排班已保存：新增 ${savedResult.createdCount} 条，覆盖 ${savedResult.updatedCount} 条。批次：${savedResult.batchNo}`}
             </Alert>
           )}
           {notice && <Alert>{notice}</Alert>}
@@ -296,14 +308,26 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
                           type="checkbox"
                           aria-label="选择本页可排班成员"
                           disabled={!selectable.length || schedules.isFetching || schedules.isError}
-                          checked={selectable.length > 0 && chosen.length === selectable.length}
-                          onChange={(event) =>
+                          checked={
+                            selectable.length > 0 &&
+                            selectable.every((member) => selected.includes(member.memberId))
+                          }
+                          onChange={(event) => {
+                            for (const member of selectable)
+                              selectedMembers.current.set(member.memberId, member);
                             setSelected(
                               event.target.checked
-                                ? selectable.map((member) => member.memberId)
-                                : [],
-                            )
-                          }
+                                ? [
+                                    ...new Set([
+                                      ...selected,
+                                      ...selectable.map((member) => member.memberId),
+                                    ]),
+                                  ]
+                                : selected.filter(
+                                    (id) => !selectable.some((member) => member.memberId === id),
+                                  ),
+                            );
+                          }}
                         />
                         成员
                       </label>
@@ -313,7 +337,19 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
                         key={date}
                         className="min-w-[74px] px-[4px] py-[12px] text-center font-medium"
                       >
-                        <time dateTime={date}>{Number(date.slice(-2))} 日</time>
+                        <time
+                          dateTime={date}
+                          className={
+                            holidays.data?.days.some(
+                              (day) =>
+                                day.date === date && day.calendarDayType === 'PUBLIC_HOLIDAY',
+                            )
+                              ? 'text-destructive'
+                              : undefined
+                          }
+                        >
+                          {Number(date.slice(-2))} 日
+                        </time>
                       </TableHead>
                     ))}
                   </TableRow>
@@ -330,13 +366,14 @@ function OrganizationSchedulesPanel({ user, orgId }: { user: AuthUser; orgId: st
                               !member.canSchedule || schedules.isFetching || schedules.isError
                             }
                             checked={member.canSchedule && selected.includes(member.memberId)}
-                            onChange={(event) =>
+                            onChange={(event) => {
+                              selectedMembers.current.set(member.memberId, member);
                               setSelected(
                                 event.target.checked
                                   ? [...selected, member.memberId]
                                   : selected.filter((id) => id !== member.memberId),
-                              )
-                            }
+                              );
+                            }}
                           />
                           <span className="min-w-0">
                             <span className="block font-medium break-all">

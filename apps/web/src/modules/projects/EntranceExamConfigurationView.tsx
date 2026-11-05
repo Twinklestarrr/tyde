@@ -92,7 +92,7 @@ export function EntranceExamConfigurationView({ config }: { config: EntranceExam
                     ? round.reviewers
                         .map((reviewer) =>
                           reviewer && typeof reviewer === 'object'
-                            ? String(reviewer.name ?? reviewer.uid ?? '历史阅卷人')
+                            ? `${String(reviewer.name ?? '历史阅卷人')} · ${String(reviewer.userId ?? '—')}`
                             : '历史阅卷人',
                         )
                         .join('、') || '未配置'

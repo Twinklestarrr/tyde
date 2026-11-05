@@ -4,7 +4,6 @@ import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   BadgeCheck,
-  BookOpen,
   BriefcaseBusiness,
   Building2,
   CalendarCheck2,
@@ -24,7 +23,6 @@ import {
 import {
   AVATAR_ACCEPT,
   AVATAR_EXTENSIONS,
-  AVATAR_MAX_BYTES,
   passwordPattern,
   type AuthUser,
   type AvatarUploadResult,
@@ -48,15 +46,18 @@ import { useWorkspaceView, workspaceViewOptions } from '@/layouts/WorkspaceView'
 import { positionLabels } from '@/modules/organizations/common';
 import { ProfileExpertContent } from './ProfileExpertContent';
 import { ProfileOrganization } from './ProfileOrganization';
+import { ProfileDossier } from './ProfileDossier';
+
+// 个人头像沿用旧客户端 2 MiB 限制；组织 Logo 仍采用共享上传上限。
+const MAX_PROFILE_AVATAR_BYTES = 2 * 1024 * 1024;
 
 type ProfileValues = { avatarUrl: string; idCardNo: string; bio: string };
 const profileTabs = [
-  { value: 'overview', label: '概览', icon: BookOpen },
-  { value: 'profile', label: '个人资料', icon: UserRound },
-  { value: 'security', label: '账户安全', icon: ShieldCheck },
   { value: 'projects', label: '我的项目', icon: BriefcaseBusiness },
   { value: 'attendance', label: '排班考勤', icon: CalendarCheck2 },
+  { value: 'dossier', label: '基本信息', icon: UserRound },
   { value: 'organization', label: '组织与申请', icon: Building2 },
+  { value: 'profile', label: '个人资料', icon: UserRound },
 ] as const;
 
 /** 公共账户设置与当前会话角色联动，专家角色提供本人业务入口。 */
@@ -71,11 +72,7 @@ export function ProfilePage({ user }: { user: AuthUser }) {
       ? ['ADMIN', 'MEMBER'].includes(String(user.organization.position))
       : user.accountType === 'INDIVIDUAL');
   const tabs = profileTabs.filter((tab) =>
-    tab.value === 'profile' || tab.value === 'security'
-      ? true
-      : tab.value === 'projects'
-        ? showProjects
-        : showExpert,
+    tab.value === 'profile' ? true : tab.value === 'projects' ? showProjects : showExpert,
   );
   const organizationName =
     typeof user.organization?.name === 'string' ? user.organization.name.trim() : '';
@@ -83,8 +80,13 @@ export function ProfilePage({ user }: { user: AuthUser }) {
     typeof user.organization?.position === 'string'
       ? positionLabels[user.organization.position as keyof typeof positionLabels]
       : undefined;
-  const name = user.nickname || user.realName;
-  const [section, setSection] = useState('overview');
+  const name =
+    user.nickname?.trim() && user.nickname.trim() !== user.realName
+      ? `${user.nickname.trim()}（${user.realName}）`
+      : user.realName;
+  const [section, setSection] = useState(
+    showProjects ? 'projects' : showExpert ? 'attendance' : 'profile',
+  );
   const [editing, setEditing] = useState(false);
   const editButton = useRef<HTMLButtonElement>(null);
   const created = formatProfileDate(user.createdAt);
@@ -93,9 +95,7 @@ export function ProfilePage({ user }: { user: AuthUser }) {
   return (
     <div className="mx-auto max-w-[1200px]">
       <Tabs
-        value={
-          tabs.some((tab) => tab.value === section) ? section : showExpert ? 'overview' : 'profile'
-        }
+        value={tabs.some((tab) => tab.value === section) ? section : tabs[0]!.value}
         onValueChange={(value) => {
           setSection(value);
           setEditing(false);
@@ -113,11 +113,6 @@ export function ProfilePage({ user }: { user: AuthUser }) {
               <h1 className="m-0 break-words text-[26px] leading-[34px] font-semibold tracking-normal">
                 {name}
               </h1>
-              {user.realName !== name && (
-                <p className="mt-[4px] break-words text-[16px] leading-[24px] text-[var(--color-neutral-strong)]">
-                  {user.realName}
-                </p>
-              )}
               <div className="mt-[12px] flex flex-wrap gap-[8px] text-[12px] leading-[20px]">
                 <span className="rounded-[6px] border bg-card px-[8px] py-[2px] text-[var(--color-neutral-strong)]">
                   {user.accountType === 'ORGANIZATION' ? '组织账号' : '个人账号'}
@@ -173,8 +168,8 @@ export function ProfilePage({ user }: { user: AuthUser }) {
                 className="mt-[2px] size-[16px] shrink-0 text-[var(--color-neutral-strong)]"
                 aria-hidden
               />
-              <dt className="sr-only">用户编号</dt>
-              <dd className="break-all font-mono">{user.uid}</dd>
+              <dt className="sr-only">ID</dt>
+              <dd className="break-all font-mono">—</dd>
             </div>
             {user.idCardNo && (
               <div className="flex items-start gap-[8px]">
@@ -225,12 +220,11 @@ export function ProfilePage({ user }: { user: AuthUser }) {
               </TabsTrigger>
             ))}
           </TabsList>
+          {showExpert && <ProfileExpertContent user={user} showProjects={showProjects} />}
           {showExpert && (
-            <ProfileExpertContent
-              user={user}
-              showProjects={showProjects}
-              onSectionChange={setSection}
-            />
+            <TabsContent value="dossier" forceMount className="m-0 data-[state=inactive]:hidden">
+              <ProfileDossier key={user.id} user={user} />
+            </TabsContent>
           )}
           <TabsContent value="profile" className="m-0 flex-col gap-[20px] data-[state=active]:flex">
             <Card className="p-5 sm:p-6">
@@ -241,11 +235,6 @@ export function ProfilePage({ user }: { user: AuthUser }) {
                 editButton={editButton}
               />
             </Card>
-          </TabsContent>
-          <TabsContent
-            value="security"
-            className="m-0 flex-col gap-[20px] data-[state=active]:flex"
-          >
             <Card className="p-5 sm:p-6">
               <PasswordSettings user={user} />
             </Card>
@@ -311,9 +300,9 @@ function ProfileDetails({
     if (
       !AVATAR_EXTENSIONS.some((allowed) => allowed === extension) ||
       !file.size ||
-      file.size > AVATAR_MAX_BYTES
+      file.size > MAX_PROFILE_AVATAR_BYTES
     ) {
-      setAvatarFileError('请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片，最大 10 MiB');
+      setAvatarFileError('请选择非空的 JPG、PNG、GIF、BMP 或 WebP 图片，最大 2 MiB');
       return;
     }
     clearLocalAvatar();
@@ -463,7 +452,7 @@ function ProfileDetails({
                     id="profile-avatar-help"
                     className="text-[12px] leading-[20px] text-[var(--color-neutral-strong)]"
                   >
-                    JPG、PNG、GIF、BMP 或 WebP，最大 10 MiB。保存修改后生效。
+                    JPG、PNG、GIF、BMP 或 WebP，最大 2 MiB。保存修改后生效。
                   </p>
                   {avatarDraft && (
                     <p className="break-all text-[12px] leading-[20px] text-[var(--color-neutral-strong)]">
@@ -633,8 +622,8 @@ function ProfileDetails({
             <dd className="font-mono">{user.phone}</dd>
           </div>
           <div>
-            <dt className="mb-[6px] text-[12px] text-[var(--color-neutral-strong)]">用户编号</dt>
-            <dd className="break-all font-mono">{user.uid}</dd>
+            <dt className="mb-[6px] text-[12px] text-[var(--color-neutral-strong)]">ID</dt>
+            <dd className="break-all font-mono">—</dd>
           </div>
           <div>
             <dt className="mb-[6px] text-[12px] text-[var(--color-neutral-strong)]">身份证号</dt>

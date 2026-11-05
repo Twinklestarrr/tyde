@@ -20,6 +20,7 @@ const now = new Date('2026-10-27T16:00:00Z');
 function valid() {
   const values = newEntranceExam('示例项目');
   values.durationMinutes = '30';
+  values.passScore = '60';
   values.registrationDeadline = '2099-01-01T18:00:00';
   values.papers[0].questions[0].questionContent = '逐条说明判断依据';
   values.gradingRounds[0].reviewerUserIds = [reviewer];
@@ -225,6 +226,14 @@ test('round choices keep reviewer UUIDs and reject duplicate identities, unsafe 
   round.reviewerUserIds = [reviewer, reviewer];
   assert.ok(input(values).errors['gradingRounds.0.reviewerUserIds']);
   round.gradingMode = 'AUTO';
+  round.toolFiles = [
+    {
+      key: 'tool',
+      name: '模拟阅卷.txt',
+      status: 'ready',
+      reference: { objectKey: 'tool.txt', uploadToken: 'token' },
+    },
+  ];
   round.toolCode = 'mock';
   round.toolName = '模拟阅卷';
   round.reviewerUserIds = [];
@@ -340,4 +349,49 @@ test('edit recovers claimed attachments and reviewers without tokens or numeric 
   const invalidReviewers = configuration();
   invalidReviewers.gradingRounds[0].reviewers = 'broken';
   assert.throws(() => entranceExamConfigurationValues(invalidReviewers), /阅卷人快照/);
+});
+
+test('legacy exam defaults leave passing score blank and derive automatic tool identity from its required file', () => {
+  assert.equal(newEntranceExam('项目').passScore, '');
+  const values = valid();
+  const round = values.gradingRounds[0];
+  round.gradingMode = 'AUTO';
+  assert.ok(input(values).errors['gradingRounds.0.toolFiles']);
+  round.toolFiles = [
+    {
+      key: 'tool',
+      name: '判断规则.md',
+      status: 'ready',
+      reference: { objectKey: 'tool.md', uploadToken: 'token' },
+    },
+  ];
+  assert.equal(input(values).input.gradingRounds[0].toolCode, '判断规则');
+  assert.equal(input(values).input.gradingRounds[0].toolName, '判断规则');
+});
+
+test('import replaces papers but retains omitted settings and manual reviewers', () => {
+  const current = valid();
+  const imported = {
+    projectId: 7,
+    examName: ' ',
+    durationMinutes: undefined,
+    registrationDeadline: null,
+    fullScore: null,
+    passScore: null,
+    decisionRule: null,
+    tieBreakRule: null,
+    papers: [{ questions: [{ questionContent: '导入新题' }] }],
+    gradingRounds: [],
+  };
+  const next = entranceExamImportedValues(imported, current);
+  assert.equal(next.examName, current.examName);
+  assert.equal(next.durationMinutes, '30');
+  assert.equal(next.passScore, '60');
+  assert.equal(next.registrationDeadline, current.registrationDeadline);
+  assert.equal(next.papers[0].questions[0].questionContent, '导入新题');
+  assert.deepEqual(next.gradingRounds, current.gradingRounds);
+  assert.equal(
+    entranceExamImportedValues({ ...imported, durationMinutes: null }, current).durationMode,
+    'UNLIMITED',
+  );
 });

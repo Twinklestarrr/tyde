@@ -48,6 +48,7 @@ export function StrategistExamFields({
   reviewersError: unknown;
   onRetryReviewers: () => void;
 }) {
+  const [reviewerSearch, setReviewerSearch] = useState<Record<string, string>>({});
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   function text(
     path: string,
@@ -510,27 +511,43 @@ export function StrategistExamFields({
                       暂无可选阅卷人，请重试读取。
                     </p>
                   )}
-                  {reviewerCandidates.map((candidate) => (
-                    <label
-                      key={candidate.userId}
-                      className="flex min-h-11 items-center gap-[10px] text-[14px]"
-                    >
-                      <input
-                        type="checkbox"
-                        className="size-4 accent-primary"
-                        checked={item.reviewerUserIds.includes(candidate.userId)}
-                        onChange={(event) =>
-                          set(
-                            'reviewerUserIds',
-                            event.target.checked
-                              ? [...item.reviewerUserIds, candidate.userId]
-                              : item.reviewerUserIds.filter((id) => id !== candidate.userId),
-                          )
-                        }
-                      />
-                      {candidate.name} · {candidate.uid}
-                    </label>
-                  ))}
+                  <Input
+                    aria-label={`${label}搜索阅卷人`}
+                    placeholder="姓名或用户 ID"
+                    value={reviewerSearch[item.key] ?? ''}
+                    disabled={reviewersLoading || !!reviewersError}
+                    onChange={(event) =>
+                      setReviewerSearch({ ...reviewerSearch, [item.key]: event.target.value })
+                    }
+                  />
+                  {reviewerCandidates
+                    .filter((candidate) =>
+                      `${candidate.name} ${candidate.userId}`
+                        .toLowerCase()
+                        .includes((reviewerSearch[item.key] ?? '').trim().toLowerCase()),
+                    )
+                    .map((candidate) => (
+                      <label
+                        key={candidate.userId}
+                        className="flex min-h-11 items-center gap-[10px] text-[14px]"
+                      >
+                        <input
+                          type="checkbox"
+                          className="size-4 accent-primary"
+                          disabled={reviewersLoading || !!reviewersError}
+                          checked={item.reviewerUserIds.includes(candidate.userId)}
+                          onChange={(event) =>
+                            set(
+                              'reviewerUserIds',
+                              event.target.checked
+                                ? [...item.reviewerUserIds, candidate.userId]
+                                : item.reviewerUserIds.filter((id) => id !== candidate.userId),
+                            )
+                          }
+                        />
+                        {candidate.name} · {candidate.userId}
+                      </label>
+                    ))}
                   {item.reviewerUserIds
                     .filter(
                       (id) => !reviewerCandidates.some((candidate) => candidate.userId === id),
@@ -560,29 +577,6 @@ export function StrategistExamFields({
                 </div>
               ) : (
                 <>
-                  <div className="grid gap-[18px] sm:grid-cols-2">
-                    {text(
-                      `${path}.toolCode`,
-                      `${label}工具编码`,
-                      item.toolCode,
-                      (value) => set('toolCode', value),
-                      { required: true, maxLength: 64 },
-                    )}
-                    {text(
-                      `${path}.toolName`,
-                      `${label}工具名称`,
-                      item.toolName,
-                      (value) => set('toolName', value),
-                      { required: true, maxLength: 128 },
-                    )}
-                  </div>
-                  {text(
-                    `${path}.toolConfigText`,
-                    `${label}工具配置（选填）`,
-                    item.toolConfigText,
-                    (value) => set('toolConfigText', value),
-                    { multiline: true, description: '填写非敏感JSON配置，不能包含密钥；可留空。' },
-                  )}
                   <StrategistExamFiles
                     label={`${label}工具附件`}
                     files={item.toolFiles}

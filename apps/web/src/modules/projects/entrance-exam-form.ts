@@ -87,7 +87,7 @@ export function newEntranceExam(projectName: string): EntranceExamFormValues {
     durationMinutes: '',
     registrationDeadline: '',
     fullScore: '100',
-    passScore: '60',
+    passScore: '',
     decisionRule: 'MAJORITY',
     tieBreakRule: 'STRICT',
     papers: [newExamPaper()],
@@ -239,10 +239,12 @@ export function entranceExamInput(
         errors[`${path}.reviewerUserIds`] = '请选择1–100名有效且不重复的阅卷人';
       return { gradingMode: 'MANUAL' as const, reviewerUserIds: round.reviewerUserIds };
     }
-    if (!round.toolCode.trim() || round.toolCode.trim().length > 64)
-      errors[`${path}.toolCode`] = '工具编码必填，最多64字';
-    if (!round.toolName.trim() || round.toolName.trim().length > 128)
-      errors[`${path}.toolName`] = '工具名称必填，最多128字';
+    if (!round.toolFiles.length) errors[`${path}.toolFiles`] = '请至少上传一个自动阅卷工具文件';
+    const toolBaseName =
+      round.toolFiles[0]?.name
+        .trim()
+        .replace(/\.[^./\\]+$/, '')
+        .trim() || '自动阅卷工具';
     let config: ProjectJsonValue = null;
     try {
       config = round.toolConfigText.trim() ? JSON.parse(round.toolConfigText) : null;
@@ -253,8 +255,8 @@ export function entranceExamInput(
     }
     return {
       gradingMode: 'AUTO' as const,
-      toolCode: round.toolCode.trim(),
-      toolName: round.toolName.trim(),
+      toolCode: (round.toolCode.trim() || toolBaseName).slice(0, 64),
+      toolName: (round.toolName.trim() || toolBaseName).slice(0, 128),
       toolConfig: config,
       toolFiles: files(round.toolFiles, `${path}.toolFiles`, 10),
     };
@@ -324,11 +326,12 @@ function importedFiles(files?: EntranceExamFileInput[] | null): ExamDraftFile[] 
     status: 'ready',
   }));
 }
-/** 解析仅替换当前内存配置，未包含的人工轮次必须由用户补齐，不伪造发布。 */
+/** 试卷整体替换；其他配置只合并非空解析值，未返回字段保留当前草稿。 */
 export function entranceExamImportedValues(
   config: EntranceExamConfigInput,
+  previous?: EntranceExamFormValues,
 ): EntranceExamFormValues {
-  return {
+  const parsed: EntranceExamFormValues = {
     examName: config.examName ?? '',
     durationMode: config.durationMinutes == null ? 'UNLIMITED' : 'LIMITED',
     durationMinutes: config.durationMinutes == null ? '' : String(config.durationMinutes),
@@ -360,6 +363,41 @@ export function entranceExamImportedValues(
       toolConfigText: round.toolConfig == null ? '' : JSON.stringify(round.toolConfig, null, 2),
       toolFiles: importedFiles(round.toolFiles),
     })),
+  };
+  if (!previous) return parsed;
+  return {
+    ...parsed,
+    examName: config.examName?.trim() || previous.examName,
+    durationMode:
+      config.durationMinutes === undefined ? previous.durationMode : parsed.durationMode,
+    durationMinutes:
+      config.durationMinutes === undefined ? previous.durationMinutes : parsed.durationMinutes,
+    registrationDeadline: config.registrationDeadline?.trim()
+      ? parsed.registrationDeadline
+      : previous.registrationDeadline,
+    fullScore: config.fullScore == null ? previous.fullScore : parsed.fullScore,
+    passScore: config.passScore == null ? previous.passScore : parsed.passScore,
+    decisionRule: config.decisionRule ?? previous.decisionRule,
+    tieBreakRule: config.tieBreakRule ?? previous.tieBreakRule,
+    gradingRounds: !config.gradingRounds.length
+      ? previous.gradingRounds
+      : parsed.gradingRounds.map((round, index) => {
+          const old = previous.gradingRounds[index];
+          if (!old) return round;
+          return {
+            ...round,
+            reviewerUserIds: round.reviewerUserIds.length
+              ? round.reviewerUserIds
+              : old.reviewerUserIds,
+            toolCode: round.toolCode.trim() || old.toolCode,
+            toolName: round.toolName.trim() || old.toolName,
+            toolConfigText:
+              round.toolConfigText && !['{}', '[]'].includes(round.toolConfigText)
+                ? round.toolConfigText
+                : old.toolConfigText,
+            toolFiles: round.toolFiles.length ? round.toolFiles : old.toolFiles,
+          };
+        }),
   };
 }
 export function entranceExamConfigurationValues(

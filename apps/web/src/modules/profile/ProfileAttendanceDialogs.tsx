@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ApiError,
   type WorkbenchAttendanceDay,
@@ -407,70 +407,64 @@ export function PersonalScheduleDialog({
   onWritten: (message: string) => Promise<void>;
 }) {
   const cache = useQueryClient();
-  const [from, setFrom] = useState(`${month}-01`);
-  const [to, setTo] = useState(
-    new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)), 0))
-      .toISOString()
-      .slice(0, 10),
-  );
-  const [dayType, setDayType] = useState<'WORK' | 'REST'>('WORK');
+  const [targetMonth, setTargetMonth] = useState(month);
+  const holidays = useQuery({
+    queryKey: ['personal-schedule-holidays', targetMonth],
+    queryFn: () => api.getAttendanceHolidays({ month: targetMonth }),
+    retry: false,
+  });
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('18:00');
   const [timezone, setTimezone] = useState('Asia/Shanghai');
-  const [weekdaysOnly, setWeekdaysOnly] = useState(false);
   const [overwrite, setOverwrite] = useState(false);
   const [rows, setRows] = useState<ScheduleRow[]>([]);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [result, setResult] = useState<WorkbenchScheduleResult | null>(null);
   const receipt = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
 
   function generate() {
     setError(null);
-    if (
-      !/^\d{4}-\d{2}-\d{2}$/.test(from) ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(to) ||
-      Number(from.slice(0, 4)) < 1900 ||
-      from > to
-    ) {
-      setError(new Error('请选择有效的起止日期'));
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth) || Number(targetMonth.slice(0, 4)) < 1900) {
+      setError(new Error('请选择有效的目标月份'));
       return;
     }
-    const first = new Date(`${from}T00:00:00Z`);
-    const last = new Date(`${to}T00:00:00Z`);
-    const count = (last.getTime() - first.getTime()) / 86_400_000 + 1;
     if (
-      !Number.isInteger(count) ||
-      count < 1 ||
-      count > 366 ||
-      first.toISOString().slice(0, 10) !== from ||
-      last.toISOString().slice(0, 10) !== to
+      !validTime(startTime) ||
+      !validTime(endTime) ||
+      `${startTime}:00`.slice(0, 8) >= `${endTime}:00`.slice(0, 8)
     ) {
-      setError(new Error('每次排班请选择 1 至 366 个有效日期'));
+      setError(new Error('基础下班时间必须晚于上班时间，暂不支持跨日班次'));
       return;
     }
-    const next: ScheduleRow[] = [];
-    for (let offset = 0; offset < count; offset++) {
-      const date = new Date(first.getTime() + offset * 86_400_000);
-      if (weekdaysOnly && [0, 6].includes(date.getUTCDay())) continue;
-      next.push({
-        scheduleDate: date.toISOString().slice(0, 10),
-        dayType,
-        ...(dayType === 'WORK' ? { startTime, endTime } : {}),
-      });
-    }
-    setRows(next);
-    setResult(null);
+    if (!holidays.isSuccess) return;
+    const last = new Date(`${targetMonth}-01T00:00:00Z`);
+    last.setUTCMonth(last.getUTCMonth() + 1, 0);
+    setRows(
+      Array.from({ length: last.getUTCDate() }, (_, index) => {
+        const scheduleDate = `${targetMonth}-${String(index + 1).padStart(2, '0')}`;
+        const holiday = holidays.data.days.find((item) => item.date === scheduleDate);
+        const dayType =
+          holiday?.defaultScheduleDayType ??
+          (holiday?.calendarDayType === 'PUBLIC_HOLIDAY'
+            ? 'REST'
+            : holiday?.calendarDayType === 'MAKEUP_WORKDAY'
+              ? 'WORK'
+              : [0, 6].includes(new Date(`${scheduleDate}T00:00:00Z`).getUTCDay())
+                ? 'REST'
+                : 'WORK');
+        return { scheduleDate, dayType, ...(dayType === 'WORK' ? { startTime, endTime } : {}) };
+      }),
+    );
   }
   function change(index: number, patch: Partial<ScheduleRow>) {
     setRows((current) =>
       current.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)),
     );
-    setResult(null);
   }
-  async function submit(event: FormEvent) {
+  async function submit(event: FormEvent, confirmed = false) {
     event.preventDefault();
-    if (busy || result) return;
+    if (busy) return;
     setError(null);
     if (!rows.length || rows.length > 366) {
       setError(new Error('请先生成 1 至 366 条排班日期'));
@@ -502,6 +496,11 @@ export function PersonalScheduleDialog({
       overwrite,
       timezone: timezone.trim(),
     };
+    if (!confirmed) {
+      setConfirming(true);
+      return;
+    }
+    setConfirming(false);
     const fingerprint = JSON.stringify(input);
     if (receipt.current?.fingerprint !== fingerprint)
       receipt.current = { fingerprint, idempotencyKey: crypto.randomUUID() };
@@ -519,10 +518,13 @@ export function PersonalScheduleDialog({
       setBusy(false);
       return;
     }
-    setResult(saved);
     setBusy(false);
+    setRows([]);
+    onClose();
     void onWritten(
-      `排班已保存：新增 ${saved.createdCount} 条，覆盖 ${saved.updatedCount} 条，跳过 ${saved.skippedCount} 条。`,
+      saved.skippedCount
+        ? `有 ${saved.skippedCount} 条已有排班冲突未覆盖`
+        : `排班已保存：新增 ${saved.createdCount} 条，覆盖 ${saved.updatedCount} 条，跳过 ${saved.skippedCount} 条。`,
     );
   }
 
@@ -533,38 +535,20 @@ export function PersonalScheduleDialog({
           排班仅保存到本人。班次使用所填时区的本地时间，不支持跨日；生成日期后可逐日调整。
         </p>
         <fieldset disabled={busy} className="space-y-[16px]">
+          <FormField controlId="schedule-month" label="排班目标月份">
+            <Input
+              id="schedule-month"
+              type="month"
+              value={targetMonth}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return;
+                setTargetMonth(value);
+                setRows([]);
+              }}
+            />
+          </FormField>
           <div className="grid gap-[12px] sm:grid-cols-2">
-            <FormField controlId="schedule-from" label="排班开始日期">
-              <Input
-                id="schedule-from"
-                type="date"
-                size="profile"
-                min="1900-01-01"
-                value={from}
-                onChange={(event) => setFrom(event.target.value)}
-              />
-            </FormField>
-            <FormField controlId="schedule-to" label="排班结束日期">
-              <Input
-                id="schedule-to"
-                type="date"
-                size="profile"
-                min="1900-01-01"
-                value={to}
-                onChange={(event) => setTo(event.target.value)}
-              />
-            </FormField>
-            <FormField controlId="schedule-day-type" label="默认日类型">
-              <select
-                id="schedule-day-type"
-                className={orgControlClass}
-                value={dayType}
-                onChange={(event) => setDayType(event.target.value as 'WORK' | 'REST')}
-              >
-                <option value="WORK">工作</option>
-                <option value="REST">休息</option>
-              </select>
-            </FormField>
             <FormField controlId="schedule-timezone" label="班次时区">
               <Input
                 id="schedule-timezone"
@@ -573,45 +557,64 @@ export function PersonalScheduleDialog({
                 value={timezone}
                 onChange={(event) => {
                   setTimezone(event.target.value);
-                  setResult(null);
                 }}
               />
             </FormField>
-            {dayType === 'WORK' && (
-              <>
-                <FormField controlId="schedule-start" label="默认上班时间">
-                  <Input
-                    id="schedule-start"
-                    type="time"
-                    step="1"
-                    size="profile"
-                    value={startTime}
-                    onChange={(event) => setStartTime(event.target.value)}
-                  />
-                </FormField>
-                <FormField controlId="schedule-end" label="默认下班时间">
-                  <Input
-                    id="schedule-end"
-                    type="time"
-                    step="1"
-                    size="profile"
-                    value={endTime}
-                    onChange={(event) => setEndTime(event.target.value)}
-                  />
-                </FormField>
-              </>
-            )}
+            <FormField controlId="schedule-start" label="默认上班时间">
+              <Input
+                id="schedule-start"
+                type="time"
+                step="1"
+                size="profile"
+                value={startTime}
+                onChange={(event) => setStartTime(event.target.value)}
+              />
+            </FormField>
+            <FormField controlId="schedule-end" label="默认下班时间">
+              <Input
+                id="schedule-end"
+                type="time"
+                step="1"
+                size="profile"
+                value={endTime}
+                onChange={(event) => setEndTime(event.target.value)}
+              />
+            </FormField>
           </div>
-          <label className="flex min-h-[44px] items-center gap-[8px] text-[13px]">
-            <input
-              type="checkbox"
-              checked={weekdaysOnly}
-              onChange={(event) => setWeekdaysOnly(event.target.checked)}
-            />
-            仅生成周一至周五（节假日请按实际安排调整）
-          </label>
-          <Button variant="outline" size="settings" onClick={generate}>
-            生成排班日期
+          <ErrorNotice error={holidays.error} />
+          {holidays.isError && (
+            <Button variant="outline" size="mobileTouch" onClick={() => void holidays.refetch()}>
+              重新读取节假日
+            </Button>
+          )}
+          {(Number(endTime.slice(0, 2)) * 60 +
+            Number(endTime.slice(3, 5)) -
+            (Number(startTime.slice(0, 2)) * 60 + Number(startTime.slice(3, 5)))) /
+            60 -
+            1 >
+            8 && (
+            <p role="status" className="text-sm text-destructive">
+              扣除 1 小时休息后，有效工时为{' '}
+              {Number(
+                (
+                  (Number(endTime.slice(0, 2)) * 60 +
+                    Number(endTime.slice(3, 5)) -
+                    Number(startTime.slice(0, 2)) * 60 -
+                    Number(startTime.slice(3, 5))) /
+                    60 -
+                  1
+                ).toFixed(2),
+              )}{' '}
+              小时，超过 8 小时，请确认班次安排。
+            </p>
+          )}
+          <Button
+            variant="outline"
+            size="settings"
+            onClick={generate}
+            disabled={!holidays.isSuccess}
+          >
+            一键排班
           </Button>
           {rows.length > 0 && (
             <fieldset className="space-y-[8px]">
@@ -625,7 +628,10 @@ export function PersonalScheduleDialog({
                     className="space-y-[8px] rounded-[8px] border p-[12px]"
                   >
                     <div className="flex items-center justify-between gap-[8px]">
-                      <time dateTime={row.scheduleDate} className="text-[13px] font-medium">
+                      <time
+                        dateTime={row.scheduleDate}
+                        className={`text-[13px] font-medium ${holidays.data?.days.some((day) => day.date === row.scheduleDate && day.calendarDayType === 'PUBLIC_HOLIDAY') ? 'text-destructive' : ''}`}
+                      >
                         {row.scheduleDate}
                       </time>
                       <Button
@@ -634,7 +640,6 @@ export function PersonalScheduleDialog({
                         aria-label={`移除 ${row.scheduleDate}`}
                         onClick={() => {
                           setRows((current) => current.filter((_, i) => i !== index));
-                          setResult(null);
                         }}
                       >
                         移除
@@ -692,40 +697,46 @@ export function PersonalScheduleDialog({
               checked={overwrite}
               onChange={(event) => {
                 setOverwrite(event.target.checked);
-                setResult(null);
               }}
             />
             覆盖已有排班（未勾选时跳过已有日期）
           </label>
         </fieldset>
         <ErrorNotice error={error} />
-        {result && (
-          <div
-            role="status"
-            className={`space-y-[6px] rounded-[8px] border p-[12px] ${quietClass}`}
-          >
-            <p>
-              新增 {result.createdCount} 条，覆盖 {result.updatedCount} 条，跳过{' '}
-              {result.skippedCount} 条。
-            </p>
-            {result.conflicts.length > 0 && (
-              <p>
-                已有排班未覆盖：
-                {result.conflicts.map(({ scheduleDate }) => scheduleDate).join('、')}
-                。核对后可勾选覆盖并再次提交。
-              </p>
-            )}
-          </div>
-        )}
         <div className="flex flex-wrap justify-end gap-[8px]">
           <Button variant="outline" size="settings" disabled={busy} onClick={onClose}>
-            {result ? '完成' : '取消'}
+            取消
           </Button>
-          <Button type="submit" size="settings" loading={busy} disabled={!!result || !rows.length}>
-            保存排班
+          <Button type="submit" size="settings" loading={busy} disabled={busy || !rows.length}>
+            提交排班
           </Button>
         </div>
       </form>
+      {confirming && (
+        <OrganizationDialog
+          title="确认提交个人排班"
+          busy={busy}
+          onClose={() => setConfirming(false)}
+        >
+          <p>
+            目标月份：{targetMonth}；日期：{rows[0]?.scheduleDate} 至 {rows.at(-1)?.scheduleDate}
+            ，共 {rows.length} 条，其中工作 {rows.filter((row) => row.dayType === 'WORK').length}{' '}
+            天。
+          </p>
+          <p>
+            基础班次：{startTime}–{endTime}；时区：{timezone}；
+            {overwrite ? '覆盖已有排班' : '保留已有排班'}。
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="mobileTouch" onClick={() => setConfirming(false)}>
+              取消
+            </Button>
+            <Button size="mobileTouch" onClick={(event) => void submit(event, true)}>
+              确认提交
+            </Button>
+          </div>
+        </OrganizationDialog>
+      )}
     </OrganizationDialog>
   );
 }

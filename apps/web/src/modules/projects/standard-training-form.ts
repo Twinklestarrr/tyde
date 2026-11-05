@@ -1,10 +1,23 @@
-import type { ProjectStandardMaterials, ProjectStandardMaterialsInput } from '@tyde/shared';
+import {
+  ApiError,
+  type ProjectStandardMaterials,
+  type ProjectStandardMaterialsInput,
+} from '@tyde/shared';
 import type { ExamDraftFile } from './entrance-exam-form';
 
 export interface StandardTrainingDraft {
   standardContent: string;
   standardLink: string;
   files: ExamDraftFile[];
+}
+
+/** 超时、响应不明及会话变化都不能证明无版本/幂等的保存未执行。 */
+export function standardTrainingFailureIsUnknown(error: unknown) {
+  return (
+    !(error instanceof ApiError) ||
+    ['SESSION_CHANGED', 'INVALID_RESPONSE'].includes(String(error.code)) ||
+    ![400, 401, 403, 404, 409, 413, 422, 429].includes(error.status)
+  );
 }
 
 export function standardTrainingDraft(materials: ProjectStandardMaterials): StandardTrainingDraft {
@@ -28,7 +41,7 @@ export function standardTrainingInput(
 ): ProjectStandardMaterialsInput {
   const standardContent = draft.standardContent.trim() || null;
   const standardLink = draft.standardLink.trim() || null;
-  if (!standardContent && !standardLink) throw new Error('标准正文与标准链接至少填写一项。');
+  if (!standardContent) throw new Error('请填写标准正文。');
   if (draft.standardLink.length > 2000) throw new Error('标准链接最多2000字符。');
   if (draft.files.length > 20) throw new Error('标准附件最多20个。');
   const input: ProjectStandardMaterialsInput = {

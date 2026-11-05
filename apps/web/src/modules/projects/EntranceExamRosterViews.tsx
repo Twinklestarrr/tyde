@@ -1,5 +1,6 @@
-import { useId, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useId, useRef, useState } from 'react';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { SESSION_KEY } from '@/hooks/useSession';
 import type {
   AuthUser,
   EntranceExamAdmissionInput,
@@ -103,7 +104,21 @@ function ExamPagination({
 }
 
 /** 项目级准入状态来自服务端真实成员事实，不将考试通过等同于已入项。 */
-export function EntranceExamAdmissions({ user, projectId }: { user: AuthUser; projectId: number }) {
+export function EntranceExamAdmissions({
+  user,
+  projectId,
+  role = 'PM',
+}: {
+  user: AuthUser;
+  projectId: number;
+  role?: 'PM' | 'NAVIGATOR';
+}) {
+  const cache = useQueryClient();
+  function requireSession() {
+    const current = cache.getQueryData<AuthUser | null>(SESSION_KEY);
+    if (current?.id !== user.id || (current.selectedRole ?? current.role) !== role)
+      throw new Error('当前身份已变化，请重新进入准入情况。');
+  }
   const [keyword, setKeyword] = useState('');
   const [status, setStatus] = useState('ALL');
   const [filter, setFilter] = useState<{ keyword: string; status: string; current: number }>({
@@ -121,8 +136,14 @@ export function EntranceExamAdmissions({ user, projectId }: { user: AuthUser; pr
       : {}),
   };
   const query = useQuery({
-    queryKey: ['entrance-exam-admissions', user.id, 'PM', projectId, input],
-    queryFn: () => api.getEntranceExamAdmissions(input),
+    queryKey: ['entrance-exam-admissions', user.id, role, projectId, input],
+    enabled: (user.selectedRole ?? user.role) === role,
+    queryFn: async () => {
+      requireSession();
+      const value = await api.getEntranceExamAdmissions(input);
+      requireSession();
+      return value;
+    },
     retry: false,
     refetchOnMount: 'always',
     refetchOnWindowFocus: false,
@@ -153,7 +174,7 @@ export function EntranceExamAdmissions({ user, projectId }: { user: AuthUser; pr
             size="profile"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="姓名、UID 或组织名称"
+            placeholder="姓名、用户 ID 或组织名称"
           />
         </FormField>
         <ExamSelect
@@ -189,6 +210,7 @@ export function EntranceExamAdmissions({ user, projectId }: { user: AuthUser; pr
       {query.isPending ? (
         <p role="status">正在读取准入情况…</p>
       ) : (
+        query.isSuccess &&
         query.data && (
           <>
             <div className="overflow-x-auto rounded-xl border">
@@ -206,7 +228,7 @@ export function EntranceExamAdmissions({ user, projectId }: { user: AuthUser; pr
                       <TableCell>
                         <p>{row.candidateName}</p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          UID：{row.candidateUid}
+                          用户 ID：{row.candidateUserId}
                         </p>
                       </TableCell>
                       <TableCell>
@@ -250,56 +272,93 @@ export function EntranceExamRoster({
   projectId,
   examId,
   onSelect,
-  hidden = false,
+  selectedAttemptId,
+  autoSelect = false,
+  active = true,
+  role = 'PM',
 }: {
   user: AuthUser;
   projectId: number;
   examId: number;
-  onSelect: (row: EntranceExamRosterItem) => void;
-  hidden?: boolean;
+  onSelect: (row: EntranceExamRosterItem, automatic?: boolean) => void;
+  selectedAttemptId?: number;
+  autoSelect?: boolean;
+  active?: boolean;
+  role?: 'PM' | 'NAVIGATOR';
 }) {
+  const cache = useQueryClient();
+  function requireSession() {
+    const current = cache.getQueryData<AuthUser | null>(SESSION_KEY);
+    if (current?.id !== user.id || (current.selectedRole ?? current.role) !== role)
+      throw new Error('当前身份已变化，请重新进入考试名单。');
+  }
   const [keyword, setKeyword] = useState('');
   const [status, setStatus] = useState('ALL');
-  const [filter, setFilter] = useState({ keyword: '', status: 'ALL', current: 1 });
+  const [filter, setFilter] = useState({ keyword: '', status: 'ALL' });
+  const scroll = useRef<HTMLDivElement>(null);
+  const sentinel = useRef<HTMLDivElement>(null);
   const input = {
     projectId,
     examId,
-    current: filter.current,
     size: 20,
     ...(filter.keyword ? { keyword: filter.keyword } : {}),
     ...(filter.status !== 'ALL' ? { finalResult: filter.status as EntranceExamFinalResult } : {}),
   };
-  const query = useQuery({
-    queryKey: ['entrance-exam-roster', user.id, 'PM', projectId, examId, input],
-    queryFn: () => api.getEntranceExamRoster(input),
-    enabled: !hidden,
+  const query = useInfiniteQuery({
+    queryKey: ['entrance-exam-roster', user.id, role, projectId, examId, input],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      requireSession();
+      const value = await api.getEntranceExamRoster({ ...input, current: pageParam });
+      requireSession();
+      return value;
+    },
+    getNextPageParam: (last) => (last.current < last.pages ? last.current + 1 : undefined),
+    enabled: active && (user.selectedRole ?? user.role) === role,
     retry: false,
     refetchOnWindowFocus: false,
   });
+  const records = query.data?.pages.flatMap((page) => page.records) ?? [];
+  const first = records.find((row) => row.enteredAt);
+  useEffect(() => {
+    if (active && autoSelect && first) onSelect(first, true);
+  }, [active, autoSelect, first, onSelect]);
+  useEffect(() => {
+    if (!active || !query.hasNextPage || query.isFetching || query.isError || !sentinel.current)
+      return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) void query.fetchNextPage();
+      },
+      { root: scroll.current, rootMargin: '0px 0px 120px 0px' },
+    );
+    observer.observe(sentinel.current);
+    return () => observer.disconnect();
+  }, [active, query.hasNextPage, query.isFetching, query.isError, query.fetchNextPage]);
   return (
-    <section hidden={hidden} aria-label="考试花名册" className="space-y-4">
+    <section aria-label="考试花名册" className="space-y-4">
       <p className="text-[13px] text-muted-foreground">
         轮次成绩来自考生实际绑定的历史版本。未交卷与待最终阅卷分别展示。
       </p>
       <form
-        className="grid grid-cols-2 items-end gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(140px,180px)_auto_auto_auto]"
+        className="grid grid-cols-2 items-end gap-3"
         onSubmit={(event) => {
           event.preventDefault();
-          setFilter({ keyword: keyword.trim(), status, current: 1 });
+          setFilter({ keyword: keyword.trim(), status });
         }}
       >
         <FormField
-          controlId="exam-roster-keyword"
+          controlId={`exam-roster-keyword-${examId}`}
           label="搜索考试人员"
-          className="col-span-2 gap-2 lg:col-span-1"
+          className="col-span-2 gap-2"
           labelClassName="text-[13px] leading-5"
         >
           <Input
-            id="exam-roster-keyword"
+            id={`exam-roster-keyword-${examId}`}
             size="profile"
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="姓名、UID 或组织名称"
+            placeholder="姓名、用户 ID 或组织名称"
           />
         </FormField>
         <ExamSelect
@@ -317,7 +376,7 @@ export function EntranceExamRoster({
           onClick={() => {
             setKeyword('');
             setStatus('ALL');
-            setFilter({ keyword: '', status: 'ALL', current: 1 });
+            setFilter({ keyword: '', status: 'ALL' });
           }}
         >
           重置
@@ -337,9 +396,9 @@ export function EntranceExamRoster({
       ) : (
         query.data && (
           <>
-            <div className="overflow-x-auto rounded-xl border">
-              <Table>
-                <TableHeader>
+            <div ref={scroll} className="max-h-[32rem] overflow-y-auto rounded-xl border">
+              <Table className="block w-full table-fixed">
+                <TableHeader className="sr-only">
                   <TableRow>
                     {['考生', '组织', '轮次成绩', '最终结果', '入场 / 交卷时间', '操作'].map(
                       (label) => (
@@ -348,13 +407,17 @@ export function EntranceExamRoster({
                     )}
                   </TableRow>
                 </TableHeader>
-                <TableBody>
-                  {query.data.records.map((row) => (
-                    <TableRow key={row.attemptId}>
+                <TableBody className="block">
+                  {records.map((row) => (
+                    <TableRow
+                      key={row.attemptId}
+                      data-state={row.attemptId === selectedAttemptId ? 'selected' : undefined}
+                      className="block space-y-2 p-3 [&>td]:block [&>td]:whitespace-normal [&>td]:p-0 [&>td]:break-words"
+                    >
                       <TableCell>
                         <p>{row.candidateName}</p>
                         <p className="mt-1 text-xs text-muted-foreground">
-                          UID：{row.candidateUid}
+                          用户 ID：{row.candidateUserId}
                         </p>
                         <p className="mt-1 text-xs text-muted-foreground">{row.attemptNo}</p>
                       </TableCell>
@@ -394,7 +457,7 @@ export function EntranceExamRoster({
                       </TableCell>
                     </TableRow>
                   ))}
-                  {query.data.records.length === 0 && (
+                  {records.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={6} className="p-[32px] text-center text-muted-foreground">
                         暂无符合条件的考生
@@ -403,12 +466,21 @@ export function EntranceExamRoster({
                   )}
                 </TableBody>
               </Table>
+              <div ref={sentinel} className="h-px" aria-hidden />
             </div>
-            <ExamPagination
-              {...query.data}
-              busy={query.isFetching}
-              onPage={(current) => setFilter({ ...filter, current })}
-            />
+            <p className="text-xs text-muted-foreground">
+              已显示 {records.length} / {query.data.pages[0]?.total ?? 0} 人
+            </p>
+            {query.hasNextPage && (
+              <Button
+                variant="outline"
+                size="mobileTouch"
+                loading={query.isFetchingNextPage}
+                onClick={() => void query.fetchNextPage()}
+              >
+                加载更多
+              </Button>
+            )}
           </>
         )
       )}

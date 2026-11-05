@@ -22,7 +22,6 @@ import { SESSION_KEY } from '@/hooks/useSession';
 import { joinStatusLabels, positionLabels } from '@/modules/organizations/common';
 import { OrganizationEdit, SelfDeparture } from '@/modules/organizations/OrganizationPage';
 import { ProfileAttendance } from './ProfileAttendance';
-import { ProfileOverview } from './ProfileOverview';
 import { ProfileApplicationWithdrawal } from './ProfileApplicationWithdrawal';
 import { api } from '@/services/api';
 import { ExpertExamStatus } from '@/modules/projects/ExpertExamPanel';
@@ -40,15 +39,15 @@ const nodeLabels: Record<string, string> = {
   ENTRANCE_EXAM: '准入考试',
   STANDARD_TRAINING: '标准与培训',
   PRODUCTION_TASK: '生产任务',
-  OUTPUT_DATA_REVIEW: '检查数据',
+  OUTPUT_DATA_REVIEW: '提交验收',
   MEMBER_MOVEMENT_APPROVAL: '人员变动审批',
   MEMBER_ENTRY_CONFIRM: '确认入项时间',
 };
 const admissionLabels = {
-  PASSED: '已通过准入',
+  PASSED: '通过',
   PENDING: '待阅卷',
-  NOT_PASSED: '尚未取得通过结果',
-  NOT_EXAMINED: '未参加考试',
+  NOT_PASSED: '未通过准入考试',
+  NOT_EXAMINED: '待参加考试',
 };
 const profileScope = (user: AuthUser) => [
   'profile-workbench',
@@ -72,39 +71,20 @@ async function readProfile<T>(request: Promise<T>, cache: QueryClient): Promise<
 export function ProfileExpertContent({
   user,
   showProjects,
-  onSectionChange,
 }: {
   user: AuthUser;
   showProjects: boolean;
-  onSectionChange: (section: 'overview' | 'projects' | 'attendance' | 'organization') => void;
 }) {
-  const [projectId, setProjectId] = useState<number | null>(null);
-  const [attendanceMonth, setAttendanceMonth] = useState<string>();
   const scope = profileScope(user);
   return (
     <>
-      <TabsContent value="overview" className="m-0">
-        <ProfileOverview
-          user={user}
-          showProjects={showProjects}
-          onProjects={(id) => {
-            setProjectId(id ?? null);
-            onSectionChange('projects');
-          }}
-          onAttendance={(month) => {
-            setAttendanceMonth(month);
-            onSectionChange('attendance');
-          }}
-          onApplications={() => onSectionChange('organization')}
-        />
-      </TabsContent>
       {showProjects && (
         <TabsContent value="projects" className="m-0 min-w-0">
-          <ExpertProjects key={scope.join(':')} user={user} initialProjectId={projectId} />
+          <ExpertProjects key={scope.join(':')} user={user} />
         </TabsContent>
       )}
       <TabsContent value="attendance" className="m-0 min-w-0">
-        <ProfileAttendance key={scope.join(':')} user={user} initialMonth={attendanceMonth} />
+        <ProfileAttendance key={scope.join(':')} user={user} />
       </TabsContent>
       <TabsContent value="organization" className="m-0 min-w-0">
         <ExpertApplications key={scope.join(':')} user={user} />
@@ -129,7 +109,7 @@ function ExpertProjects({
     queryFn: () => readProfile(api.getMyExpertProjects(search || undefined), cache),
   });
   const selectedProject = projects.isSuccess
-    ? projects.data.find((project) => project.projectId === selectedId)
+    ? (projects.data.find((project) => project.projectId === selectedId) ?? projects.data[0])
     : undefined;
   const detail = useQuery({
     queryKey: [
@@ -184,7 +164,7 @@ function ExpertProjects({
           </div>
         )}
         {projects.isSuccess && projects.data.length === 0 && (
-          <EmptyState title="暂无符合执行专家参与范围的项目" />
+          <EmptyState title={search ? '没有匹配的项目' : '暂无参与项目'} />
         )}
         {projects.isSuccess && projects.data.length > 0 && (
           <ul aria-label="我的项目列表" className="grid min-w-0 gap-[10px] sm:grid-cols-2">
@@ -193,7 +173,7 @@ function ExpertProjects({
                 <Card asChild>
                   <button
                     type="button"
-                    aria-pressed={selectedId === project.projectId}
+                    aria-pressed={selectedProject?.projectId === project.projectId}
                     onClick={() => setSelectedId(project.projectId)}
                     className="flex min-h-[100px] w-full flex-col items-start gap-2 p-5 text-left text-[13px] leading-5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:border-primary aria-pressed:bg-accent"
                   >

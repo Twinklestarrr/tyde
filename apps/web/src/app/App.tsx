@@ -30,6 +30,12 @@ import { ProjectDetailPage } from '../modules/projects/ProjectDetailPage';
 import { StrategistProjectsPage } from '../modules/projects/StrategistProjectsPage';
 import { StrategistProjectPage } from '../modules/projects/StrategistProjectPage';
 import { ExpertProjectsPage } from '../modules/projects/ExpertProjectsPage';
+import {
+  ProjectDirectoryPage,
+  type ProjectDirectorySearch,
+  type ProjectDirectoryDetailSearch,
+} from '../modules/projects/ProjectDirectoryPage';
+import { ProjectDirectoryDetailPage } from '../modules/projects/ProjectDirectoryDetailPage';
 
 /** 离开注册资料页后销毁一次性凭证；布局由匹配路由决定。 */
 function RootLayout() {
@@ -163,7 +169,7 @@ function StrategistProjectsRoute() {
 function StrategistProjectRoute() {
   const session = useSession();
   const { projectId } = strategistProjectRoute.useParams();
-  const { tab } = strategistProjectRoute.useSearch();
+  const { tab, personnelView } = strategistProjectRoute.useSearch();
   if (session.data && (session.data.selectedRole ?? session.data.role) !== 'PM')
     return <Navigate to="/" replace />;
   if (!/^[1-9]\d*$/.test(projectId) || Number(projectId) > 2_147_483_647)
@@ -175,6 +181,7 @@ function StrategistProjectRoute() {
         user={session.data}
         projectId={Number(projectId)}
         initialTab={tab}
+        initialPersonnelView={personnelView}
       />
     )
   );
@@ -203,6 +210,64 @@ function NavigatorProjectDetailRoute() {
       />
     )
   );
+}
+
+function ProjectDirectoryRoute() {
+  const session = useSession();
+  const search = projectDirectoryRoute.useSearch();
+  const navigate = useNavigate();
+  const user = session.data;
+  return (
+    user && (
+      <ProjectDirectoryPage
+        key={`${user.id}:${user.selectedRole ?? user.role}`}
+        user={user}
+        search={search}
+        onSearch={(next) => void navigate({ to: '/project-directory', search: next })}
+      />
+    )
+  );
+}
+
+function ProjectDirectoryDetailRoute() {
+  const session = useSession();
+  const { projectId } = projectDirectoryDetailRoute.useParams();
+  const search = projectDirectoryDetailRoute.useSearch();
+  const user = session.data;
+  if (user && search.scope === 'participating' && (user.selectedRole ?? user.role) !== 'EXPERT')
+    return <Navigate to="/project-directory" search={{}} replace />;
+  if (!/^[1-9]\d*$/.test(projectId) || Number(projectId) > 2_147_483_647 || search.invalidSource)
+    return (
+      <PageRecovery
+        title="项目地址无效"
+        description="请通过顶部“项目”返回项目列表，重新选择项目。"
+      />
+    );
+  return (
+    user && (
+      <ProjectDirectoryDetailPage
+        key={`${user.id}:${user.selectedRole ?? user.role}:${projectId}:${search.scope}:${search.assignmentId}:${search.movementId}`}
+        user={user}
+        projectId={Number(projectId)}
+        search={search}
+      />
+    )
+  );
+}
+
+function directoryPositiveId(value: unknown) {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)))
+    return undefined;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 && id <= 2_147_483_647 ? id : undefined;
+}
+
+function directorySearch(search: Record<string, unknown>): ProjectDirectorySearch {
+  return {
+    ...(search.view === 'managed' || search.view === 'participating' ? { view: search.view } : {}),
+    ...(typeof search.keyword === 'string' ? { keyword: search.keyword.trim().slice(0, 128) } : {}),
+    ...(directoryPositiveId(search.page) ? { page: directoryPositiveId(search.page) } : {}),
+  };
 }
 
 function CurrentProfilePage() {
@@ -263,6 +328,39 @@ const projectsRoute = createRoute({
   component: NavigatorProjectsRoute,
   errorComponent: () => <PageRecovery />,
 });
+const projectDirectoryRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/project-directory',
+  validateSearch: directorySearch,
+  component: ProjectDirectoryRoute,
+  errorComponent: () => <PageRecovery />,
+});
+const projectDirectoryDetailRoute = createRoute({
+  getParentRoute: () => workspaceRoute,
+  path: '/project-directory/$projectId',
+  validateSearch: (search: Record<string, unknown>): ProjectDirectoryDetailSearch => {
+    const assignmentId = directoryPositiveId(search.assignmentId);
+    const movementId = directoryPositiveId(search.movementId);
+    const personal = search.scope === 'participating';
+    const invalidScope = search.scope !== undefined && search.scope !== 'managed' && !personal;
+    const invalidSource =
+      invalidScope ||
+      (personal
+        ? (assignmentId === undefined) === (movementId === undefined) ||
+          (search.assignmentId !== undefined && assignmentId === undefined) ||
+          (search.movementId !== undefined && movementId === undefined)
+        : search.assignmentId !== undefined || search.movementId !== undefined);
+    return {
+      ...directorySearch(search),
+      scope: personal ? 'participating' : 'managed',
+      ...(assignmentId === undefined ? {} : { assignmentId }),
+      ...(movementId === undefined ? {} : { movementId }),
+      ...(invalidSource ? { invalidSource: true } : {}),
+    };
+  },
+  component: ProjectDirectoryDetailRoute,
+  errorComponent: () => <PageRecovery />,
+});
 const projectCreateRoute = createRoute({
   getParentRoute: () => workspaceRoute,
   path: '/projects/create',
@@ -280,11 +378,28 @@ const strategistProjectRoute = createRoute({
   path: '/strategist/projects/$projectId',
   validateSearch: (
     search: Record<string, unknown>,
-  ): { tab?: 'PRODUCTION_PLAN' | 'ENTRANCE_EXAM' | 'STANDARD_TRAINING' } =>
+  ): {
+    tab?:
+      | 'PRODUCTION_PLAN'
+      | 'ENTRANCE_EXAM'
+      | 'STANDARD_TRAINING'
+      | 'RECRUIT_EXECUTION_EXPERT'
+      | 'PERSONNEL_MANAGEMENT'
+      | 'PRODUCTION_TASK';
+    personnelView?: 'movements';
+  } =>
     search.tab === 'ENTRANCE_EXAM' ||
     search.tab === 'PRODUCTION_PLAN' ||
-    search.tab === 'STANDARD_TRAINING'
-      ? { tab: search.tab }
+    search.tab === 'STANDARD_TRAINING' ||
+    search.tab === 'RECRUIT_EXECUTION_EXPERT' ||
+    search.tab === 'PERSONNEL_MANAGEMENT' ||
+    search.tab === 'PRODUCTION_TASK'
+      ? {
+          tab: search.tab,
+          ...(search.tab === 'PERSONNEL_MANAGEMENT' && search.personnelView === 'movements'
+            ? { personnelView: 'movements' as const }
+            : {}),
+        }
       : {},
   component: StrategistProjectRoute,
   errorComponent: () => <PageRecovery />,
@@ -338,6 +453,8 @@ const router = createRouter({
       projectsRoute,
       projectCreateRoute,
       projectDetailRoute,
+      projectDirectoryRoute,
+      projectDirectoryDetailRoute,
       strategistProjectsRoute,
       strategistProjectRoute,
       organizationRoute,

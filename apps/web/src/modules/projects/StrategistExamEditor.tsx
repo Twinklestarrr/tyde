@@ -260,8 +260,8 @@ export function StrategistExamEditor(props: StrategistExamEditorProps) {
         })),
       });
       if (!sessionMatches()) return;
-      change(entranceExamImportedValues(result.config));
-      setImportNotice('试卷已解析到当前表单。请补充截止日期、分数与判卷轮次，核对后再发布或保存。');
+      change(entranceExamImportedValues(result.config, values));
+      setImportNotice('试卷已替换，其他已填写设置在解析未提供新值时保留。请核对后再发布或保存。');
       setImportOpen(false);
       setSource(null);
       setReferences([]);
@@ -432,7 +432,7 @@ export function StrategistExamEditor(props: StrategistExamEditorProps) {
                   支持XLS、XLSX、UTF-8 TXT，源文件不超过10 MiB。远程文档导入暂未开放。
                 </p>
                 <p className="text-[13px] leading-6 text-muted-foreground">
-                  确认解析后将替换当前表单中的考试配置。解析完成后请核对内容，再发布或保存考试。
+                  确认解析后将替换试卷内容，未解析到的其他设置保留原值。解析完成后请核对内容，再发布或保存考试。
                 </p>
                 <FileUploadField
                   aria-label="选择试卷文件"

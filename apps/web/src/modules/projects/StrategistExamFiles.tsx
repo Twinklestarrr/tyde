@@ -33,7 +33,7 @@ export function StrategistExamFiles({
   user: AuthUser;
   onChange: (update: (current: ExamDraftFile[]) => ExamDraftFile[]) => void;
   purpose?: 'project' | 'exam';
-  role?: 'PM' | 'EXPERT';
+  role?: 'PM' | 'EXPERT' | 'NAVIGATOR';
 }) {
   const cache = useQueryClient();
   const mounted = useRef(false);
@@ -49,11 +49,14 @@ export function StrategistExamFiles({
   function current() {
     const session = cache.getQueryData<AuthUser | null>(SESSION_KEY);
     return (
-      mounted.current && session?.id === user.id && (session.selectedRole ?? session.role) === role
+      mounted.current &&
+      session?.id === user.id &&
+      (session.selectedRole ?? session.role) === role &&
+      (role !== 'NAVIGATOR' || purpose === 'project')
     );
   }
   async function upload(item: ExamDraftFile) {
-    if (!item.file || disabled) return;
+    if (!item.file || disabled || !current()) return;
     onChange((previous) =>
       previous.map((file) =>
         file.key === item.key ? { ...file, status: 'uploading', error: undefined } : file,
@@ -125,7 +128,7 @@ export function StrategistExamFiles({
     }
   }
   async function download(item: ExamDraftFile) {
-    if (!item.reference?.objectKey || downloading) return;
+    if (!item.reference?.objectKey || downloading || !current()) return;
     setDownloading(item.key);
     setError(null);
     try {

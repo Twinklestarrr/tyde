@@ -77,7 +77,7 @@ const input: ProjectProductionPlanInput = {
   inspectorHeadcount: 2,
   inspectorCpd: 20.5,
   needWrittenExam: false,
-  maxActiveExamCount: 2,
+  maxActiveExamCount: 1,
   needInterview: true,
   crowds: [{ crowdName: '熟练组', profileRequirement: '完成相关培训' }],
   stages: [
@@ -87,7 +87,7 @@ const input: ProjectProductionPlanInput = {
       endDate: '2099-01-09',
       workdayCountSource: 'AUTO',
       operatorHeadcount: 2,
-      operatorCpd: null,
+      operatorCpd: 10.25,
       accuracyRate: 98.5,
     },
     {
@@ -162,7 +162,7 @@ function confirmedPlan(): ProjectProductionPlan {
     inspectorHeadcount: 2,
     inspectorCpd: 20.5,
     needWrittenExam: false,
-    maxActiveExamCount: 2,
+    maxActiveExamCount: 1,
     needInterview: true,
     totalExpectedOutput: 533,
     confirmedBy: user.uid,
@@ -237,6 +237,13 @@ async function backend(page: Page, desktop = false) {
     const reply = (data: unknown, status = 200, message = '成功') =>
       route.fulfill({ status, json: { code: status, message, data } });
     if (path === '/api/v1/users/me') return reply(state.user);
+    if (path === '/api/v1/projects/workbench/statistics')
+      return reply({
+        mode: 'TASK',
+        pendingTaskCount: 1,
+        completedTaskCount: 0,
+        involvedProjectCount: 1,
+      });
     if (path === '/api/v1/auth/switch-role') {
       const role = (body as { role: AuthUser['role'] }).role;
       state.user.role = role;
@@ -366,7 +373,7 @@ async function fillPlan(page: Page) {
   await panel.getByRole('spinbutton', { name: '质检人数（选填）', exact: true }).fill('2');
   await panel.getByRole('spinbutton', { name: '质检 CPD（选填）', exact: true }).fill('20.5');
   await panel.getByRole('checkbox', { name: '需要笔试', exact: true }).uncheck();
-  await panel.getByRole('spinbutton', { name: '准入考试数量', exact: true }).fill('2');
+  await expect(panel.getByRole('spinbutton', { name: '准入考试数量', exact: true })).toHaveCount(0);
   await panel.getByRole('checkbox', { name: '需要面试', exact: true }).check();
   await panel.getByRole('textbox', { name: '人群1名称', exact: true }).fill('熟练组');
   await panel.getByRole('textbox', { name: '人群1画像要求', exact: true }).fill('完成相关培训');
@@ -381,7 +388,7 @@ async function fillPlan(page: Page) {
   await panel.getByRole('combobox', { name: '阶段2天数来源', exact: true }).click();
   await page.getByRole('option', { name: '手动填写', exact: true }).click();
   await panel.getByRole('spinbutton', { name: '阶段2有效生产天数', exact: true }).fill('7');
-  await panel.getByRole('spinbutton', { name: '阶段2作业 CPD（选填）', exact: true }).fill('20.5');
+  await panel.getByRole('spinbutton', { name: '阶段2作业 CPD', exact: true }).fill('20.5');
   return panel;
 }
 async function confirm(page: Page) {
@@ -390,6 +397,25 @@ async function confirm(page: Page) {
   await dialog.getByRole('button', { name: '确认提交', exact: true }).click();
   return dialog;
 }
+test('阶段CPD继承顶部，保留独立值，新增阶段沿用当前顶部值', async ({ page }) => {
+  await backend(page);
+  const panel = await openPlan(page);
+  const top = panel.getByRole('spinbutton', { name: '作业 CPD', exact: true });
+  const first = panel.getByRole('spinbutton', { name: '阶段1作业 CPD', exact: true });
+  const second = panel.getByRole('spinbutton', { name: '阶段2作业 CPD', exact: true });
+  await top.fill('10');
+  await expect(first).toHaveValue('10');
+  await expect(second).toHaveValue('10');
+  await second.fill('15');
+  await top.fill('20');
+  await expect(first).toHaveValue('20');
+  await expect(second).toHaveValue('15');
+  await panel.getByRole('button', { name: '添加阶段', exact: true }).click();
+  await expect(panel.getByRole('spinbutton', { name: '阶段3作业 CPD', exact: true })).toHaveValue(
+    '20',
+  );
+});
+
 async function screenshot(page: Page, name: string) {
   const directory = 'artifacts/production-plan-audit';
   await mkdir(directory, { recursive: true });
@@ -440,6 +466,7 @@ for (const [mode, desktop] of [
       await expect(tabs.getByRole('tab', { name, exact: true })).toBeVisible();
     await expect(tabs.getByRole('tab', { name: /^(招募策略官|结项)$/ })).toHaveCount(0);
     const panel = await fillPlan(page);
+    await expect(panel).toContainText('合计预计产出 533 条 超过项目量级 500 条');
     await page.evaluate(() => {
       const calls: string[] = [];
       Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
@@ -570,6 +597,13 @@ test('生产计划数字精度、质检配对与日期校验阻止无效确认',
     'true',
   );
   await panel.getByRole('spinbutton', { name: '作业 CPD', exact: true }).fill('10.25');
+  const stageCpd = panel.getByRole('spinbutton', { name: '阶段1作业 CPD', exact: true });
+  await stageCpd.fill('');
+  await panel.getByRole('button', { name: '确认生产计划', exact: true }).click();
+  await expect(stageCpd).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByRole('dialog', { name: '确认生产计划', exact: true })).toHaveCount(0);
+  await expect(panel).toContainText('430.5');
+  await stageCpd.fill('10.25');
   await panel.getByRole('spinbutton', { name: '质检 CPD（选填）', exact: true }).fill('');
   await panel.getByRole('button', { name: '确认生产计划', exact: true }).click();
   await expect(

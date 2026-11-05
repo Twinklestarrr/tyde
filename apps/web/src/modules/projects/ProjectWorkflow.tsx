@@ -19,6 +19,25 @@ export function projectNodeLabel(code: string | null) {
   return stages.find(([value]) => value === code)?.[1] ?? '待确认阶段';
 }
 
+/** 旧版未到达的流程页签仅展示前置提示，不挂载其查询和写入面板。 */
+export function ProjectStageContent({
+  currentNodeCode,
+  stage,
+  children,
+}: {
+  currentNodeCode: string | null;
+  stage: string;
+  children: ReactNode;
+}) {
+  const current = stages.findIndex(([code]) => code === currentNodeCode);
+  const target = stages.findIndex(([code]) => code === stage);
+  return current >= target && target >= 0 ? (
+    children
+  ) : (
+    <EmptyState title={`请先完成上一节点「${stages[target - 1]?.[1] ?? '前置流程'}」`} />
+  );
+}
+
 /** 卡片支线是当前待办，不能被项目主线进度覆盖。 */
 export function projectCardNode(
   card: Pick<NavigatorProjectCard, 'branchNodeCode' | 'currentNodeCode'>,
@@ -48,12 +67,20 @@ const navigatorTabs = [
 /** 本路由只接入领航员；其他角色的工作台按各自职责单独迁移。 */
 export function NavigatorProjectWorkflow({
   currentNodeCode,
+  mainNodeCode = currentNodeCode,
   recruitment,
+  exam,
+  training,
+  production,
   tab,
   onTabChange,
 }: {
   currentNodeCode: string | null;
+  mainNodeCode?: string | null;
   recruitment: ReactNode;
+  exam?: ReactNode;
+  training?: ReactNode;
+  production?: ReactNode;
   tab: string;
   onTabChange: (tab: string) => void;
 }) {
@@ -81,15 +108,41 @@ export function NavigatorProjectWorkflow({
           </TabsTrigger>
         ))}
       </TabsList>
-      <TabsContent value="RECRUIT_PROJECT_MANAGER">{recruitment}</TabsContent>
-      {navigatorTabs.slice(1).map((code) => (
-        <TabsContent key={code} value={code}>
-          <EmptyState
-            title={`${projectNodeLabel(code)}入口暂未开放`}
-            description="可点击“查看项目详情”查看项目资料。"
-          />
-        </TabsContent>
-      ))}
+      <TabsContent value="RECRUIT_PROJECT_MANAGER">
+        <ProjectStageContent currentNodeCode={mainNodeCode} stage="RECRUIT_PROJECT_MANAGER">
+          {recruitment}
+        </ProjectStageContent>
+      </TabsContent>
+      <TabsContent value="ENTRANCE_EXAM">
+        <ProjectStageContent currentNodeCode={mainNodeCode} stage="ENTRANCE_EXAM">
+          {exam ?? (
+            <EmptyState
+              title="准入考试入口暂未开放"
+              description="可点击“查看项目详情”查看项目资料。"
+            />
+          )}
+        </ProjectStageContent>
+      </TabsContent>
+      <TabsContent value="STANDARD_TRAINING">
+        <ProjectStageContent currentNodeCode={mainNodeCode} stage="STANDARD_TRAINING">
+          {training ?? (
+            <EmptyState
+              title="标准与培训入口暂未开放"
+              description="可点击“查看项目详情”查看项目资料。"
+            />
+          )}
+        </ProjectStageContent>
+      </TabsContent>
+      <TabsContent value="PRODUCTION_TASK">
+        <ProjectStageContent currentNodeCode={mainNodeCode} stage="PRODUCTION_TASK">
+          {production ?? (
+            <EmptyState
+              title="生产任务入口暂未开放"
+              description="可点击“查看项目详情”查看项目资料。"
+            />
+          )}
+        </ProjectStageContent>
+      </TabsContent>
     </Tabs>
   );
 }

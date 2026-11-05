@@ -1,4 +1,7 @@
 import type * as Exam from '@tyde/shared';
+import type * as Personnel from '@tyde/shared';
+import type * as Production from '@tyde/shared';
+import type * as Board from '@tyde/shared';
 import {
   API_PREFIX,
   ApiError,
@@ -8,6 +11,9 @@ import {
   PROJECT_ATTACHMENT_MAX_BYTES,
   PROJECT_ATTACHMENT_EXTENSIONS,
   ENTRANCE_EXAM_ANSWER_MAX_BYTES,
+  PRODUCTION_REQUEST_MAX_BYTES,
+  PRODUCTION_QUALITY_REQUEST_MAX_BYTES,
+  PRODUCTION_REPORT_REQUEST_MAX_BYTES,
   BUSINESS_ROLES,
   type AuthApi,
   type ApiFailure,
@@ -39,6 +45,12 @@ import {
   type ProjectProductionPlanInput,
   type ProjectStandardMaterials,
   type ProjectStandardMaterialsInput,
+  type ProjectExpertRecruitmentHandlerCandidate,
+  type ProjectExpertRecruitmentDetail,
+  type ProjectExpertRecruitmentCandidate,
+  type ProjectExpertRecruitmentCandidatesInput,
+  type ProjectExpertRecruitmentCandidatesPage,
+  type ProjectExpertRecruitmentSubmitInput,
   type ProjectCategory,
   type ProjectRequester,
   type ProjectDraft,
@@ -58,6 +70,10 @@ import {
   type WorkbenchAttendanceApplicationResult,
   type WorkbenchScheduleResult,
   type WorkbenchAttendanceUpdateResult,
+  type AttendanceClockQuery,
+  type AttendanceClockContext,
+  type AttendanceClockInput,
+  type AttendanceClockResult,
   type ImageUploadResult,
   type BusinessLicenseUploadResult,
   type BusinessRole,
@@ -1003,6 +1019,763 @@ export function createHttpAuth(
         message: '请填写标准正文或链接，链接最多2000字符，附件最多20个',
       });
   }
+  function recruitmentInputError(): never {
+    throw new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: '招募参数不合法，请核对项目、接单主体、生产量级、人数及补招来源。',
+    });
+  }
+  const recruitmentNumber = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const recruitmentSubjectTypes = ['INDIVIDUAL', 'ORGANIZATION'];
+  function recruitmentUser(value: unknown) {
+    return (
+      record(value) &&
+      uuid(value.userId) &&
+      strings(value, ['uid', 'name']) &&
+      strings(value, ['avatarUrl'], true)
+    );
+  }
+  function recruitmentDetail(value: unknown, projectId: number): ProjectExpertRecruitmentDetail {
+    if (
+      !record(value) ||
+      value.projectId !== projectId ||
+      !strings(value, ['projectName', 'quantityUnit'], true) ||
+      !(value.projectQuantity === null || recruitmentNumber(value.projectQuantity)) ||
+      !inEnum(value.currentNodeCode, projectNodes, true) ||
+      !(value.primaryManager === null || recruitmentUser(value.primaryManager)) ||
+      !(value.handler === null || recruitmentUser(value.handler)) ||
+      !inEnum(value.currentOperatorRole, ['PRIMARY_MANAGER', 'EXPERT_RECRUITMENT_HANDLER']) ||
+      value.canChangeHandler !== (value.currentOperatorRole === 'PRIMARY_MANAGER') ||
+      !record(value.summary) ||
+      !['activeAssignmentCount', 'pendingAcceptanceCount', 'acceptedCount', 'rejectedCount'].every(
+        (key) => integer((value.summary as Record<string, unknown>)[key]),
+      ) ||
+      !recruitmentNumber(value.summary.assignedProductionRequirement) ||
+      !recruitmentNumber(value.summary.remainingProductionRequirement)
+    )
+      invalidResponse();
+    return value as unknown as ProjectExpertRecruitmentDetail;
+  }
+  function recruitmentCandidate(value: unknown): ProjectExpertRecruitmentCandidate {
+    if (
+      !record(value) ||
+      !uuid(value.subjectId) ||
+      !inEnum(value.subjectType, recruitmentSubjectTypes) ||
+      !strings(
+        value,
+        [
+          'realName',
+          'nickname',
+          'organizationName',
+          'avatarUrl',
+          'supervisorName',
+          'supervisorNickname',
+          'description',
+        ],
+        true,
+      ) ||
+      !(
+        value.assignment === null ||
+        (record(value.assignment) &&
+          projectPlanId(value.assignment.assignmentId) &&
+          inEnum(value.assignment.status, [
+            'PENDING_ACCEPTANCE',
+            'ACCEPTED',
+            'REJECTED',
+            'REPLACED',
+          ]) &&
+          (value.assignment.productionRequirement === null ||
+            recruitmentNumber(value.assignment.productionRequirement)) &&
+          (value.assignment.operatorHeadcount === null ||
+            projectPlanId(value.assignment.operatorHeadcount)) &&
+          (value.assignment.inspectorHeadcount === null ||
+            projectPlanId(value.assignment.inspectorHeadcount)))
+      ) ||
+      value.availableAction !==
+        (value.assignment === null
+          ? 'RECRUIT'
+          : (value.assignment as Record<string, unknown>).status === 'REJECTED'
+            ? 'RECRUIT_AGAIN'
+            : 'NONE')
+    )
+      invalidResponse();
+    return value as unknown as ProjectExpertRecruitmentCandidate;
+  }
+  function recruitmentQuery(input: ProjectExpertRecruitmentCandidatesInput) {
+    if (
+      !record(input) ||
+      !onlyKeys(input, ['projectId', 'subjectType', 'keyword', 'current', 'size']) ||
+      !projectPlanId(input.projectId) ||
+      (input.subjectType !== undefined && !inEnum(input.subjectType, recruitmentSubjectTypes)) ||
+      (input.keyword !== undefined &&
+        (typeof input.keyword !== 'string' || input.keyword.length > 100)) ||
+      (input.current !== undefined && !projectPlanId(input.current)) ||
+      (input.size !== undefined && (!integer(input.size, 1) || input.size > 100))
+    )
+      recruitmentInputError();
+    return new URLSearchParams({
+      projectId: String(input.projectId),
+      ...(input.subjectType === undefined ? {} : { subjectType: input.subjectType }),
+      ...(input.keyword === undefined ? {} : { keyword: input.keyword }),
+      ...(input.current === undefined ? {} : { current: String(input.current) }),
+      ...(input.size === undefined ? {} : { size: String(input.size) }),
+    });
+  }
+  function recruitmentInput(input: ProjectExpertRecruitmentSubmitInput) {
+    if (
+      !record(input) ||
+      !onlyKeys(input, ['projectId', 'assignments']) ||
+      !projectPlanId(input.projectId) ||
+      !Array.isArray(input.assignments) ||
+      !input.assignments.length ||
+      input.assignments.length > 100 ||
+      !input.assignments.every(
+        (item) =>
+          record(item) &&
+          onlyKeys(item, [
+            'subjectType',
+            'subjectId',
+            'productionRequirement',
+            'operatorHeadcount',
+            'inspectorHeadcount',
+            'sourceRejectedAssignmentId',
+          ]) &&
+          inEnum(item.subjectType, recruitmentSubjectTypes) &&
+          uuid(item.subjectId) &&
+          typeof item.productionRequirement === 'number' &&
+          Number.isFinite(item.productionRequirement) &&
+          item.productionRequirement >= 0.0001 &&
+          item.productionRequirement < 1e16 &&
+          /^\d{1,16}(?:\.\d{1,4})?$/.test(String(item.productionRequirement)) &&
+          projectPlanId(item.operatorHeadcount) &&
+          (item.inspectorHeadcount == null || projectPlanId(item.inspectorHeadcount)) &&
+          (item.sourceRejectedAssignmentId == null ||
+            projectPlanId(item.sourceRejectedAssignmentId)),
+      )
+    )
+      recruitmentInputError();
+    const subjects = input.assignments.map(
+      (item) => `${item.subjectType}:${item.subjectId.toLowerCase()}`,
+    );
+    const sources = input.assignments.flatMap((item) =>
+      item.sourceRejectedAssignmentId == null ? [] : [item.sourceRejectedAssignmentId],
+    );
+    if (new Set(subjects).size !== subjects.length || new Set(sources).size !== sources.length)
+      recruitmentInputError();
+  }
+  function personnelInputError(): never {
+    throw new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: '人员管理参数不合法，请核对成员、日期、筛选及当前审批版本。',
+    });
+  }
+  function personnelInput(value: unknown, keys: string[]) {
+    if (!record(value) || !onlyKeys(value, keys) || !projectPlanId(value.projectId))
+      personnelInputError();
+    return value;
+  }
+  function personnelPagination(value: Record<string, unknown>) {
+    if (
+      (value.current !== undefined && !projectPlanId(value.current)) ||
+      (value.size !== undefined && (!integer(value.size, 1) || Number(value.size) > 100))
+    )
+      personnelInputError();
+  }
+  const personnelStatuses = [
+    'PENDING_CONFIRM',
+    'PENDING_ENTRY',
+    'ACTIVE',
+    'ENTRY_DECLINED',
+    'PENDING_EXIT',
+    'PENDING_TRANSFER',
+    'LEFT',
+    'REMOVED',
+  ];
+  const movementTypes = ['REMOVAL', 'TRANSFER'];
+  const movementStatuses = [
+    'PROCESSING',
+    'WAITING_EFFECTIVE',
+    'EFFECTIVE',
+    'REJECTED',
+    'WITHDRAWN',
+  ];
+  const movementActions = [
+    'WITHDRAW',
+    'APPROVE',
+    'REJECT',
+    'ACCEPT_TRANSFER',
+    'REJECT_TRANSFER',
+    'TAKE_TARGET_EXAM',
+  ];
+  const personnelList = (value: unknown, valid: (item: unknown) => boolean, maximum: number) =>
+    value == null || (Array.isArray(value) && value.length <= maximum && value.every(valid));
+  const personnelIds = (value: unknown) =>
+    Array.isArray(value) && value.length > 0 && value.length <= 100 && value.every(projectPlanId);
+  const personnelStamp = (value: unknown, milliseconds = false) =>
+    value === null ||
+    (milliseconds
+      ? typeof value === 'string' && /\.\d{3}$/.test(value) && attendanceTime(value.slice(0, -4))
+      : attendanceTime(value));
+  const personnelDay = (value: unknown) => value === null || attendanceDate(value);
+  function personnelPage<T>(
+    value: unknown,
+    input: Personnel.ProjectPersonnelPagination,
+    parse: (row: unknown) => T,
+  ): Personnel.ProjectPersonnelPage<T> {
+    const data = page(value, parse);
+    if (
+      data.current !== (input.current ?? 1) ||
+      data.size !== (input.size ?? 20) ||
+      data.pages !== Math.ceil(data.total / data.size) ||
+      data.records.length > data.size
+    )
+      invalidResponse();
+    return data;
+  }
+  function personnelMember(value: unknown): Personnel.ProjectPersonnelMember {
+    if (
+      !record(value) ||
+      !projectPlanId(value.memberId) ||
+      !uuid(value.userId) ||
+      !strings(value, ['uid', 'displayName', 'statusName']) ||
+      !strings(value, ['avatarUrl', 'organizationName', 'responsibleUserName'], true) ||
+      !inEnum(value.accountType, ['INDIVIDUAL', 'ORGANIZATION']) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !(value.responsibleUserId === null || uuid(value.responsibleUserId)) ||
+      !inEnum(value.orgPosition, ['OWNER', 'ADMIN', 'MEMBER'], true) ||
+      !inEnum(value.employmentType, ['FULL_TIME', 'PART_TIME'], true) ||
+      !Array.isArray(value.projectOwners) ||
+      !value.projectOwners.every(
+        (owner) =>
+          record(owner) &&
+          uuid(owner.userId) &&
+          strings(owner, ['name']) &&
+          strings(owner, ['avatarUrl'], true),
+      ) ||
+      !['admittedAt', 'joinedAt', 'leftAt'].every((key) => personnelStamp(value[key])) ||
+      !['plannedEntryDate', 'plannedLeaveDate'].every((key) => personnelDay(value[key])) ||
+      !inEnum(value.entryDecision, ['YES', 'NO'], true) ||
+      !inEnum(value.status, personnelStatuses) ||
+      !Array.isArray(value.allowedActions) ||
+      !value.allowedActions.every((action) => action === 'SET_ENTRY')
+    )
+      invalidResponse();
+    return value as unknown as Personnel.ProjectPersonnelMember;
+  }
+  function personnelAttendance(
+    value: unknown,
+    month: string,
+  ): Personnel.ProjectPersonnelAttendanceMember {
+    if (
+      !record(value) ||
+      !projectPlanId(value.memberId) ||
+      !uuid(value.userId) ||
+      !strings(value, ['uid', 'displayName']) ||
+      !strings(value, ['organizationName'], true) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !record(value.summary) ||
+      ![
+        'scheduledCount',
+        'presentCount',
+        'lateCount',
+        'earlyLeaveCount',
+        'leaveCount',
+        'absentCount',
+      ].every((key) => integer((value.summary as Record<string, unknown>)[key])) ||
+      !Array.isArray(value.days) ||
+      !value.days.every(
+        (day) =>
+          record(day) &&
+          attendanceDate(day.date) &&
+          day.date.startsWith(month + '-') &&
+          inEnum(day.scheduleStatus, ['ACTIVE', 'CANCELLED']) &&
+          personnelStamp(day.shiftStartAt) &&
+          personnelStamp(day.shiftEndAt) &&
+          inEnum(day.finalAttendanceStatus, attendanceStatuses, true) &&
+          personnelStamp(day.firstClockInAt, true) &&
+          personnelStamp(day.lastClockOutAt, true),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Personnel.ProjectPersonnelAttendanceMember;
+  }
+  function memberPerformanceKey(value: unknown): value is string {
+    return (
+      typeof value === 'string' &&
+      value.length <= 512 &&
+      value.startsWith('member-performance/') &&
+      !/[\\\p{Cc}]/u.test(value) &&
+      !value.split('/').some((part) => !part || part === '.' || part === '..')
+    );
+  }
+  function personnelPerformance(value: unknown): Personnel.ProjectMemberPerformanceRecord {
+    if (
+      !record(value) ||
+      !projectPlanId(value.performanceId) ||
+      !attendanceDate(value.recordDate) ||
+      !strings(value, ['content', 'recordedByName']) ||
+      !personnelStamp(value.createdAt) ||
+      !Array.isArray(value.attachmentIds) ||
+      value.attachmentIds.length > 10 ||
+      !value.attachmentIds.every(uuid) ||
+      !Array.isArray(value.attachments) ||
+      value.attachments.length > 10 ||
+      !value.attachments.every(
+        (file) =>
+          record(file) &&
+          uuid(file.fileId) &&
+          (value.attachmentIds as unknown[]).includes(file.fileId) &&
+          memberPerformanceKey(file.objectKey) &&
+          strings(file, ['fileName']),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Personnel.ProjectMemberPerformanceRecord;
+  }
+  function personnelMovement(value: unknown): Personnel.PersonnelMovement {
+    if (
+      !record(value) ||
+      !['movementId', 'memberId', 'sourceProjectId'].every((key) => projectPlanId(value[key])) ||
+      !strings(value, [
+        'movementNo',
+        'statusName',
+        'uid',
+        'displayName',
+        'reason',
+        'initiatorName',
+      ]) ||
+      !strings(
+        value,
+        [
+          'organizationName',
+          'sourceProjectName',
+          'targetProjectName',
+          'examStatus',
+          'flowNo',
+          'flowStatus',
+        ],
+        true,
+      ) ||
+      !uuid(value.userId) ||
+      !uuid(value.initiatedBy) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !inEnum(value.accountType, ['INDIVIDUAL', 'ORGANIZATION']) ||
+      !inEnum(value.movementType, movementTypes) ||
+      !inEnum(value.status, movementStatuses) ||
+      !(value.targetProjectId === null || projectPlanId(value.targetProjectId)) ||
+      !(value.examAttemptId === null || projectPlanId(value.examAttemptId)) ||
+      !(value.flowVersionNo === null || attendanceVersion(value.flowVersionNo)) ||
+      !(value.currentNode === null || projectPlanId(value.currentNode)) ||
+      !attendanceDate(value.plannedEffectiveDate) ||
+      !attendanceTime(value.initiatedAt) ||
+      !['effectiveAt', 'rejectedAt', 'withdrawnAt', 'examSubmittedAt', 'examCancelledAt'].every(
+        (key) => personnelStamp(value[key]),
+      ) ||
+      !Array.isArray(value.approvalSteps) ||
+      !value.approvalSteps.every(
+        (step) =>
+          record(step) &&
+          uuid(step.nodeId) &&
+          projectPlanId(step.nodeSeq) &&
+          strings(step, ['nodeCode', 'nodeName', 'nodeStatus']) &&
+          strings(step, ['operatorName', 'action', 'actionComment'], true) &&
+          (step.operatorId === null || uuid(step.operatorId)) &&
+          personnelStamp(step.actionAt) &&
+          attendanceVersion(step.nodeVersionNo),
+      ) ||
+      !Array.isArray(value.allowedActions) ||
+      !value.allowedActions.every((action) => inEnum(action, movementActions))
+    )
+      invalidResponse();
+    if (
+      value.actionableNodeId != null &&
+      (!uuid(value.actionableNodeId) ||
+        !value.allowedActions.some((action) => action === 'APPROVE' || action === 'REJECT') ||
+        value.approvalSteps.filter(
+          (step) =>
+            step.nodeId === value.actionableNodeId &&
+            step.nodeSeq === value.currentNode &&
+            step.nodeStatus === 'PENDING' &&
+            inEnum(step.nodeCode, ['SOURCE_ORG_OWNER', 'TARGET_MANAGER', 'TARGET_ORG_OWNER']),
+        ).length !== 1)
+    )
+      invalidResponse();
+    return value as unknown as Personnel.PersonnelMovement;
+  }
+  function productionInputError(): never {
+    throw new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: '生产任务参数不合法，请核对任务、报量、精确数量和日期。',
+    });
+  }
+  function productionInput(value: unknown, keys: string[]) {
+    if (!record(value) || !onlyKeys(value, keys) || !projectPlanId(value.projectId))
+      productionInputError();
+  }
+  function productionQuery(
+    input: Production.ProductionTaskQuery,
+    keys: string[] = [],
+    keywordMax = 100,
+  ) {
+    productionInput(input, ['projectId', 'keyword', 'current', 'size', ...keys]);
+    personnelPagination(input as unknown as Record<string, unknown>);
+    if (!examText(input.keyword, keywordMax)) productionInputError();
+  }
+  function productionRange(start: unknown, end: unknown, maximumDays?: number) {
+    if ((start != null && !attendanceDate(start)) || (end != null && !attendanceDate(end)))
+      productionInputError();
+    if (
+      typeof start === 'string' &&
+      typeof end === 'string' &&
+      (start > end ||
+        (maximumDays !== undefined &&
+          Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z') >
+            (maximumDays - 1) * 86400000))
+    )
+      productionInputError();
+  }
+  function productionUnits(value: unknown, allowZero = false): bigint {
+    if (typeof value !== 'string' && (typeof value !== 'number' || !Number.isFinite(value)))
+      productionInputError();
+    let text = String(value);
+    // Number的科学计数法按自身十进制表示展开，与后端Decimal(number).toFixed()一致，不舍入。
+    if (typeof value === 'number' && /e/i.test(text)) {
+      const match = /^(\d+)(?:\.(\d+))?e([+-]?\d+)$/i.exec(text);
+      if (!match) productionInputError();
+      const digits = match[1]! + (match[2] ?? '');
+      const position = match[1]!.length + Number(match[3]);
+      if (position > 26 || position < -4) productionInputError();
+      text =
+        position <= 0
+          ? '0.' + '0'.repeat(-position) + digits
+          : position >= digits.length
+            ? digits + '0'.repeat(position - digits.length)
+            : digits.slice(0, position) + '.' + digits.slice(position);
+    }
+    if (!/^\d{1,26}(?:\.\d{1,4})?$/.test(text)) productionInputError();
+    const [whole = '', fraction = ''] = text.split('.');
+    const units = BigInt(whole) * 10000n + BigInt(fraction.padEnd(4, '0'));
+    if (!allowZero && units === 0n) productionInputError();
+    return units;
+  }
+  function productionBody(value: unknown, maximum = PRODUCTION_REQUEST_MAX_BYTES) {
+    if (new TextEncoder().encode(JSON.stringify(value)).byteLength > maximum)
+      throw new ApiError(413, {
+        code: 'PAYLOAD_TOO_LARGE',
+        message: '本次生产数据超过可提交大小，请减少单次内容。',
+      });
+  }
+  const productionTaskStatuses = [
+    'IN_PROGRESS',
+    'PENDING_ACCEPTANCE',
+    'REWORK_REQUIRED',
+    'ACCEPTED',
+  ];
+  const productionSources = ['MANUAL', 'WORK_SYSTEM'];
+  const productionReviewStatuses = ['PENDING', 'VERIFIED', 'RETURNED'];
+  function productionMember(value: unknown): Production.ProductionTaskMember {
+    if (
+      !record(value) ||
+      !projectPlanId(value.memberId) ||
+      !uuid(value.userId) ||
+      !strings(value, ['uid', 'displayName']) ||
+      !inEnum(value.subjectType, ['INDIVIDUAL', 'ORGANIZATION']) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !strings(value, ['organizationName'], true) ||
+      !inEnum(value.assignmentType, ['DESIGNATED', 'CLAIMED'], true) ||
+      !personnelStamp(value.assignedAt)
+    )
+      invalidResponse();
+    return value as unknown as Production.ProductionTaskMember;
+  }
+  function productionTask(value: unknown): Production.ProductionTask {
+    if (
+      !record(value) ||
+      !projectPlanId(value.subtaskId) ||
+      !strings(value, ['subtaskNo', 'subtaskName', 'quantityUnit']) ||
+      !inEnum(value.status, productionTaskStatuses) ||
+      !inEnum(value.distributionMode, ['POOL', 'DESIGNATED']) ||
+      !integer(value.assigneeCount) ||
+      !integer(value.pendingReportCount) ||
+      !Array.isArray(value.assigneeNames) ||
+      value.assigneeNames.length > 3 ||
+      !value.assigneeNames.every((name) => typeof name === 'string') ||
+      !attendanceDate(value.expectedDeliveryDate) ||
+      !recruitmentNumber(value.expectedQuantity) ||
+      !personnelDay(value.actualDeliveryDate) ||
+      !(value.actualQuantity === null || recruitmentNumber(value.actualQuantity)) ||
+      !(value.reportedQuantity === null || recruitmentNumber(value.reportedQuantity)) ||
+      !strings(
+        value,
+        [
+          'quantityAdjustmentRemark',
+          'submittedByName',
+          'reviewedByName',
+          'rejectReason',
+          'operationHint',
+        ],
+        true,
+      ) ||
+      !personnelStamp(value.submittedAt) ||
+      !personnelStamp(value.reviewedAt) ||
+      !Array.isArray(value.allowedActions) ||
+      !value.allowedActions.every((action) =>
+        inEnum(action, ['CHECK_DATA', 'CORRECT_REPORT', 'SUBMIT_ACCEPTANCE', 'ACCEPT', 'REJECT']),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Production.ProductionTask;
+  }
+  function productionReport(
+    value: unknown,
+    subtaskId: number | null,
+  ): Production.ProductionOutputReport {
+    if (
+      !record(value) ||
+      !projectPlanId(value.reportId) ||
+      value.subtaskId !== subtaskId ||
+      !projectPlanId(value.memberId) ||
+      !uuid(value.userId) ||
+      !strings(value, ['uid', 'displayName', 'quantityUnit']) ||
+      !attendanceDate(value.reportDate) ||
+      !recruitmentNumber(value.quantity) ||
+      !strings(value, ['remark', 'returnReason'], true) ||
+      !inEnum(value.reviewStatus, productionReviewStatuses) ||
+      !personnelStamp(value.updatedAt) ||
+      !Array.isArray(value.allowedActions) ||
+      !value.allowedActions.every((action) => inEnum(action, ['VERIFY', 'RETURN', 'SAVE_REPORT']))
+    )
+      invalidResponse();
+    return value as unknown as Production.ProductionOutputReport;
+  }
+  function personnelProduction(value: unknown): Production.PersonnelProductionRow {
+    if (
+      !record(value) ||
+      !projectPlanId(value.memberId) ||
+      !uuid(value.userId) ||
+      !strings(value, ['uid', 'displayName', 'quantityUnit']) ||
+      !inEnum(value.accountType, ['INDIVIDUAL', 'ORGANIZATION']) ||
+      !(value.organizationId === null || uuid(value.organizationId)) ||
+      !strings(value, ['organizationName', 'remarks'], true) ||
+      !attendanceDate(value.reportDate) ||
+      ![
+        'quantity',
+        'recent7DayCpd',
+        'inspectedQuantity',
+        'qualifiedQuantity',
+        'unqualifiedQuantity',
+      ].every((key) => recruitmentNumber(value[key])) ||
+      !(
+        value.accuracyRate === null ||
+        (recruitmentNumber(value.accuracyRate) && Number(value.accuracyRate) <= 100)
+      ) ||
+      !Array.isArray(value.dataSources) ||
+      !value.dataSources.every((source) => inEnum(source, productionSources)) ||
+      !integer(value.qualityRecordCount) ||
+      typeof value.hasManualQualityEntry !== 'boolean' ||
+      !Array.isArray(value.allowedActions) ||
+      !value.allowedActions.every((action) =>
+        inEnum(action, ['SAVE_QUALITY', 'CREATE_PERFORMANCE']),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Production.PersonnelProductionRow;
+  }
+  function productionQuality(
+    value: unknown,
+    input: Production.PersonnelQualityKey,
+  ): Production.PersonnelQualityContext {
+    if (
+      !record(value) ||
+      value.memberId !== input.memberId ||
+      value.reportDate !== input.reportDate ||
+      !strings(value, ['displayName']) ||
+      !Array.isArray(value.items) ||
+      !value.items.every(
+        (item) =>
+          record(item) &&
+          projectPlanId(item.outputReportId) &&
+          (item.subtaskId === null || projectPlanId(item.subtaskId)) &&
+          strings(item, ['subtaskName', 'unqualifiedReason', 'operatorName'], true) &&
+          recruitmentNumber(item.quantity) &&
+          strings(item, ['quantityUnit']) &&
+          inEnum(item.reportDataSource, productionSources) &&
+          (item.qualityId === null || projectPlanId(item.qualityId)) &&
+          (item.inspectedQuantity === null || recruitmentNumber(item.inspectedQuantity)) &&
+          (item.qualifiedQuantity === null || recruitmentNumber(item.qualifiedQuantity)) &&
+          personnelStamp(item.operationTime) &&
+          inEnum(item.qualityDataSource, productionSources, true) &&
+          typeof item.editable === 'boolean',
+      )
+    )
+      invalidResponse();
+    return value as unknown as Production.PersonnelQualityContext;
+  }
+  function boardInput(value: unknown, keys: string[], withProject = true) {
+    if (
+      !record(value) ||
+      !onlyKeys(value, keys) ||
+      (withProject && !projectPlanId(value.projectId))
+    )
+      throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '项目看板查询参数不合法' });
+  }
+  const boardNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
+  const boardDay = (value: unknown): value is string => {
+    if (typeof value !== 'string' || !/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const date = new Date(value + 'T00:00:00Z');
+    return Number.isFinite(+date) && date.toISOString().slice(0, 10) === value;
+  };
+  const boardTime = (value: unknown) =>
+    value === null ||
+    (typeof value === 'string' &&
+      / \d{2}:\d{2}:\d{2}$/.test(value) &&
+      boardDay(value.slice(0, 10)) &&
+      /^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(value.slice(11)));
+  function boardProject(value: unknown): Board.ProjectBoardProject {
+    if (
+      !record(value) ||
+      !projectPlanId(value.projectId) ||
+      !(value.assignmentId === null || projectPlanId(value.assignmentId)) ||
+      !strings(value, ['projectNo', 'projectName', 'requesterName', 'currentNodeCode']) ||
+      !strings(value, ['currentNodeName', 'quantityUnit'], true) ||
+      !boardTime(value.deadline) ||
+      typeof value.needWrittenExam !== 'boolean' ||
+      !['primaryProjectManager', 'expertRecruitmentHandler'].every(
+        (key) => value[key] === undefined || typeof value[key] === 'boolean',
+      ) ||
+      !['progressQuantity', 'targetQuantity', 'progressPercent'].every((key) =>
+        boardNumber(value[key]),
+      )
+    )
+      invalidResponse();
+    return value as unknown as Board.ProjectBoardProject;
+  }
+  function boardDetail(value: unknown, projectId: number): Board.ProjectBoardDetail {
+    if (
+      !record(value) ||
+      value.projectId !== projectId ||
+      !strings(value, ['projectNo', 'requesterName']) ||
+      !uuid(value.requesterId) ||
+      !inEnum(value.requesterType, ['INDIVIDUAL', 'ORGANIZATION']) ||
+      !strings(
+        value,
+        [
+          'projectName',
+          'projectDescription',
+          'categoryLevel1Name',
+          'categoryLevel2Name',
+          'quantityUnit',
+          'experienceRequirement',
+          'workSummary',
+          'specialRequirement',
+          'mandatoryRequirement',
+          'standardContent',
+          'standardLink',
+          'currentNodeCode',
+        ],
+        true,
+      ) ||
+      !['categoryLevel1Id', 'categoryLevel2Id', 'requiredHeadcount'].every(
+        (key) => value[key] === null || projectPlanId(value[key]),
+      ) ||
+      !(value.projectQuantity === null || boardNumber(value.projectQuantity)) ||
+      !['deadline', 'publishedAt', 'closedAt'].every((key) => boardTime(value[key])) ||
+      !inEnum(value.status, ['DRAFT', 'PUBLISHED']) ||
+      !inEnum(value.difficultyLevel, ['EASY', 'MEDIUM', 'HARD'], true) ||
+      !inEnum(
+        value.educationRequirement,
+        ['PHD', 'MASTER', 'BACHELOR', 'COLLEGE', 'BELOW_COLLEGE'],
+        true,
+      ) ||
+      !inEnum(value.employmentType, ['FULL_TIME', 'PART_TIME', 'UNLIMITED'], true) ||
+      !Array.isArray(value.categoryLevel3Ids) ||
+      !value.categoryLevel3Ids.every(projectPlanId) ||
+      !Array.isArray(value.categoryLevel3Names) ||
+      !value.categoryLevel3Names.every((name) => typeof name === 'string') ||
+      value.categoryLevel3Ids.length !== value.categoryLevel3Names.length
+    )
+      invalidResponse();
+    return value as unknown as Board.ProjectBoardDetail;
+  }
+  function boardSubtask(value: unknown): Board.ProjectBoardSubtask {
+    if (
+      !record(value) ||
+      !projectPlanId(value.subtaskId) ||
+      !strings(value, ['subtaskNo', 'subtaskName', 'quantityUnit']) ||
+      !strings(value, ['statusName'], true) ||
+      !inEnum(value.status, productionTaskStatuses) ||
+      !inEnum(value.distributionMode, ['POOL', 'DESIGNATED']) ||
+      !boardDay(value.plannedStartDate) ||
+      !boardDay(value.expectedDeliveryDate) ||
+      !(value.expectedQuantityToDate === null || boardNumber(value.expectedQuantityToDate)) ||
+      !['reportedQuantity', 'targetQuantity', 'progressPercent'].every((key) =>
+        boardNumber(value[key]),
+      ) ||
+      !booleans(value, ['progressLowRisk', 'overdueRisk'])
+    )
+      invalidResponse();
+    return value as unknown as Board.ProjectBoardSubtask;
+  }
+  function boardRiskCard(
+    value: unknown,
+    codes: string[],
+    projectId?: number,
+  ): Board.ProjectBoardRiskCard {
+    if (
+      !record(value) ||
+      !integer(value.pendingCount) ||
+      !integer(value.urgentCount) ||
+      !Array.isArray(value.items) ||
+      value.pendingCount !== value.items.length ||
+      !value.items.every(
+        (item) =>
+          record(item) &&
+          inEnum(item.code, codes) &&
+          inEnum(item.severity, ['URGENT', 'WARNING']) &&
+          projectPlanId(item.targetId) &&
+          (projectId === undefined || item.targetId === projectId) &&
+          strings(item, ['message']) &&
+          strings(item, ['targetName'], true) &&
+          (item.overdueDays === null || integer(item.overdueDays)),
+      ) ||
+      value.urgentCount !== value.items.filter((item) => item.severity === 'URGENT').length
+    )
+      invalidResponse();
+    return value as unknown as Board.ProjectBoardRiskCard;
+  }
+  function boardTrends(
+    value: unknown,
+    input: Board.ProjectBoardTrendsInput,
+  ): Board.ProjectBoardTrends {
+    const start = Date.parse(input.startDate + 'T00:00:00Z');
+    const days = (Date.parse(input.endDate + 'T00:00:00Z') - start) / 86400000 + 1;
+    if (
+      !record(value) ||
+      value.metric !== input.metric ||
+      !inEnum(value.viewScope, ['FULL_PROJECT', 'ORGANIZATION']) ||
+      !Array.isArray(value.dates) ||
+      value.dates.length !== days ||
+      !value.dates.every(
+        (day, i) => day === new Date(start + i * 86400000).toISOString().slice(0, 10),
+      ) ||
+      !Array.isArray(value.series) ||
+      !value.series.every(
+        (row) =>
+          record(row) &&
+          projectPlanId(row.memberId) &&
+          uuid(row.userId) &&
+          strings(row, ['displayName']) &&
+          strings(row, ['quantityUnit'], true) &&
+          Array.isArray(row.values) &&
+          row.values.length === days &&
+          row.values.every((number) => number === null || boardNumber(number)),
+      ) ||
+      new Set(value.series.map((row) => row.memberId)).size !== value.series.length
+    )
+      invalidResponse();
+    return value as unknown as Board.ProjectBoardTrends;
+  }
   function projectCategory(value: unknown): ProjectCategory {
     if (
       !record(value) ||
@@ -1078,7 +1851,10 @@ export function createHttpAuth(
     value: unknown,
     file: File,
     extension: string,
-    directory: 'project-attachment' | 'entrance-exam-attachment' = 'project-attachment',
+    directory:
+      | 'project-attachment'
+      | 'entrance-exam-attachment'
+      | 'member-performance' = 'project-attachment',
   ): ProjectAttachmentUploadResult {
     if (
       !record(value) ||
@@ -1344,6 +2120,119 @@ export function createHttpAuth(
       code: 'VALIDATION_ERROR',
       message: '排班或考勤参数不完整，请检查日期、时段和版本后重试',
     });
+  }
+  function clockQueryInput(input: unknown, keys: string[] = []) {
+    if (
+      !record(input) ||
+      !onlyKeys(input, ['orgId', 'timezone', ...keys]) ||
+      !(input.orgId == null || uuid(input.orgId))
+    )
+      invalidAttendanceInput();
+    scheduleTimezone(input.timezone);
+  }
+  const clockType = (value: unknown) => inEnum(value, ['CLOCK_IN', 'CLOCK_OUT']);
+  const clockStamp = (value: unknown) => personnelStamp(value) || personnelStamp(value, true);
+  const clockScope = (value: unknown, orgId: string | null | undefined) =>
+    orgId == null
+      ? value === null
+      : uuid(value) && String(value).toLowerCase() === orgId.toLowerCase();
+  function clockTimezoneResponse(value: unknown): value is string {
+    if (typeof value !== 'string' || !value.trim() || value.length > 64) return false;
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: value });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function attendanceClockContext(
+    value: unknown,
+    input: AttendanceClockQuery,
+  ): AttendanceClockContext {
+    if (
+      !record(value) ||
+      !clockScope(value.orgId, input.orgId) ||
+      !attendanceDate(value.attendanceDate) ||
+      !attendanceTime(value.serverTime) ||
+      !value.serverTime.startsWith(`${value.attendanceDate} `) ||
+      !(value.scheduleId === null || projectPlanId(value.scheduleId)) ||
+      !inEnum(value.dayType, ['WORK', 'REST'], true) ||
+      (value.scheduleId === null) !== (value.dayType === null) ||
+      !['shiftStartAt', 'shiftEndAt', 'firstClockInAt', 'lastClockOutAt'].every((key) =>
+        clockStamp(value[key]),
+      ) ||
+      (value.scheduleId === null && (value.shiftStartAt !== null || value.shiftEndAt !== null)) ||
+      !['firstClockInAt', 'lastClockOutAt'].every(
+        (key) => value[key] === null || String(value[key]).startsWith(`${value.attendanceDate} `),
+      ) ||
+      typeof value.canClock !== 'boolean' ||
+      (value.canClock ? !clockType(value.nextClockType) : value.nextClockType !== null) ||
+      (value.canClock &&
+        (value.firstClockInAt !== null || value.lastClockOutAt !== null) &&
+        value.nextClockType !== 'CLOCK_OUT') ||
+      !strings(value, ['warning'], true) ||
+      value.buttonText !==
+        (value.nextClockType === 'CLOCK_IN'
+          ? '上班打卡'
+          : value.nextClockType === 'CLOCK_OUT'
+            ? '下班打卡'
+            : '暂不可打卡')
+    )
+      invalidResponse();
+    return value as unknown as AttendanceClockContext;
+  }
+  function attendanceClockResult(
+    value: unknown,
+    input: AttendanceClockInput,
+  ): AttendanceClockResult {
+    if (
+      !record(value) ||
+      !projectPlanId(value.eventId) ||
+      typeof value.eventNo !== 'string' ||
+      !/^CLK[0-9A-F]{40}$/.test(value.eventNo) ||
+      !clockScope(value.orgId, input.orgId) ||
+      !(value.orgId === null ? value.memberId === null : uuid(value.memberId)) ||
+      !uuid(value.userId) ||
+      !clockType(value.clockType) ||
+      (input.clockType != null && value.clockType !== input.clockType) ||
+      typeof value.clockAt !== 'string' ||
+      !personnelStamp(value.clockAt, true) ||
+      !clockTimezoneResponse(value.timezone) ||
+      value.sourceType !== 'WORKBENCH_CLICK' ||
+      !record(value.dailyAttendance)
+    )
+      invalidResponse();
+    const daily = value.dailyAttendance;
+    if (
+      !projectPlanId(daily.id) ||
+      !attendanceDate(daily.attendanceDate) ||
+      !value.clockAt.startsWith(`${daily.attendanceDate} `) ||
+      !(daily.scheduleId === null || projectPlanId(daily.scheduleId)) ||
+      !['expectedStartAt', 'expectedEndAt', 'firstClockInAt', 'lastClockOutAt'].every((key) =>
+        clockStamp(daily[key]),
+      ) ||
+      !['firstClockInAt', 'lastClockOutAt'].every(
+        (key) => daily[key] === null || String(daily[key]).startsWith(`${daily.attendanceDate} `),
+      ) ||
+      !inEnum(daily.autoStatus, attendanceStatuses, true) ||
+      !inEnum(daily.finalStatus, attendanceStatuses, true) ||
+      !['lateMinutes', 'earlyLeaveMinutes', 'workedMinutes', 'versionNo'].every((key) =>
+        attendanceVersion(daily[key]),
+      ) ||
+      typeof daily.reviewRequired !== 'boolean' ||
+      !strings(daily, ['reviewReason'], true)
+    )
+      invalidResponse();
+    const boundary = value.clockType === 'CLOCK_IN' ? daily.firstClockInAt : daily.lastClockOutAt;
+    const instant = (stamp: string) => Date.parse(stamp.replace(' ', 'T') + 'Z');
+    if (
+      typeof boundary !== 'string' ||
+      (value.clockType === 'CLOCK_IN'
+        ? instant(boundary) > instant(value.clockAt)
+        : instant(boundary) < instant(value.clockAt))
+    )
+      invalidResponse();
+    return value as unknown as AttendanceClockResult;
   }
   function organizationSchedulesInput(input: OrganizationSchedulesInput) {
     if (
@@ -2918,6 +3807,91 @@ export function createHttpAuth(
         projectId,
       );
     },
+    getProjectWorkbenchStatistics: async (mode) => {
+      if (!inEnum(mode, ['TASK', 'BOARD'])) boardInput(null, [], false);
+      const value = await request(
+        `/projects/workbench/statistics?mode=${mode}`,
+        undefined,
+        'GET',
+        true,
+      );
+      const fields =
+        mode === 'TASK'
+          ? ['pendingTaskCount', 'completedTaskCount', 'involvedProjectCount']
+          : [
+              'totalProjectCount',
+              'startupProjectCount',
+              'assemblyProjectCount',
+              'productionProjectCount',
+            ];
+      if (
+        !record(value) ||
+        value.mode !== mode ||
+        !onlyKeys(value, ['mode', ...fields]) ||
+        !fields.every((key) => integer(value[key]))
+      )
+        invalidResponse();
+      return value as unknown as Board.ProjectWorkbenchStatistics;
+    },
+    listProjectBoardProjects: async (input = {}) => {
+      boardInput(input, ['current', 'size', 'keyword'], false);
+      personnelPagination(input as unknown as Record<string, unknown>);
+      if (!examText(input.keyword, 128)) boardInput(null, [], false);
+      const result = personnelPage(
+        await request('/projects/workbench/board/projects', input, 'POST', true),
+        input,
+        boardProject,
+      );
+      if (new Set(result.records.map((row) => row.projectId)).size !== result.records.length)
+        invalidResponse();
+      return result;
+    },
+    getProjectBoardDetail: async (projectId) => {
+      const input = { projectId };
+      boardInput(input, ['projectId']);
+      return boardDetail(
+        await request('/projects/workbench/board/project-detail', input, 'POST', true),
+        projectId,
+      );
+    },
+    getProjectBoardSubtasks: async (projectId) => {
+      const input = { projectId };
+      boardInput(input, ['projectId']);
+      const value = await request('/projects/workbench/board/subtasks', input, 'POST', true);
+      if (!Array.isArray(value)) invalidResponse();
+      const rows = value.map(boardSubtask);
+      if (new Set(rows.map((row) => row.subtaskId)).size !== rows.length) invalidResponse();
+      return rows;
+    },
+    getProjectBoardRisks: async (projectId) => {
+      const input = { projectId };
+      boardInput(input, ['projectId']);
+      const value = await request('/projects/workbench/board/risks', input, 'POST', true);
+      if (!record(value) || !inEnum(value.viewScope, ['FULL_PROJECT', 'ORGANIZATION']))
+        invalidResponse();
+      return {
+        viewScope: value.viewScope as Board.ProjectBoardViewScope,
+        project: boardRiskCard(value.project, ['PROJECT_OVERDUE'], projectId),
+        subtasks: boardRiskCard(value.subtasks, ['SUBTASK_OVERDUE', 'SUBTASK_PROGRESS_LOW']),
+        members: boardRiskCard(value.members, ['MEMBER_EFFICIENCY', 'MEMBER_QUALITY']),
+      };
+    },
+    getProjectBoardTrends: async (input) => {
+      boardInput(input, ['projectId', 'metric', 'startDate', 'endDate']);
+      if (
+        !inEnum(input.metric, ['QUANTITY', 'ACCURACY', 'CPD']) ||
+        !boardDay(input.startDate) ||
+        !boardDay(input.endDate) ||
+        input.startDate > input.endDate ||
+        Date.parse(input.endDate + 'T00:00:00Z') - Date.parse(input.startDate + 'T00:00:00Z') >
+          365 * 86400000
+      )
+        boardInput(null, [], false);
+      return boardTrends(
+        await request('/projects/workbench/board/trends', input, 'POST', true),
+        input,
+      );
+    },
     getProjectStandardMaterials: async (projectId) => {
       if (!projectPlanId(projectId))
         throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的项目 ID' });
@@ -2969,6 +3943,664 @@ export function createHttpAuth(
         projectId,
         true,
       );
+    },
+    listReportableProductionTasks: async (projectId) => {
+      if (!projectPlanId(projectId)) productionInputError();
+      const data = await request('/production-tasks/reportable-list', { projectId }, 'POST', true);
+      if (
+        !Array.isArray(data) ||
+        !data.every(
+          (row) =>
+            record(row) &&
+            projectPlanId(row.subtaskId) &&
+            strings(row, ['subtaskNo', 'subtaskName', 'quantityUnit']) &&
+            inEnum(row.distributionMode, ['POOL', 'DESIGNATED']),
+        ) ||
+        new Set(data.map((row) => row.subtaskId)).size !== data.length
+      )
+        invalidResponse();
+      return data as Production.ReportableProductionTask[];
+    },
+    saveProductionOutputReports: async (input) => {
+      productionInput(input, ['projectId', 'reports']);
+      if (
+        !Array.isArray(input.reports) ||
+        !input.reports.length ||
+        input.reports.length > 100 ||
+        !input.reports.every(
+          (row) =>
+            record(row) &&
+            onlyKeys(row, ['subtaskId', 'memberId', 'reportDate', 'quantity', 'remark']) &&
+            (row.subtaskId == null || projectPlanId(row.subtaskId)) &&
+            (row.memberId == null || projectPlanId(row.memberId)) &&
+            attendanceDate(row.reportDate) &&
+            examText(row.remark, 1000),
+        )
+      )
+        productionInputError();
+      for (const row of input.reports) productionUnits(row.quantity, true);
+      const keys = input.reports.map((row) =>
+        JSON.stringify([row.subtaskId ?? null, row.memberId ?? null, row.reportDate]),
+      );
+      if (new Set(keys).size !== keys.length) productionInputError();
+      productionBody(input, PRODUCTION_REPORT_REQUEST_MAX_BYTES);
+      if ((await request('/production-tasks/report/save', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    correctProductionOutputReport: async (input) => {
+      productionInput(input, ['projectId', 'reportId', 'quantity', 'remark']);
+      if (!projectPlanId(input.reportId) || !examText(input.remark, 1000)) productionInputError();
+      productionUnits(input.quantity, true);
+      productionBody(input);
+      if ((await request('/production-tasks/report/correct', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    listProductionTaskMembers: async (input) => {
+      productionQuery(input);
+      return personnelPage(
+        await request('/production-tasks/members', input, 'POST', true),
+        input,
+        productionMember,
+      );
+    },
+    createProductionTask: async (input) => {
+      productionInput(input, [
+        'projectId',
+        'subtaskName',
+        'expectedDeliveryDate',
+        'expectedQuantity',
+        'distributionMode',
+        'memberIds',
+      ]);
+      if (
+        typeof input.subtaskName !== 'string' ||
+        !input.subtaskName.trim() ||
+        input.subtaskName.length > 128 ||
+        !attendanceDate(input.expectedDeliveryDate) ||
+        !inEnum(input.distributionMode, ['POOL', 'DESIGNATED']) ||
+        !personnelList(input.memberIds, projectPlanId, 1000)
+      )
+        productionInputError();
+      productionUnits(input.expectedQuantity);
+      if (input.distributionMode === 'POOL' ? !!input.memberIds?.length : !input.memberIds?.length)
+        productionInputError();
+      productionBody(input);
+      if ((await request('/production-tasks/create', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    listProductionTasks: async (input) => {
+      productionQuery(input, ['statuses'], 128);
+      if (!personnelList(input.statuses, (status) => inEnum(status, productionTaskStatuses), 4))
+        productionInputError();
+      return personnelPage(
+        await request('/production-tasks/list', input, 'POST', true),
+        input,
+        productionTask,
+      );
+    },
+    listProductionTaskAssignees: async (input) => {
+      productionQuery(input, ['subtaskId']);
+      if (!projectPlanId(input.subtaskId)) productionInputError();
+      return personnelPage(
+        await request('/production-tasks/member-list', input, 'POST', true),
+        input,
+        productionMember,
+      );
+    },
+    listProductionOutputReports: async (input) => {
+      productionQuery(input, ['subtaskId', 'reviewStatuses', 'reportDateStart', 'reportDateEnd']);
+      if (
+        (input.subtaskId != null && !projectPlanId(input.subtaskId)) ||
+        !personnelList(
+          input.reviewStatuses,
+          (status) => inEnum(status, productionReviewStatuses),
+          3,
+        )
+      )
+        productionInputError();
+      productionRange(input.reportDateStart, input.reportDateEnd);
+      const value = await request('/production-tasks/reports', input, 'POST', true);
+      if (
+        !record(value) ||
+        !integer(value.totalReportCount) ||
+        !recruitmentNumber(value.totalQuantity) ||
+        !integer(value.pendingCount) ||
+        !integer(value.returnedCount)
+      )
+        invalidResponse();
+      const result = personnelPage(value.page, input, (row) =>
+        productionReport(row, input.subtaskId ?? null),
+      );
+      if (value.totalReportCount !== result.total) invalidResponse();
+      return { ...value, page: result } as unknown as Production.ProductionOutputReports;
+    },
+    reviewProductionOutputReports: async (input) => {
+      productionInput(input, ['projectId', 'subtaskId', 'action', 'reportIds', 'reason']);
+      if (
+        (input.subtaskId != null && !projectPlanId(input.subtaskId)) ||
+        !inEnum(input.action, ['VERIFY', 'RETURN']) ||
+        !personnelList(input.reportIds, projectPlanId, 1000) ||
+        !examText(input.reason, 500) ||
+        (input.action === 'RETURN' &&
+          (new Set(input.reportIds ?? []).size !== 1 || !input.reason?.trim()))
+      )
+        productionInputError();
+      productionBody(input);
+      if ((await request('/production-tasks/report/review', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    listPersonnelProduction: async (input) => {
+      productionQuery(input, [
+        'reportDateStart',
+        'reportDateEnd',
+        'accountTypes',
+        'organizationIds',
+        'dataSources',
+      ]);
+      productionRange(input.reportDateStart, input.reportDateEnd, 31);
+      if (
+        !personnelList(
+          input.accountTypes,
+          (type) => inEnum(type, ['INDIVIDUAL', 'ORGANIZATION']),
+          2,
+        ) ||
+        !personnelList(input.organizationIds, uuid, 100) ||
+        !personnelList(input.dataSources, (source) => inEnum(source, productionSources), 2)
+      )
+        productionInputError();
+      return personnelPage(
+        await request('/project-personnel/production/list', input, 'POST', true),
+        input,
+        personnelProduction,
+      );
+    },
+    getPersonnelQualityContext: async (input) => {
+      productionInput(input, ['projectId', 'memberId', 'reportDate']);
+      if (!projectPlanId(input.memberId) || !attendanceDate(input.reportDate))
+        productionInputError();
+      return productionQuality(
+        await request('/project-personnel/production/quality/context', input, 'POST', true),
+        input,
+      );
+    },
+    savePersonnelQuality: async (input) => {
+      productionInput(input, ['projectId', 'memberId', 'reportDate', 'items']);
+      if (
+        !projectPlanId(input.memberId) ||
+        !attendanceDate(input.reportDate) ||
+        !Array.isArray(input.items) ||
+        !input.items.length ||
+        input.items.length > 100 ||
+        !input.items.every(
+          (item) =>
+            record(item) &&
+            onlyKeys(item, [
+              'outputReportId',
+              'inspectedQuantity',
+              'qualifiedQuantity',
+              'unqualifiedReason',
+            ]) &&
+            projectPlanId(item.outputReportId) &&
+            examText(item.unqualifiedReason, 1000),
+        )
+      )
+        productionInputError();
+      for (const item of input.items)
+        if (productionUnits(item.qualifiedQuantity, true) > productionUnits(item.inspectedQuantity))
+          productionInputError();
+      productionBody(input, PRODUCTION_QUALITY_REQUEST_MAX_BYTES);
+      if (
+        (await request('/project-personnel/production/quality/save', input, 'POST', true)) !== null
+      )
+        invalidResponse();
+    },
+    getProductionAcceptanceContext: async (input) => {
+      productionInput(input, ['projectId', 'subtaskId']);
+      if (!projectPlanId(input.subtaskId)) productionInputError();
+      const value = await request('/production-tasks/acceptance/context', input, 'POST', true);
+      if (
+        !record(value) ||
+        value.subtaskId !== input.subtaskId ||
+        !strings(value, ['subtaskName', 'quantityUnit']) ||
+        !attendanceDate(value.expectedDeliveryDate) ||
+        !attendanceDate(value.defaultActualDeliveryDate) ||
+        !['expectedQuantity', 'reportedQuantity', 'defaultActualQuantity'].every((key) =>
+          recruitmentNumber(value[key]),
+        ) ||
+        !integer(value.pendingCount) ||
+        !integer(value.returnedCount) ||
+        typeof value.canSubmit !== 'boolean'
+      )
+        invalidResponse();
+      return value as unknown as Production.ProductionAcceptanceContext;
+    },
+    submitProductionAcceptance: async (input) => {
+      productionInput(input, [
+        'projectId',
+        'subtaskId',
+        'actualQuantity',
+        'actualDeliveryDate',
+        'quantityAdjustmentRemark',
+      ]);
+      if (
+        !projectPlanId(input.subtaskId) ||
+        !attendanceDate(input.actualDeliveryDate) ||
+        !examText(input.quantityAdjustmentRemark, 1000)
+      )
+        productionInputError();
+      productionUnits(input.actualQuantity);
+      productionBody(input);
+      if ((await request('/production-tasks/acceptance/submit', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    reviewProductionAcceptance: async (input) => {
+      productionInput(input, ['projectId', 'subtaskId', 'decision', 'rejectReason']);
+      if (
+        !projectPlanId(input.subtaskId) ||
+        !inEnum(input.decision, ['ACCEPT', 'REJECT']) ||
+        !examText(input.rejectReason, 500) ||
+        (input.decision === 'REJECT' ? !input.rejectReason?.trim() : !!input.rejectReason?.trim())
+      )
+        productionInputError();
+      productionBody(input);
+      if ((await request('/production-tasks/acceptance/review', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    listProjectPersonnelRoster: async (input) => {
+      personnelInput(input, [
+        'projectId',
+        'keyword',
+        'accountTypes',
+        'orgPositions',
+        'organizationIds',
+        'employmentTypes',
+        'responsibleUserIds',
+        'statuses',
+        'current',
+        'size',
+      ]);
+      personnelPagination(input as unknown as Record<string, unknown>);
+      if (
+        !examText(input.keyword, 100) ||
+        !personnelList(
+          input.accountTypes,
+          (item) => inEnum(item, ['INDIVIDUAL', 'ORGANIZATION']),
+          2,
+        ) ||
+        !personnelList(input.orgPositions, (item) => inEnum(item, positions), 3) ||
+        !personnelList(input.organizationIds, uuid, 100) ||
+        !personnelList(input.responsibleUserIds, uuid, 100) ||
+        !personnelList(input.employmentTypes, (item) => inEnum(item, employments), 2) ||
+        !personnelList(input.statuses, (item) => inEnum(item, personnelStatuses), 8)
+      )
+        personnelInputError();
+      return personnelPage(
+        await request('/project-personnel/roster/list', input, 'POST', true),
+        input,
+        personnelMember,
+      );
+    },
+    saveProjectPersonnelEntry: async (input) => {
+      personnelInput(input, [
+        'projectId',
+        'memberIds',
+        'entryDecision',
+        'plannedEntryDate',
+        'declineReason',
+      ]);
+      if (
+        !personnelIds(input.memberIds) ||
+        !inEnum(input.entryDecision, ['YES', 'NO']) ||
+        (input.plannedEntryDate != null && !attendanceDate(input.plannedEntryDate)) ||
+        !examText(input.declineReason, 500) ||
+        (input.entryDecision === 'YES'
+          ? !attendanceDate(input.plannedEntryDate)
+          : !input.declineReason?.trim())
+      )
+        personnelInputError();
+      if ((await request('/project-personnel/roster/entry/save', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    listProjectPersonnelAttendance: async (input) => {
+      personnelInput(input, [
+        'projectId',
+        'month',
+        'keyword',
+        'organizationIds',
+        'attendanceStatuses',
+        'current',
+        'size',
+      ]);
+      personnelPagination(input as unknown as Record<string, unknown>);
+      if (
+        typeof input.month !== 'string' ||
+        !/^(19|[2-9][0-9])[0-9]{2}-(0[1-9]|1[0-2])$/.test(input.month) ||
+        !examText(input.keyword, 100) ||
+        !personnelList(input.organizationIds, uuid, 100) ||
+        !personnelList(
+          input.attendanceStatuses,
+          (item) => inEnum(item, attendanceStatuses),
+          attendanceStatuses.length,
+        )
+      )
+        personnelInputError();
+      return personnelPage(
+        await request('/project-personnel/attendance/list', input, 'POST', true),
+        input,
+        (row) => personnelAttendance(row, input.month),
+      );
+    },
+    listProjectMemberPerformance: async (input) => {
+      personnelInput(input, [
+        'projectId',
+        'memberId',
+        'recordDateStart',
+        'recordDateEnd',
+        'current',
+        'size',
+      ]);
+      personnelPagination(input as unknown as Record<string, unknown>);
+      if (
+        !projectPlanId(input.memberId) ||
+        (input.recordDateStart != null && !attendanceDate(input.recordDateStart)) ||
+        (input.recordDateEnd != null && !attendanceDate(input.recordDateEnd)) ||
+        (input.recordDateStart &&
+          input.recordDateEnd &&
+          input.recordDateStart > input.recordDateEnd)
+      )
+        personnelInputError();
+      return personnelPage(
+        await request('/project-personnel/performance/list', input, 'POST', true),
+        input,
+        personnelPerformance,
+      );
+    },
+    createProjectMemberPerformance: async (input) => {
+      personnelInput(input, [
+        'projectId',
+        'memberId',
+        'recordDate',
+        'content',
+        'attachmentIds',
+        'attachmentUploadTokens',
+      ]);
+      if (
+        !projectPlanId(input.memberId) ||
+        !attendanceDate(input.recordDate) ||
+        typeof input.content !== 'string' ||
+        !input.content.trim() ||
+        input.content.length > 2000 ||
+        !personnelList(input.attachmentIds, uuid, 10) ||
+        !(
+          input.attachmentUploadTokens == null ||
+          (record(input.attachmentUploadTokens) &&
+            Object.keys(input.attachmentUploadTokens).length <= 10 &&
+            Object.entries(input.attachmentUploadTokens).every(
+              ([id, token]) =>
+                uuid(id) &&
+                (input.attachmentIds ?? []).includes(id) &&
+                typeof token === 'string' &&
+                !!token.trim() &&
+                token.length <= 200,
+            ))
+        ) ||
+        !(input.attachmentIds ?? []).every((id) => !!input.attachmentUploadTokens?.[id]?.trim())
+      )
+        personnelInputError();
+      if ((await request('/project-personnel/performance/create', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    uploadMemberPerformanceAttachment: async (file) => {
+      if (!(file instanceof File)) personnelInputError();
+      const name = file.name.replaceAll('\\', '/').split('/').at(-1)?.trim() ?? '';
+      const extension = name.includes('.') ? name.split('.').at(-1)!.toLowerCase() : '';
+      if (!(PROJECT_ATTACHMENT_EXTENSIONS as readonly string[]).includes(extension) || !file.size)
+        personnelInputError();
+      if (file.size > PROJECT_ATTACHMENT_MAX_BYTES)
+        throw new ApiError(413, { code: 'PAYLOAD_TOO_LARGE', message: '表现附件最大50 MiB' });
+      const body = new FormData();
+      body.append('bizType', 'MEMBER_PERFORMANCE_ATTACHMENT');
+      body.append('category', 'PROJECT_ATTACHMENT');
+      body.append('file', file);
+      return projectUploaded(
+        await request('/files/upload', body, 'POST', true, { timeoutMs: 60_000 }),
+        file,
+        extension,
+        'member-performance',
+      );
+    },
+    readMemberPerformanceAttachment: async (objectKey) => {
+      if (!memberPerformanceKey(objectKey)) personnelInputError();
+      return (await request(
+        `/files/view?${new URLSearchParams({ objectKey })}`,
+        undefined,
+        'GET',
+        true,
+        {
+          timeoutMs: 60_000,
+          decode: async (response) => {
+            if (!response.ok) await read(response);
+            const type = response.headers.get('Content-Type')?.split(';')[0]?.trim();
+            if (
+              !inEnum(type, [
+                'application/octet-stream',
+                'application/pdf',
+                'image/jpeg',
+                'image/png',
+                'image/gif',
+                'image/bmp',
+                'image/webp',
+              ])
+            )
+              invalidResponse();
+            const blob = await response.blob();
+            if (!blob.size) invalidResponse();
+            return blob;
+          },
+        },
+      )) as Blob;
+    },
+    listPersonnelTransferTargets: async (input) => {
+      personnelInput(input, ['projectId', 'memberIds', 'keyword', 'current', 'size']);
+      personnelPagination(input as unknown as Record<string, unknown>);
+      if (!personnelIds(input.memberIds) || !examText(input.keyword, 128)) personnelInputError();
+      return personnelPage(
+        await request('/project-personnel/movements/target-projects', input, 'POST', true),
+        input,
+        (row): Personnel.PersonnelTransferTarget => {
+          if (
+            !record(row) ||
+            !projectPlanId(row.projectId) ||
+            row.projectId === input.projectId ||
+            !strings(row, ['projectNo', 'requesterName']) ||
+            !strings(row, ['projectName'], true) ||
+            typeof row.examRequired !== 'boolean'
+          )
+            invalidResponse();
+          return row as unknown as Personnel.PersonnelTransferTarget;
+        },
+      );
+    },
+    createPersonnelMovement: async (input) => {
+      personnelInput(input, [
+        'projectId',
+        'memberIds',
+        'movementType',
+        'reason',
+        'targetProjectId',
+        'plannedEffectiveDate',
+      ]);
+      if (
+        !personnelIds(input.memberIds) ||
+        !inEnum(input.movementType, movementTypes) ||
+        typeof input.reason !== 'string' ||
+        !input.reason.trim() ||
+        input.reason.length > 500 ||
+        !attendanceDate(input.plannedEffectiveDate) ||
+        (input.movementType === 'TRANSFER'
+          ? !projectPlanId(input.targetProjectId) || input.targetProjectId === input.projectId
+          : input.targetProjectId != null)
+      )
+        personnelInputError();
+      if ((await request('/project-personnel/movements/create', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    listPersonnelMovements: async (input) => {
+      personnelInput(input, [
+        'projectId',
+        'movementId',
+        'memberId',
+        'movementTypes',
+        'statuses',
+        'keyword',
+        'createdStartAt',
+        'createdEndAt',
+        'current',
+        'size',
+      ]);
+      personnelPagination(input as unknown as Record<string, unknown>);
+      if (
+        (input.movementId != null && !projectPlanId(input.movementId)) ||
+        (input.memberId != null && !projectPlanId(input.memberId)) ||
+        !personnelList(input.movementTypes, (item) => inEnum(item, movementTypes), 2) ||
+        !personnelList(input.statuses, (item) => inEnum(item, movementStatuses), 5) ||
+        !examText(input.keyword, 100) ||
+        (input.createdStartAt != null && !attendanceTime(input.createdStartAt)) ||
+        (input.createdEndAt != null && !attendanceTime(input.createdEndAt)) ||
+        (input.createdStartAt && input.createdEndAt && input.createdStartAt > input.createdEndAt)
+      )
+        personnelInputError();
+      const data = personnelPage(
+        await request('/project-personnel/movements/list', input, 'POST', true),
+        input,
+        personnelMovement,
+      );
+      if (
+        data.records.some(
+          (row) =>
+            (row.sourceProjectId !== input.projectId && row.targetProjectId !== input.projectId) ||
+            (input.memberId != null &&
+              (row.memberId !== input.memberId || row.sourceProjectId !== input.projectId)) ||
+            (input.movementId != null && row.movementId !== input.movementId),
+        )
+      )
+        invalidResponse();
+      return data;
+    },
+    getPersonnelMovementDetail: async (input) => {
+      personnelInput(input, ['projectId', 'memberId']);
+      if (!projectPlanId(input.memberId)) personnelInputError();
+      const data = personnelMovement(
+        await request('/project-personnel/movements/detail', input, 'POST', true),
+      );
+      if (data.sourceProjectId !== input.projectId || data.memberId !== input.memberId)
+        invalidResponse();
+      return data;
+    },
+    withdrawPersonnelMovement: async (input) => {
+      personnelInput(input, ['projectId', 'movementId']);
+      if (!projectPlanId(input.movementId)) personnelInputError();
+      if ((await request('/project-personnel/movements/withdraw', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    processPersonnelMovement: async (input) => {
+      personnelInput(input, [
+        'projectId',
+        'movementId',
+        'flowNo',
+        'nodeId',
+        'nodeVersionNo',
+        'flowVersionNo',
+        'action',
+        'actionComment',
+      ]);
+      if (
+        !projectPlanId(input.movementId) ||
+        typeof input.flowNo !== 'string' ||
+        !input.flowNo.trim() ||
+        input.flowNo.length > 64 ||
+        !uuid(input.nodeId) ||
+        !attendanceVersion(input.nodeVersionNo) ||
+        !attendanceVersion(input.flowVersionNo) ||
+        !inEnum(input.action, ['APPROVE', 'REJECT']) ||
+        !examText(input.actionComment, 500) ||
+        (input.action === 'REJECT' && !input.actionComment?.trim())
+      )
+        personnelInputError();
+      if ((await request('/project-personnel/movements/process', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
+    listExpertRecruitmentHandlerCandidates: async (projectId) => {
+      if (!projectPlanId(projectId)) recruitmentInputError();
+      const data = await request(
+        `/projects/expert-recruitments/handler-candidates?projectId=${projectId}`,
+        undefined,
+        'GET',
+        true,
+      );
+      if (
+        !Array.isArray(data) ||
+        !data.every(
+          (item) =>
+            recruitmentUser(item) &&
+            record(item) &&
+            integer(item.currentProjectCount) &&
+            typeof item.currentHandler === 'boolean',
+        ) ||
+        new Set(data.map((item) => item.userId.toLowerCase())).size !== data.length ||
+        data.filter((item) => item.currentHandler).length > 1
+      )
+        invalidResponse();
+      return data as ProjectExpertRecruitmentHandlerCandidate[];
+    },
+    changeExpertRecruitmentHandler: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['projectId', 'handlerUserId']) ||
+        !projectPlanId(input.projectId) ||
+        !uuid(input.handlerUserId)
+      )
+        recruitmentInputError();
+      if (
+        (await request('/projects/expert-recruitment-handler/change', input, 'POST', true)) !== null
+      )
+        invalidResponse();
+    },
+    getExpertRecruitmentDetail: async (projectId) => {
+      if (!projectPlanId(projectId)) recruitmentInputError();
+      return recruitmentDetail(
+        await request(
+          `/projects/expert-recruitments/detail?projectId=${projectId}`,
+          undefined,
+          'GET',
+          true,
+        ),
+        projectId,
+      );
+    },
+    listExpertRecruitmentCandidates: async (input) => {
+      const query = recruitmentQuery(input);
+      const data = page(
+        await request(`/projects/expert-recruitments/candidates?${query}`, undefined, 'GET', true),
+        recruitmentCandidate,
+      );
+      if (
+        data.current !== (input.current ?? 1) ||
+        data.size !== (input.size ?? 20) ||
+        data.pages !== Math.ceil(data.total / data.size) ||
+        data.records.length > data.size ||
+        (input.subjectType !== undefined &&
+          data.records.some((item) => item.subjectType !== input.subjectType)) ||
+        new Set(data.records.map((item) => `${item.subjectType}:${item.subjectId.toLowerCase()}`))
+          .size !== data.records.length
+      )
+        invalidResponse();
+      return data as ProjectExpertRecruitmentCandidatesPage;
+    },
+    submitExpertRecruitment: async (input) => {
+      recruitmentInput(input);
+      if ((await request('/projects/expert-recruitments/submit', input, 'POST', true)) !== null)
+        invalidResponse();
     },
     listProjectManagerCandidates: async (input) => {
       if (
@@ -3085,6 +4717,25 @@ export function createHttpAuth(
       if (!Array.isArray(data)) invalidResponse();
       return data.map(expertTask);
     },
+    setExpertProjectOwners: async (input) => {
+      if (
+        !record(input) ||
+        !onlyKeys(input, ['assignmentId', 'projectOwnerUserIds']) ||
+        !projectPlanId(input.assignmentId) ||
+        !Array.isArray(input.projectOwnerUserIds) ||
+        !input.projectOwnerUserIds.length ||
+        !input.projectOwnerUserIds.every(uuid) ||
+        new Set(input.projectOwnerUserIds.map((id) => id.toLowerCase())).size > 20
+      )
+        personnelInputError();
+      if (new TextEncoder().encode(JSON.stringify(input)).byteLength > 16 * 1024)
+        throw new ApiError(413, {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: '本次项目负责人设置超过16 KiB，请减少重复内容。',
+        });
+      if ((await request('/expert-assignments/set-project-owners', input, 'POST', true)) !== null)
+        invalidResponse();
+    },
     getExpertProjectOwnerCandidates: async (assignmentId) => {
       if (!integer(assignmentId, 1) || assignmentId > 2147483647)
         throw new ApiError(400, { code: 'VALIDATION_ERROR', message: '请提供有效的分配 ID' });
@@ -3185,6 +4836,54 @@ export function createHttpAuth(
     },
     listMyApplications: async (input) =>
       page(await request('/users/me/applications', input, 'POST', true), workbenchApplication),
+    getAttendanceClockContext: async (input = {}) => {
+      clockQueryInput(input);
+      const query = new URLSearchParams({
+        ...(input.orgId == null ? {} : { orgId: input.orgId }),
+        ...(input.timezone == null ? {} : { timezone: input.timezone }),
+      });
+      return attendanceClockContext(
+        await request(
+          `/organizations/attendance/clock-context${query.size ? `?${query}` : ''}`,
+          undefined,
+          'GET',
+          true,
+        ),
+        input,
+      );
+    },
+    clockAttendance: async (input) => {
+      clockQueryInput(input, ['idempotencyKey', 'clockType', 'sourceRef', 'extJson']);
+      if (
+        typeof input.idempotencyKey !== 'string' ||
+        !input.idempotencyKey.trim() ||
+        input.idempotencyKey.length > 128 ||
+        !(input.clockType == null || clockType(input.clockType)) ||
+        !(
+          input.sourceRef == null ||
+          (typeof input.sourceRef === 'string' && input.sourceRef.length <= 128)
+        ) ||
+        (input.extJson !== undefined && !projectJson(input.extJson))
+      )
+        invalidAttendanceInput();
+      try {
+        new Headers({ 'Idempotency-Key': input.idempotencyKey });
+      } catch {
+        invalidAttendanceInput();
+      }
+      const { idempotencyKey, ...body } = input;
+      if (new TextEncoder().encode(JSON.stringify(body)).byteLength > 16 * 1024)
+        throw new ApiError(413, {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: '本次打卡扩展信息超过16 KiB，请减少内容。',
+        });
+      return attendanceClockResult(
+        await request('/organizations/attendance/clock', body, 'POST', true, {
+          headers: { 'Idempotency-Key': idempotencyKey },
+        }),
+        input,
+      );
+    },
     getMyAttendance: async (input) =>
       workbenchAttendance(
         await request(`/organizations/attendance?${monthQuery(input)}`, undefined, 'GET', true),

@@ -102,6 +102,7 @@ async function backend(page: Page, desktop = false) {
     submitted: false,
     cancelled: false,
     currentStatus: 200,
+    listStatus: 200,
     enterStatus: 200,
     writeStatus: 200,
     uploadStatus: 200,
@@ -157,7 +158,11 @@ async function backend(page: Page, desktop = false) {
         pages: 0,
       });
     if (log.path === '/api/v1/expert-assignments/my-tasks')
-      return reply(state.hideTask ? [] : [state.task]);
+      return reply(
+        state.listStatus === 200 ? (state.hideTask ? [] : [state.task]) : null,
+        state.listStatus,
+        state.listStatus === 200 ? '操作成功' : '最新考试待办读取失败',
+      );
     if (log.path === '/api/v1/expert-assignments/detail')
       return reply({
         ...assignmentDetailExample,
@@ -282,12 +287,16 @@ for (const desktop of [false, true]) {
       fixture.requests.find((request) => request.path === '/api/v1/files/view')?.query,
     ).toEqual({ objectKey: questionAttachment.objectKey });
 
+    await expect(dialog.getByRole('button', { name: '提交答卷', exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: '第1题未作答', exact: true })).toBeVisible();
+    await dialog.getByRole('checkbox', { name: integrity, exact: true }).check();
     await dialog.getByRole('button', { name: '提交答卷', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '确认交卷', exact: true })).toHaveCount(0);
     expect(writes(fixture.requests, 'submit')).toHaveLength(0);
+    await dialog.getByRole('checkbox', { name: integrity, exact: true }).uncheck();
     await dialog.getByLabel('第1题答案', { exact: true }).fill('先核对标准，再记录质检结果。');
-    await dialog.getByRole('button', { name: '提交答卷', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: '确认交卷', exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '第1题已作答', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '提交答卷', exact: true })).toBeDisabled();
 
     await dialog.getByLabel('上传第1题答案附件', { exact: true }).setInputFiles({
       name: '作答说明.txt',
@@ -383,11 +392,34 @@ test('转项考试使用目标项目独立入场，明确确认取消后不保�
   expect(writes(requests, 'enter')[0].body).toEqual({ projectId });
   expect(writes(requests, 'cancel')[0].body).toEqual({ projectId, attemptId: 1 });
   expect(writes(requests, 'submit')).toHaveLength(0);
-  await expect(dialog.getByLabel('第1题答案', { exact: true })).toHaveCount(0);
-  await expect(dialog.getByText('考试已取消，无法再次入场。', { exact: true })).toBeVisible();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '项目待办详情', exact: true })).toHaveCount(0);
   expect(
     requests.find((request) => request.path.endsWith('/expert-assignments/detail'))?.query,
   ).toEqual({ movementId: '7' });
+});
+
+test('取消已成功但待办回读失败时明确提示，仅重试读取不重复取消', async ({ page }) => {
+  const { state, requests } = await backend(page);
+  const dialog = await openExam(page);
+  await dialog.getByRole('button', { name: '开始考试', exact: true }).click();
+  await dialog.getByRole('button', { name: '取消考试', exact: true }).click();
+  state.listStatus = 503;
+  await page
+    .getByRole('dialog', { name: '确认取消考试', exact: true })
+    .getByRole('button', { name: '确认取消考试', exact: true })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByText('考试已取消，最新待办读取失败，请重试读取项目。', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: '项目待办详情', exact: true })).toBeVisible();
+  expect(writes(requests, 'cancel')).toHaveLength(1);
+  state.listStatus = 200;
+  state.hideTask = true;
+  await page.getByRole('button', { name: '重试读取项目', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '项目待办详情', exact: true })).toHaveCount(0);
+  expect(writes(requests, 'cancel')).toHaveLength(1);
 });
 
 test('考试资格读取403保留服务端拒绝，不入场且不提供交卷操作', async ({ page }) => {

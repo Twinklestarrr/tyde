@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import { materialsExample } from '../../apps/server/src/modules/projects/project-materials.schema';
 import type {
   AuthUser,
   NavigatorProjectCard,
@@ -52,7 +53,7 @@ const detail: WorkbenchProjectDetail = {
   categoryLevel3Ids: [3],
   categoryLevel3Names: ['内容分类'],
   difficultyLevel: 'MEDIUM',
-  projectQuantity: 120.5,
+  projectQuantity: 120,
   quantityUnit: '条',
   deadline: '2099-12-31 18:20:30',
   requiredHeadcount: 3,
@@ -187,6 +188,20 @@ async function backend(page: Page, desktop = false) {
       route.fulfill({ status, json: { code: status, message, data } });
     if (!state.signedIn) return reply(null, 401, '请先登录');
     if (path === '/api/v1/users/me') return reply(state.user);
+    if (path === '/api/v1/entrance-exams/management' && request.method() === 'GET')
+      return reply(null, 403, '当前账号未配置人工阅卷资格');
+    if (path === '/api/v1/production-tasks/list' && request.method() === 'POST')
+      return reply({ current: 1, size: 20, total: 0, pages: 0, records: [] });
+    if (path === '/api/v1/projects/standard-materials/detail' && request.method() === 'GET')
+      return reply({
+        ...structuredClone(materialsExample),
+        projectId: detail.id,
+        standardContent: detail.standardContent,
+        standardLink: detail.standardLink,
+        attachments: detail.attachments,
+        currentNodeCode: detail.currentNodeCode,
+        versionNo: detail.versionNo,
+      });
     if (path === '/api/v1/auth/switch-role') {
       if (state.switchStatus !== 200) return reply(null, state.switchStatus, '角色切换暂不可用');
       const role = (body as { role: AuthUser['role'] }).role;
@@ -392,8 +407,22 @@ for (const [mode, desktop] of [
     );
     await tabs.getByRole('tab', { name: '准入考试', exact: true }).click();
     await expect(page.getByRole('tabpanel', { name: '准入考试', exact: true })).toContainText(
-      '入口暂未开放',
+      '请先完成上一节点「生产计划」',
     );
+    expect(calls('entrance-exams/management')).toHaveLength(0);
+    await tabs.getByRole('tab', { name: '标准与培训', exact: true }).click();
+    await expect(page.getByRole('tabpanel', { name: '标准与培训', exact: true })).toContainText(
+      '请先完成上一节点',
+    );
+    expect(calls('projects/standard-materials/detail')).toHaveLength(0);
+    await expect(page.getByRole('button', { name: '编辑标准材料', exact: true })).toHaveCount(0);
+    await tabs.getByRole('tab', { name: '生产任务', exact: true }).click();
+    await expect(page.getByRole('tabpanel', { name: '生产任务', exact: true })).toContainText(
+      '请先完成上一节点',
+    );
+    expect(calls('production-tasks/list')).toHaveLength(0);
+    expect(calls('production-tasks/acceptance/context')).toHaveLength(0);
+    expect(calls('production-tasks/acceptance/review')).toHaveLength(0);
     await tabs.getByRole('tab', { name: '招募策略官', exact: true }).click();
     await expect(tabs.getByRole('tab', { name: '招募策略官', exact: true })).toHaveAttribute(
       'aria-selected',
@@ -418,7 +447,7 @@ for (const [mode, desktop] of [
       '文本标注',
       '内容分类',
       '中等',
-      '120.5 条',
+      '120 条',
       detail.deadline!,
       detail.createdAt,
     ])
@@ -847,13 +876,13 @@ async function selectThirdCategories(page: Page, names: string[]) {
 
 async function fillBasic(page: Page) {
   await page.getByLabel(/^项目名称/).fill('完整发布项目');
-  await page.getByLabel(/^项目描述/).fill('跨角色协作的项目描述');
+  await page.getByRole('textbox', { name: '项目描述', exact: true }).fill('跨角色协作的项目描述');
   await select(page, '一级项目类型', '数据处理');
   await select(page, '二级项目类型', '文本标注');
   await selectThirdCategories(page, ['内容分类']);
   await select(page, '难度等级', '中等');
   await page.getByLabel(/^截止日期（上海时间）/).fill('2099-12-31');
-  await page.getByLabel(/^项目量级/).fill('120.5');
+  await page.getByLabel(/^项目量级/).fill('120');
   await page.getByLabel(/^量级单位/).fill('条');
 }
 
@@ -861,10 +890,10 @@ async function fillPeople(page: Page) {
   await page.getByLabel(/^需求人数/).fill('3');
   await select(page, '学历要求', '本科');
   await select(page, '人员属性', '兼职');
-  await page.getByLabel(/^经验要求/).fill('熟悉文本分类');
-  await page.getByLabel(/^工作内容摘要/).fill('为材料建立分类');
-  await page.getByLabel(/^特殊要求/).fill('按上海时间协作');
-  await page.getByLabel(/^必备要求/).fill('完成标准学习');
+  await page.getByRole('textbox', { name: '经验要求', exact: true }).fill('熟悉文本分类');
+  await page.getByRole('textbox', { name: '工作内容摘要', exact: true }).fill('为材料建立分类');
+  await page.getByRole('textbox', { name: '特殊要求', exact: true }).fill('按上海时间协作');
+  await page.getByRole('textbox', { name: '必备要求', exact: true }).fill('完成标准学习');
 }
 
 for (const [mode, desktop] of [
@@ -903,8 +932,10 @@ for (const [mode, desktop] of [
     await page.getByRole('button', { name: '下一步', exact: true }).click();
     await fillPeople(page);
     await page.getByRole('button', { name: '下一步', exact: true }).click();
-    await page.getByLabel(/^标准说明与作业规范/).fill('逐条核对标准后完成分类。');
-    await page.getByLabel(/^标准文档链接/).fill('https://example.com/project-standard');
+    await page
+      .getByRole('textbox', { name: '标准说明与作业规范', exact: true })
+      .fill('逐条核对标准后完成分类。');
+    await expect(page.getByLabel(/^标准文档链接/)).toHaveCount(0);
     await page.getByLabel('选择项目附件', { exact: true }).setInputFiles({
       name: '作业标准.txt',
       mimeType: 'text/plain',
@@ -912,6 +943,12 @@ for (const [mode, desktop] of [
     });
     await expect.poll(() => calls('files/upload').length).toBe(1);
     await expect(page.getByText('作业标准.txt', { exact: true })).toBeVisible();
+    const [freshDownload] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: '下载 作业标准.txt', exact: true }).click(),
+    ]);
+    expect(freshDownload.suggestedFilename()).toBe('作业标准.txt');
+    expect(calls('projects/create')).toHaveLength(0);
     if (!desktop) await screenshot(page, 'create-standard');
     expect(calls('files/upload')[0]?.body).toContain('name="bizType"\r\n\r\nPROJECT_ATTACHMENT');
     await page.getByRole('button', { name: '发布项目', exact: true }).click();
@@ -931,7 +968,7 @@ for (const [mode, desktop] of [
       categoryLevel2Id: 2,
       categoryLevel3Ids: [3],
       difficultyLevel: 'MEDIUM',
-      projectQuantity: 120.5,
+      projectQuantity: 120,
       quantityUnit: '条',
       deadline: '2099-12-31 23:59:59',
       requiredHeadcount: 3,
@@ -942,7 +979,7 @@ for (const [mode, desktop] of [
       specialRequirement: '按上海时间协作',
       mandatoryRequirement: '完成标准学习',
       standardContent: '逐条核对标准后完成分类。',
-      standardLink: 'https://example.com/project-standard',
+      standardLink: null,
       attachments: [
         { attachmentType: 'STANDARD_REFERENCE', objectKey, uploadToken: 'u'.repeat(43), sortNo: 0 },
       ],
@@ -1047,7 +1084,9 @@ test('未保存草稿取消角色切换保留输入与附件，确认后清除�
   await page.getByRole('button', { name: '下一步', exact: true }).click();
   await fillPeople(page);
   await page.getByRole('button', { name: '下一步', exact: true }).click();
-  await page.getByLabel(/^标准说明与作业规范/).fill('尚未保存的标准');
+  await page
+    .getByRole('textbox', { name: '标准说明与作业规范', exact: true })
+    .fill('尚未保存的标准');
   await page.getByLabel('选择项目附件', { exact: true }).setInputFiles({
     name: '作业标准.txt',
     mimeType: 'text/plain',
@@ -1060,7 +1099,7 @@ test('未保存草稿取消角色切换保留输入与附件，确认后清除�
   await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
     '领航员',
   );
-  await expect(page.getByLabel(/^标准说明与作业规范/)).toHaveValue('尚未保存的标准');
+  await expect(page.getByLabel(/^标准说明与作业规范/)).toHaveText('尚未保存的标准');
   await expect(page.getByText('作业标准.txt', { exact: true })).toBeVisible();
   expect(calls('auth/switch-role')).toHaveLength(0);
   expect(calls('projects/create')).toHaveLength(0);
@@ -1072,13 +1111,13 @@ test('未保存草稿取消角色切换保留输入与附件，确认后清除�
   await expect(page.getByRole('combobox', { name: '当前角色', exact: true })).toContainText(
     '领航员',
   );
-  await expect(page.getByLabel(/^标准说明与作业规范/)).toHaveValue('尚未保存的标准');
+  await expect(page.getByLabel(/^标准说明与作业规范/)).toHaveText('尚未保存的标准');
   await expect(page.getByText('作业标准.txt', { exact: true })).toBeVisible();
   expect(calls('auth/switch-role')).toHaveLength(1);
   page.once('dialog', (dialog) => dialog.dismiss());
   await page.getByRole('button', { name: '返回项目列表', exact: true }).click();
   await expect(page).toHaveURL(/#\/projects\/create$/);
-  await expect(page.getByLabel(/^标准说明与作业规范/)).toHaveValue('尚未保存的标准');
+  await expect(page.getByLabel(/^标准说明与作业规范/)).toHaveText('尚未保存的标准');
   state.switchStatus = 200;
   page.once('dialog', (dialog) => dialog.accept());
   await chooseRole(page, '策略官');

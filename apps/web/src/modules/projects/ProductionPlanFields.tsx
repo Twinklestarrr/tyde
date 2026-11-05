@@ -60,6 +60,7 @@ export function ProductionPlanFields({
       multiline?: boolean;
       maxLength?: number;
       min?: string;
+      max?: string;
       placeholder?: string;
       description?: string;
     } = {},
@@ -91,11 +92,25 @@ export function ProductionPlanFields({
               type={options.type ?? 'text'}
               step={options.type === 'number' ? 'any' : undefined}
               min={options.min ?? (options.type === 'number' ? '0' : undefined)}
+              max={options.max}
               maxLength={options.maxLength}
               placeholder={options.placeholder}
               aria-invalid={invalid || undefined}
               aria-describedby={describedBy}
-              {...form.register(name, { onChange: () => form.clearErrors(name) })}
+              {...form.register(name)}
+              onChange={(event) => {
+                const previous = form.getValues('operatorCpd');
+                void form.register(name).onChange(event);
+                if (name === 'operatorCpd') {
+                  form.getValues('stages').forEach((stage, index) => {
+                    if (!stage.operatorCpd.trim() || Number(stage.operatorCpd) === Number(previous))
+                      form.setValue(`stages.${index}.operatorCpd`, event.target.value, {
+                        shouldDirty: true,
+                      });
+                  });
+                }
+                form.clearErrors(name);
+              }}
             />
           )
         }
@@ -132,6 +147,24 @@ export function ProductionPlanFields({
             description: '质检人数与 CPD 同时填写或同时留空。',
           })}
         </div>
+        {reference.requiredHeadcount !== null &&
+          Number(values.operatorHeadcount) > reference.requiredHeadcount && (
+            <p className="text-[13px] text-[var(--color-warning)]">
+              作业人数 {values.operatorHeadcount} 人超过需求人数 {reference.requiredHeadcount}{' '}
+              人，请核对安排。
+            </p>
+          )}
+        {reference.projectQuantity !== null &&
+          Number(values.operatorHeadcount) * Number(values.operatorCpd) >
+            reference.projectQuantity && (
+            <p className="text-[13px] text-[var(--color-warning)]">
+              单日产能{' '}
+              {productionPlanNumber(Number(values.operatorHeadcount) * Number(values.operatorCpd))}{' '}
+              {reference.quantityUnit} 超过项目量级{' '}
+              {productionPlanNumber(reference.projectQuantity)} {reference.quantityUnit}
+              ，请核对安排。
+            </p>
+          )}
       </section>
       <section aria-label="考核设置" className="space-y-3 border-t pt-4">
         <h3 id="production-assessments-title" className="text-[16px] font-semibold">
@@ -154,13 +187,6 @@ export function ProductionPlanFields({
             />
             需要面试
           </label>
-        </div>
-        <div className="max-w-[320px]">
-          {field('maxActiveExamCount', '准入考试数量', {
-            type: 'number',
-            required: true,
-            description: '允许同时进行的准入考试数量。',
-          })}
         </div>
       </section>
       <section aria-label="人群画像" className="space-y-3 border-t pt-4">
@@ -251,7 +277,10 @@ export function ProductionPlanFields({
               size="mobileTouch"
               disabled={stages.fields.length >= 50}
               onClick={() => {
-                stages.append(emptyProductionStage());
+                stages.append({
+                  ...emptyProductionStage(),
+                  operatorCpd: form.getValues('operatorCpd'),
+                });
                 form.clearErrors('stages');
               }}
             >
@@ -269,7 +298,7 @@ export function ProductionPlanFields({
         {stages.fields.map((stage, index) => {
           const current = values.stages?.[index];
           const snapshot = form.getValues(`stages.${index}`);
-          const estimate = productionStageEstimate(snapshot, values.operatorCpd ?? '');
+          const estimate = productionStageEstimate(snapshot);
           const source = current?.workdayCountSource ?? 'AUTO';
           const id = `production-plan-stages-${index}-workdayCount`;
           const daysError = form.getFieldState(`stages.${index}.workdayCount`, form.formState).error
@@ -301,6 +330,7 @@ export function ProductionPlanFields({
                   required: true,
                   type: 'date',
                   min: readOnly ? undefined : today,
+                  max: current?.endDate || undefined,
                 })}
                 {field(`stages.${index}.endDate`, `阶段${index + 1}结束日期`, {
                   required: true,
@@ -373,15 +403,45 @@ export function ProductionPlanFields({
                   required: true,
                   type: 'number',
                 })}
-                {field(`stages.${index}.operatorCpd`, `阶段${index + 1}作业 CPD（选填）`, {
+                {field(`stages.${index}.operatorCpd`, `阶段${index + 1}作业 CPD`, {
                   type: 'number',
-                  placeholder: '留空使用计划作业 CPD',
+                  required: true,
                 })}
                 {field(`stages.${index}.accuracyRate`, `阶段${index + 1}准确率（选填）`, {
                   type: 'number',
                   description: '百分数，大于 0 且不超过 100，最多 4 位小数。',
                 })}
               </div>
+              {reference.requiredHeadcount !== null &&
+                Number(current?.operatorHeadcount) > reference.requiredHeadcount && (
+                  <p className="text-[13px] text-[var(--color-warning)]">
+                    本阶段作业人数 {current?.operatorHeadcount} 人超过需求人数{' '}
+                    {reference.requiredHeadcount} 人，请核对安排。
+                  </p>
+                )}
+              {reference.projectQuantity !== null &&
+                Number(current?.operatorHeadcount) * Number(current?.operatorCpd) >
+                  reference.projectQuantity && (
+                  <p className="text-[13px] text-[var(--color-warning)]">
+                    本阶段单日产能{' '}
+                    {productionPlanNumber(
+                      Number(current?.operatorHeadcount) * Number(current?.operatorCpd),
+                    )}{' '}
+                    {reference.quantityUnit} 超过项目量级{' '}
+                    {productionPlanNumber(reference.projectQuantity)} {reference.quantityUnit}
+                    ，请核对安排。
+                  </p>
+                )}
+              {reference.projectQuantity !== null &&
+                estimate.expectedOutput !== null &&
+                estimate.expectedOutput > reference.projectQuantity && (
+                  <p className="text-[13px] text-[var(--color-warning)]">
+                    本阶段预计产出 {productionPlanNumber(estimate.expectedOutput)}{' '}
+                    {reference.quantityUnit} 超过项目量级{' '}
+                    {productionPlanNumber(reference.projectQuantity)} {reference.quantityUnit}
+                    ，请核对安排。
+                  </p>
+                )}
               <p className="text-right text-[13px] text-muted-foreground">
                 自然天数：
                 {readOnly
