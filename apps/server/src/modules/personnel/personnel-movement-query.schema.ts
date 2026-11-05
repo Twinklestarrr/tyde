@@ -135,6 +135,10 @@ export const movementItem = object(
     ),
     flowVersionNo: version('审批流版本，从0开始；无审批流为null。', true),
     currentNode: id('当前审批节点序号；无当前节点时null。', true),
+    actionableNodeId: uuid(
+      '当前角色本人可处理的唯一人工节点UUID，仅实时allowedActions包含APPROVE或REJECT时返回；无权限、等待业务结果或本人节点不唯一时null，不返回其他候选人身份。',
+      true,
+    ),
     approvalSteps: array(
       '按节点序号及ID排序的候选明细；保留关闭候选及历史决定，汰换为空。',
       object('审批候选节点及最后一条动作；版本和ID用于人工处理入口。', {
@@ -207,6 +211,7 @@ export const movementItemExample = {
   flowStatus: null,
   flowVersionNo: null,
   currentNode: null,
+  actionableNodeId: null,
   approvalSteps: [],
   allowedActions: ['WITHDRAW'],
 };
@@ -241,6 +246,33 @@ export const movementDetailResponse = {
         },
       ],
       allowedActions: ['ACCEPT_TRANSFER', 'REJECT_TRANSFER'],
+    },
+    {
+      ...movementItemExample,
+      movementType: 'TRANSFER',
+      status: 'PROCESSING',
+      statusName: '审批处理中',
+      targetProjectId: 2,
+      targetProjectName: '目标项目',
+      flowNo: 'TF1',
+      flowStatus: 'PENDING',
+      flowVersionNo: 0,
+      currentNode: 1,
+      actionableNodeId: exampleUuid,
+      approvalSteps: [exampleUuid, '00000000-0000-4000-8000-000000000002'].map((nodeId) => ({
+        nodeId,
+        nodeSeq: 1,
+        nodeCode: 'SOURCE_ORG_OWNER',
+        nodeName: '原项目组织负责人审批',
+        nodeStatus: 'PENDING',
+        operatorId: null,
+        operatorName: null,
+        action: null,
+        actionComment: null,
+        actionAt: null,
+        nodeVersionNo: 0,
+      })),
+      allowedActions: ['APPROVE', 'REJECT'],
     },
   ],
 };

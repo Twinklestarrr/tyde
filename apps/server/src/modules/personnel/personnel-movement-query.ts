@@ -191,6 +191,18 @@ export async function listMovements(
             }
           }
         }
+        const actionableNodes = allowedActions.some((action) =>
+          ['APPROVE', 'REJECT'].includes(action),
+        )
+          ? (m.flow?.nodes.filter(
+              (node) =>
+                node.nodeSeq === m.flow!.currentNode &&
+                node.nodeCode === m.flow!.currentNodeCode &&
+                isManualTransferStep(node.nodeCode) &&
+                node.nodeStatus === 'PENDING' &&
+                node.approverId === p.userId,
+            ) ?? [])
+          : [];
         const u = m.member.user,
           exam = m.targetExamAttempt;
         records.push({
@@ -232,6 +244,7 @@ export async function listMovements(
           flowStatus: m.flow?.status ?? null,
           flowVersionNo: m.flow?.versionNo ?? null,
           currentNode: m.flow?.currentNode ?? null,
+          actionableNodeId: actionableNodes.length === 1 ? actionableNodes[0]!.id : null,
           approvalSteps: (m.flow?.nodes ?? []).map((n) => {
             const a = n.actions[0];
             return {
