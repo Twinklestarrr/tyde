@@ -1,3 +1,4 @@
+import { clockContextResponse } from '../../apps/server/src/modules/attendance/attendance-clock.schema';
 import { test, expect, _electron as electron } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -114,7 +115,8 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
-      const path = new URL(request.url ?? '/', 'http://fixture.test').pathname;
+      const url = new URL(request.url ?? '/', 'http://fixture.test');
+      const path = url.pathname;
       const raw = Buffer.concat(chunks).toString('utf8');
       const contentType = request.headers['content-type'] ?? '';
       const body =
@@ -152,6 +154,19 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
       }
       if (!record.cookie) return void reply(null, 401);
       if (path === '/api/v1/users/me') return void reply(user);
+      if (path === '/api/v1/projects/workbench/statistics' && request.method === 'GET') {
+        expect(url.searchParams.get('mode')).toBe('TASK');
+        return void reply({
+          mode: 'TASK',
+          pendingTaskCount: 0,
+          completedTaskCount: 0,
+          involvedProjectCount: 0,
+        });
+      }
+      if (path === '/api/v1/organizations/attendance/clock-context' && request.method === 'GET') {
+        expect(Object.fromEntries(url.searchParams)).toEqual({ orgId, timezone: 'Asia/Shanghai' });
+        return void reply({ ...clockContextResponse.examples[0], orgId });
+      }
       if (path === '/api/v1/expert-assignments/my-tasks' && request.method === 'POST') {
         expect(body).toEqual({});
         return void reply([]);
@@ -289,7 +304,9 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
       .getByRole('link', { name: '组织管理', exact: true })
       .click();
     await expect(page.getByRole('heading', { name: '组织管理', exact: true })).toBeVisible();
-    await expect(page.getByRole('row').filter({ hasText: user.uid })).toBeVisible();
+    await expect(
+      page.getByRole('row').filter({ hasText: `用户 ID：${member.userId}` }),
+    ).toBeVisible();
     await page.getByRole('button', { name: '编辑组织资料', exact: true }).click();
     const edit = page.getByRole('dialog', { name: '编辑组织资料', exact: true });
     await edit.getByLabel('组织简介', { exact: true }).fill('桌面保存到 HTTP 替身的简介');
@@ -323,7 +340,7 @@ test('Electron 本地资源组织管理通过页面 HTTP 保存、刷新和 mult
     await importing.getByRole('button', { name: '确认导入', exact: true }).click();
     await expect(importing.getByText(/已成功导入 1 位成员/)).toBeVisible();
     await importing.getByRole('button', { name: '关闭', exact: true }).click();
-    await expect(page.getByRole('row').filter({ hasText: 'ORG10002' })).toBeVisible();
+    await expect(page.getByRole('row').filter({ hasText: `用户 ID：${uuid(2)}` })).toBeVisible();
     const cookies = await app.evaluate(
       ({ BrowserWindow }, url) =>
         BrowserWindow.getAllWindows()[0]!.webContents.session.cookies.get({ url }),

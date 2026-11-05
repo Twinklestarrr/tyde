@@ -244,6 +244,13 @@ async function organizationBackend(
     const reply = (data: unknown, status = 200, message = '操作成功') =>
       route.fulfill({ status, json: { code: status, message, data } });
     if (!authenticated) return reply(null, 401, '请先登录');
+    if (url.pathname === '/api/v1/projects/workbench/statistics')
+      return reply({
+        mode: 'TASK',
+        pendingTaskCount: 0,
+        completedTaskCount: 0,
+        involvedProjectCount: 0,
+      });
     if (url.pathname === '/api/v1/users/me') return reply(state.user);
     if (url.pathname === '/api/v1/expert-assignments/my-tasks' && request.method() === 'POST') {
       expect(body).toEqual({});
@@ -533,7 +540,7 @@ for (const [mode, origin, desktop] of [
     await page.getByRole('button', { name: '上一页', exact: true }).click();
     await page.getByRole('button', { name: '更多筛选', exact: true }).click();
     await page.getByLabel('项目 ID', { exact: true }).fill('42');
-    await page.getByLabel('姓名 / UID / 完整手机号', { exact: true }).fill('联调成员甲');
+    await page.getByLabel('姓名 / 完整手机号', { exact: true }).fill('联调成员甲');
     await page.getByRole('button', { name: '查询', exact: true }).click();
     await expect(page.getByRole('navigation', { name: '分页', exact: true })).toContainText(
       /共 1 条记录\s*第 1 \/ 1 页/,
@@ -601,6 +608,18 @@ for (const [mode, origin, desktop] of [
     );
     await removal.getByRole('button', { name: '取消', exact: true }).click();
     await row.getByRole('button', { name: '变更角色', exact: true }).click();
+    const memberRole = page.getByRole('dialog', { name: '变更组织角色', exact: true });
+    await expect(memberRole.getByRole('option', { name: '主管（转让）', exact: true })).toHaveCount(
+      0,
+    );
+    await memberRole.getByRole('button', { name: '取消', exact: true }).click();
+    await page.getByLabel('姓名 / 完整手机号', { exact: true }).fill('联调管理员');
+    await page.getByRole('button', { name: '查询', exact: true }).click();
+    await page
+      .getByRole('row')
+      .filter({ hasText: '联调管理员' })
+      .getByRole('button', { name: '变更角色', exact: true })
+      .click();
     const role = page.getByRole('dialog', { name: '变更组织角色', exact: true });
     await role.getByLabel(/^组织角色\s*\*?\s*$/).selectOption('OWNER');
     await expect(role.getByText(/已有待审批事项不会自动转派/)).toBeVisible();
@@ -613,7 +632,7 @@ for (const [mode, origin, desktop] of [
     expect(calls(requests, writePaths.role)).toHaveLength(1);
     expect(calls(requests, writePaths.role)[0].body).toEqual({
       orgId,
-      memberId: uuid(1003),
+      memberId: uuid(1002),
       position: 'OWNER',
     });
     expect(
@@ -627,7 +646,7 @@ for (const [mode, origin, desktop] of [
     await page.getByRole('tab', { name: '审批中心', exact: true }).click();
     const first = page.getByRole('article').filter({ hasText: '联调退出申请1' });
     await first.getByRole('button', { name: '同意通过', exact: true }).click();
-    const approval = page.getByRole('dialog', { name: '确认通过退出申请', exact: true });
+    const approval = page.getByRole('dialog', { name: '确认通过申请', exact: true });
     state.approvalStatus = 403;
     await approval.getByRole('button', { name: '确认通过', exact: true }).click();
     await expect(approval.getByText('当前账户无权审批', { exact: true })).toBeVisible();
@@ -667,7 +686,7 @@ for (const [mode, origin, desktop] of [
       .filter({ hasText: '联调退出申请2' })
       .getByRole('button', { name: '驳回请求', exact: true })
       .click();
-    const reject = page.getByRole('dialog', { name: '驳回退出申请', exact: true });
+    const reject = page.getByRole('dialog', { name: '驳回申请', exact: true });
     await reject.getByRole('button', { name: '确认驳回', exact: true }).click();
     await expect(reject.getByText('驳回时请填写审批意见', { exact: true })).toBeVisible();
     expect(calls(requests, writePaths.approval)).toHaveLength(3);
@@ -694,7 +713,6 @@ for (const [mode, origin, desktop] of [
       .poll(() => calls(requests, '/api/v1/organizations/approvals/records').at(-1)?.body)
       .toEqual({
         orgId,
-        businessType: 'ORG_MEMBER_EXIT',
         current: 1,
         size: 10,
         status: 'REJECTED',
@@ -795,9 +813,11 @@ test('组织管理 ADMIN权限、MEMBER只读摘要和本人退出，不请求�
   await expect(page.getByRole('row').filter({ hasText: '联调成员甲' })).toBeVisible();
   await expect(page.getByRole('button', { name: '编辑组织资料', exact: true })).toHaveCount(0);
   const owner = page.getByRole('row').filter({ hasText: '测试主管' });
-  await expect(owner.getByRole('button')).toHaveCount(0);
+  await expect(owner.getByRole('button', { name: '查看档案', exact: true })).toBeVisible();
+  await expect(owner.getByRole('button', { name: '变更角色', exact: true })).toHaveCount(0);
   const own = page.getByRole('row').filter({ hasText: '联调管理员' });
-  await expect(own.getByRole('button', { name: '变更角色', exact: true })).toBeVisible();
+  await expect(own.getByRole('button', { name: '变更角色', exact: true })).toHaveCount(0);
+  await expect(own.getByRole('button', { name: '申请退出', exact: true })).toHaveCount(0);
   await page
     .getByRole('row')
     .filter({ hasText: '联调成员甲' })
@@ -819,17 +839,16 @@ test('组织管理 ADMIN权限、MEMBER只读摘要和本人退出，不请求�
     page
       .getByRole('navigation', { name: '主导航' })
       .getByRole('link', { name: '我的组织', exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole('navigation', { name: '主导航' })
-    .getByRole('link', { name: '我的组织', exact: true })
-    .click();
+  ).toHaveCount(0);
+  await page.goto(`${origin}/#/organization`);
   await expect(page.getByRole('heading', { name: '我的组织', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '账户菜单', exact: true }).click();
-  await page
-    .getByRole('navigation', { name: '账户选项' })
-    .getByRole('link', { name: '我的组织', exact: true })
-    .click();
+  await expect(
+    page
+      .getByRole('navigation', { name: '账户选项' })
+      .getByRole('link', { name: '我的组织', exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: '账户菜单', exact: true }).click();
   await expect(page.getByRole('tablist', { name: '组织管理内容', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '批量导入成员', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '申请退出组织', exact: true }).click();
@@ -854,7 +873,9 @@ test('组织管理 ADMIN权限、MEMBER只读摘要和本人退出，不请求�
       .slice(before)
       .filter(
         (request) =>
-          request.path.startsWith('/api/v1/organizations') && request.path !== writePaths.departure,
+          request.path.startsWith('/api/v1/organizations') &&
+          request.path !== writePaths.departure &&
+          request.path !== '/api/v1/organizations/attendance/clock-context',
       ),
   ).toHaveLength(0);
 });
@@ -967,24 +988,29 @@ test('组织管理375px列表与弹窗不撑出页面，无组织不查询组织
     page
       .getByRole('navigation', { name: '主导航' })
       .getByRole('link', { name: '我的组织', exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole('navigation', { name: '主导航' })
-    .getByRole('link', { name: '我的组织', exact: true })
-    .click();
+  ).toHaveCount(0);
+  await page.goto(`${origin}/#/organization`);
   await expect(page.getByRole('heading', { name: '还没有组织', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: '创建组织', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '账户菜单', exact: true }).click();
-  await page
-    .getByRole('navigation', { name: '账户选项' })
-    .getByRole('link', { name: '我的组织', exact: true })
-    .click();
+  await expect(
+    page
+      .getByRole('navigation', { name: '账户选项' })
+      .getByRole('link', { name: '我的组织', exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: '账户菜单', exact: true }).click();
   await expect(page.getByRole('heading', { name: '还没有组织', exact: true })).toBeVisible();
   await noOverflow();
   await page.setViewportSize({ width: 320, height: 740 });
   await noOverflow();
   expect(
-    requests.slice(before).some((request) => request.path.startsWith('/api/v1/organizations')),
+    requests
+      .slice(before)
+      .some(
+        (request) =>
+          request.path.startsWith('/api/v1/organizations') &&
+          request.path !== '/api/v1/organizations/attendance/clock-context',
+      ),
   ).toBe(false);
 });
 
@@ -1168,6 +1194,7 @@ test('组织导入表格拒绝超过500行或5列的整次粘贴，不截断也�
   await importCell(dialog, 1, '姓名').fill('保留原成员');
   await importCell(dialog, 1, '手机号').fill('13800009002');
   await selectImportCell(dialog, 1, '人员属性', '全职');
+  await expect(grid.getByLabel(/^第 \d+ 行 姓名$/)).toHaveCount(1);
   const before = await grid.getByLabel(/^第 \d+ 行 姓名$/).count();
   const tooMany = Array.from(
     { length: 501 },

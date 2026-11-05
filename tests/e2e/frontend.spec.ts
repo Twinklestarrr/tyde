@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
+import { clockContextResponse } from '../../apps/server/src/modules/attendance/attendance-clock.schema';
 import type { AuthUser } from '../../packages/shared/src/index';
 
 const require = createRequire(resolve('apps/electron/package.json'));
@@ -36,6 +37,13 @@ const user: AuthUser = {
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
+const taskStatistics = {
+  mode: 'TASK',
+  pendingTaskCount: 0,
+  completedTaskCount: 0,
+  involvedProjectCount: 0,
+};
+const personalClockContext = { ...clockContextResponse.examples[0], orgId: null };
 const loginTokens = {
   accessToken: 'a'.repeat(43),
   refreshToken: 'r'.repeat(43),
@@ -77,7 +85,8 @@ async function webBackend(page: Page) {
   const requests: RequestRecord[] = [];
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
-    const path = new URL(request.url()).pathname;
+    const url = new URL(request.url());
+    const path = url.pathname;
     requests.push({
       path,
       method: request.method(),
@@ -127,6 +136,17 @@ async function webBackend(page: Page) {
       case '/api/v1/auth/logout':
         state.signedIn = false;
         return reply(null, { 'Set-Cookie': 'fixture_session=; Max-Age=0; HttpOnly; Path=/' });
+      case '/api/v1/organizations/attendance/clock-context':
+      case '/api/v1/projects/workbench/statistics': {
+        expect(request.method()).toBe('GET');
+        const statistics = path.endsWith('/statistics');
+        expect(Object.fromEntries(url.searchParams)).toEqual(
+          statistics ? { mode: 'TASK' } : { timezone: 'Asia/Shanghai' },
+        );
+        return state.signedIn && request.headers().cookie?.includes('fixture_session=active')
+          ? reply(statistics ? taskStatistics : personalClockContext)
+          : reject(401, '请先登录');
+      }
       case '/api/v1/expert-assignments/my-tasks':
         expect(request.method()).toBe('POST');
         expect(request.postDataJSON()).toEqual({});
@@ -209,17 +229,29 @@ async function expectSessionRecovery(page: Page) {
 }
 const sessionReads = (requests: RequestRecord[]) =>
   requests.filter(({ method, path }) => method === 'GET' && path === '/api/v1/users/me');
-function expectSessionReads(requests: RequestRecord[]) {
-  expect(sessionReads(requests).length).toBeGreaterThan(0);
-  expect(
-    requests.every(
-      ({ method, path, body }) =>
-        (method === 'GET' && path === '/api/v1/users/me') ||
-        (method === 'POST' &&
-          path === '/api/v1/expert-assignments/my-tasks' &&
-          JSON.stringify(body) === '{}'),
-    ),
-  ).toBe(true);
+function expectSessionReads(requests: RequestRecord[], workspaceReady = false) {
+  const reads = sessionReads(requests);
+  expect(reads.length).toBeGreaterThan(0);
+  const lastSessionRead = requests.lastIndexOf(reads.at(-1)!);
+  const unexpected = requests.filter(({ method, path, body }, index) => {
+    if (method === 'GET' && path === '/api/v1/users/me') return false;
+    // 只有恢复成功、当前用户已经读取完成，才允许首页读取统计、打卡和本人待办。
+    if (!workspaceReady || index <= lastSessionRead) return true;
+    if (
+      method === 'GET' &&
+      [
+        '/api/v1/projects/workbench/statistics',
+        '/api/v1/organizations/attendance/clock-context',
+      ].includes(path)
+    )
+      return false;
+    return !(
+      method === 'POST' &&
+      path === '/api/v1/expert-assignments/my-tasks' &&
+      JSON.stringify(body) === '{}'
+    );
+  });
+  expect(unexpected).toEqual([]);
 }
 
 for (const [mode, origin] of [
@@ -465,7 +497,7 @@ for (const [mode, origin] of [
     expect(sessionReads(requests)).toHaveLength(2);
     await page.clock.runFor(9_000);
     expect(sessionReads(requests)).toHaveLength(2);
-    expectSessionReads(requests);
+    expectSessionReads(requests, true);
   });
 
   test(`Web ${mode} 会话网络失败自动回首页重试一次，成功后停止读取`, async ({ page }) => {
@@ -496,7 +528,7 @@ for (const [mode, origin] of [
     await page.clock.runFor(9_000);
     expect(sessionReads(requests)).toHaveLength(2);
     expect(documents).toBe(1);
-    expectSessionReads(requests);
+    expectSessionReads(requests, true);
   });
 
   test(`Web ${mode} 会话503重试为401自动进入登录页并停止读取`, async ({ page }) => {
@@ -555,7 +587,7 @@ for (const [mode, origin] of [
       expect(sessionReads(requests)).toHaveLength(2);
       await page.clock.runFor(9_000);
       expect(sessionReads(requests)).toHaveLength(2);
-      expectSessionReads(requests);
+      expectSessionReads(requests, true);
     });
   }
 
@@ -778,7 +810,8 @@ async function desktopBackend(origin = 'http://127.0.0.1:5177') {
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8');
-      const path = request.url ?? '';
+      const url = new URL(request.url ?? '/', 'http://localhost');
+      const path = url.pathname;
       requests.push({
         path,
         method: request.method ?? '',
@@ -832,6 +865,22 @@ async function desktopBackend(origin = 'http://127.0.0.1:5177') {
           return reply(null, {
             'Set-Cookie': 'fixture_session=; Max-Age=0; HttpOnly; SameSite=None; Secure; Path=/',
           });
+        case '/api/v1/organizations/attendance/clock-context':
+        case '/api/v1/projects/workbench/statistics': {
+          expect(request.method).toBe('GET');
+          const statistics = path.endsWith('/statistics');
+          expect(Object.fromEntries(url.searchParams)).toEqual(
+            statistics ? { mode: 'TASK' } : { timezone: 'Asia/Shanghai' },
+          );
+          return state.signedIn && request.headers.cookie?.includes('fixture_session=active')
+            ? reply(statistics ? taskStatistics : personalClockContext)
+            : reject();
+        }
+        case '/api/v1/expert-assignments/my-projects':
+          expect(request.method).toBe('GET');
+          return state.signedIn && request.headers.cookie?.includes('fixture_session=active')
+            ? reply([])
+            : reject();
         case '/api/v1/expert-assignments/my-tasks':
           expect(request.method).toBe('POST');
           expect(JSON.parse(raw)).toEqual({});
@@ -995,7 +1044,7 @@ for (const [mode, origin] of [
         .getByRole('navigation', { name: '账户选项', exact: true })
         .getByRole('link', { name: '个人中心', exact: true })
         .click();
-      await page.getByRole('tab', { name: '账户安全', exact: true }).click();
+      await page.getByRole('tab', { name: '个人资料', exact: true }).click();
       await page.getByLabel(/^新密码\s*\*?\s*$/).fill('Changed123!');
       await page.getByLabel(/^确认新密码\s*\*?\s*$/).fill('Changed123!');
       await page.getByRole('button', { name: '更新密码', exact: true }).click();
@@ -1095,6 +1144,13 @@ test('Electron DEV 已登录会话503自动恢复为200，成功后停止轮询�
     await page.getByLabel(/^密码\s*\*?\s*$/).fill(password);
     await page.getByRole('button', { name: '登录', exact: true }).click();
     await expectWorkspace(page);
+    for (const path of [
+      '/api/v1/expert-assignments/my-tasks',
+      '/api/v1/projects/workbench/statistics',
+      '/api/v1/organizations/attendance/clock-context',
+    ]) {
+      await expect.poll(() => backend.requests.some((request) => request.path === path)).toBe(true);
+    }
     backend.state.currentStatus = 503;
     const beforeRecovery = backend.requests.length;
     let documents = 0;
@@ -1114,7 +1170,7 @@ test('Electron DEV 已登录会话503自动恢复为200，成功后停止轮询�
     const recoveryRequests = backend.requests.slice(beforeRecovery);
     expect(sessionReads(recoveryRequests)).toHaveLength(2);
     expect(documents).toBe(1);
-    expectSessionReads(recoveryRequests);
+    expectSessionReads(recoveryRequests, true);
     expect(sessionReads(recoveryRequests).every(({ client }) => client === undefined)).toBe(true);
     expect(backend.preflights).not.toContain('/api/v1/users/me');
   } finally {

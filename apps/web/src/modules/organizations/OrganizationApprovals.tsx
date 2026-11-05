@@ -1,4 +1,4 @@
-/** 组织退出审批：服务端分页、节点历史和冻结双版本的审批确认。 */
+/** 组织审批：服务端分页、节点历史和冻结双版本的审批确认。 */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ClipboardCheck, RefreshCw } from 'lucide-react';
@@ -90,7 +90,6 @@ function ApprovalPanel({ orgId, user, position, onSessionChanged }: Organization
     queryFn: () =>
       api.listPendingOrganizationApprovals({
         orgId,
-        businessType: 'ORG_MEMBER_EXIT',
         current,
         size,
       }),
@@ -103,7 +102,6 @@ function ApprovalPanel({ orgId, user, position, onSessionChanged }: Organization
     queryFn: () =>
       api.listOrganizationApprovalRecords({
         orgId,
-        businessType: 'ORG_MEMBER_EXIT',
         current,
         size,
         ...(status ? { status } : {}),
@@ -166,6 +164,10 @@ function ApprovalPanel({ orgId, user, position, onSessionChanged }: Organization
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: queryPrefix }, { throwOnError: true }),
           onSessionChanged(),
+          queryClient.invalidateQueries(
+            { queryKey: ['profile-workbench', user.id] },
+            { throwOnError: true },
+          ),
         ]);
       } catch {
         if (mounted.current) setNotice('审批已处理，但读取最新数据失败，请手动刷新列表');
@@ -179,6 +181,10 @@ function ApprovalPanel({ orgId, user, position, onSessionChanged }: Organization
         await Promise.allSettled([
           queryClient.invalidateQueries({ queryKey: queryPrefix }),
           onSessionChanged(),
+          queryClient.invalidateQueries(
+            { queryKey: ['profile-workbench', user.id] },
+            { throwOnError: true },
+          ),
         ]);
       }
     } finally {
@@ -192,9 +198,9 @@ function ApprovalPanel({ orgId, user, position, onSessionChanged }: Organization
       <section aria-label="组织审批" className="text-[13px]">
         <CardHeader className="flex-row flex-wrap items-center justify-between">
           <div>
-            <CardTitle>组织退出审批</CardTitle>
+            <CardTitle>组织审批</CardTitle>
             <CardDescription className="mt-[4px]">
-              当前展示退出组织的待办与处理记录。
+              查看退出组织、请假和考勤修正的待办与处理记录。
             </CardDescription>
           </div>
           <Button
@@ -299,8 +305,8 @@ function ApprovalPanel({ orgId, user, position, onSessionChanged }: Organization
                   title={view === 'pending' ? '暂无待审批事项' : '暂无审批记录'}
                   description={
                     view === 'pending'
-                      ? '新的组织退出申请会显示在这里。'
-                      : '处理后的组织退出申请会显示在这里。'
+                      ? '新的组织申请会显示在这里。'
+                      : '处理后的组织申请会显示在这里。'
                   }
                 />
               )}
@@ -384,7 +390,7 @@ function ApprovalPanel({ orgId, user, position, onSessionChanged }: Organization
           )}
           {selection && (
             <OrganizationDialog
-              title={selection.action === 'APPROVE' ? '确认通过退出申请' : '驳回退出申请'}
+              title={selection.action === 'APPROVE' ? '确认通过申请' : '驳回申请'}
               busy={busy}
               onClose={() => setSelection(null)}
             >
@@ -447,6 +453,8 @@ function ApprovalDetails({
   record,
 }: {
   record: {
+    businessType: string;
+    formData?: Record<string, unknown> | null;
     applicantName: string | null;
     targetMemberName: string | null;
     appliedAt: string;
@@ -455,6 +463,17 @@ function ApprovalDetails({
     flowNo: string;
   };
 }) {
+  const form = record.formData;
+  const attendance = ['ATTENDANCE_LEAVE', 'ATTENDANCE_CORRECTION'].includes(record.businessType);
+  const statuses: Record<string, string> = {
+    PRESENT: '正常出勤',
+    LATE: '迟到',
+    EARLY_LEAVE: '早退',
+    LATE_EARLY: '迟到且早退',
+    LEAVE: '请假',
+    ABSENT: '缺勤',
+    REST: '休息',
+  };
   return (
     <dl className="grid min-w-0 grid-cols-1 gap-x-[24px] gap-y-[14px] text-[13px] [overflow-wrap:anywhere] sm:grid-cols-2">
       <div>
@@ -470,9 +489,33 @@ function ApprovalDetails({
         <dd className="mt-[3px] tabular-nums">{organizationTime(record.appliedAt)}</dd>
       </div>
       <div>
-        <dt className="text-[var(--color-neutral-strong)]">拟离职日期：</dt>
-        <dd className="mt-[3px] tabular-nums">{record.plannedLeaveDate || '—'}</dd>
+        <dt className="text-[var(--color-neutral-strong)]">
+          {attendance ? '考勤日期：' : '拟离职日期：'}
+        </dt>
+        <dd className="mt-[3px] tabular-nums">
+          {attendance
+            ? typeof form?.attendanceDate === 'string'
+              ? form.attendanceDate
+              : '—'
+            : record.plannedLeaveDate || '—'}
+        </dd>
       </div>
+      {attendance && typeof form?.finalStatus === 'string' && (
+        <div>
+          <dt>申请目标状态：</dt>
+          <dd>{statuses[form.finalStatus] ?? '—'}</dd>
+        </div>
+      )}
+      {attendance &&
+        typeof form?.leaveStartAt === 'string' &&
+        typeof form.leaveEndAt === 'string' && (
+          <div>
+            <dt>请假时段：</dt>
+            <dd>
+              {form.leaveStartAt} — {form.leaveEndAt}
+            </dd>
+          </div>
+        )}
       <div className="col-span-full rounded-[8px] bg-[var(--color-surface-muted)] px-[12px] py-[10px]">
         <dt className="text-[var(--color-neutral-strong)]">申请原因：</dt>
         <dd className="mt-[4px] whitespace-pre-wrap leading-[22px]">{record.applyReason || '—'}</dd>
