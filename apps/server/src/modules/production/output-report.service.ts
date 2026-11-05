@@ -1,33 +1,34 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { lockPersonnel } from '../personnel/personnel.service.js';
+import { AppError } from '../../common/errors.js';
+import { parseDate } from '../attendance/attendance.domain.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { lockPersonnel } from '../personnel/personnel.repository.js';
 import { displayName } from '../projects/project-detail.js';
-import { projectTime } from '../projects/project-time.js';
 import { reconcileTaskRounds } from '../projects/project-task-rounds.js';
-import { parseDate } from '../attendance/attendance-domain.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
+import { projectTime } from '../projects/project-time.js';
 import {
+  forbiddenReport,
+  isReportOwner,
   outputScope,
+  reportActions,
+  reportConflict,
   reportMembers,
   reportProject,
-  isReportOwner,
   writableReport,
-  reportConflict,
-  forbiddenReport,
-  reportActions,
 } from './output-report-access.js';
-import { outputTasks, syncOutputSnapshots } from './output-report-progress.js';
+import { syncOutputSnapshots } from './output-report-progress.js';
+import { outputTasks } from './output-report-task.repository.js';
 import {
-  reportQuantity,
   reportDay,
+  reportQuantity,
   reportTypes,
-  type ReportSave,
   type ReportCorrect,
-  type ReportReview,
   type ReportQuery,
+  type ReportReview,
+  type ReportSave,
 } from './output-report.domain.js';
-import { invalidTask, type TaskQuery } from './production-domain.js';
+import { invalidTask, type TaskQuery } from './production.domain.js';
 const name = (u: { displayName: string | null; realName: string | null; uid: string }) =>
   displayName(u.displayName ?? '', u.realName, u.uid);
 export class OutputReportService {
@@ -72,7 +73,7 @@ export class OutputReportService {
         const task = await tx.projectSubtask.findFirst({
           where: { projectId: query.projectId, id: query.subtaskId },
         });
-        if (!task) throw new AuthError(404, 'NOT_FOUND', '子任务不存在');
+        if (!task) throw new AppError(404, 'NOT_FOUND', '子任务不存在');
         if (!(p.role === 'NAVIGATOR' && p.uid === project.createdBy)) {
           const scope = await outputScope(tx, query.projectId, p, now);
           if (p.role === 'EXPERT') {
@@ -160,7 +161,7 @@ export class OutputReportService {
             where: { id: query.subtaskId, projectId: query.projectId },
           }))
         )
-          throw new AuthError(404, 'NOT_FOUND', '子任务不存在');
+          throw new AppError(404, 'NOT_FOUND', '子任务不存在');
         const where: Prisma.ProjectOutputReportWhereInput = {
           projectId: query.projectId,
           subtaskId: query.subtaskId ?? null,
@@ -434,7 +435,7 @@ export class OutputReportService {
         const report = await tx.projectOutputReport.findFirst({
           where: { projectId: input.projectId, id: input.reportId },
         });
-        if (!report) throw new AuthError(404, 'NOT_FOUND', '待修正报量不存在');
+        if (!report) throw new AppError(404, 'NOT_FOUND', '待修正报量不存在');
         if (!scope.correctionIds.includes(report.memberId)) throw forbiddenReport();
         await writableReport(tx, input.projectId, report.subtaskId);
         if (report.reviewStatus !== 'RETURNED') throw reportConflict();

@@ -1,14 +1,15 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
 import type { Config } from '../../config/index.js';
-import type { AuthPrincipal, AuthService } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import type { AuthService } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { validateTransport } from '../auth/security.js';
+import { personalApplicationSchema } from './personal-application.schema.js';
 import {
   PersonalApplicationService,
   type PersonalApplicationQuery,
 } from './personal-application.service.js';
-import { personalApplicationSchema } from './personal-application.schema.js';
 
 export async function personalApplicationRoutes(
   parent: FastifyInstance,
@@ -34,7 +35,7 @@ export async function personalApplicationRoutes(
           ...config.desktopOrigins,
         ]);
       } catch {
-        throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
+        throw new AppError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
       }
       const token =
         client === 'desktop'

@@ -1,24 +1,25 @@
-import type { RespondInput } from './expert-respond-command.js';
-import { respondBody, respondResponse } from './expert-respond.schema.js';
-import { expertTasksBody, expertTasksResponse } from './expert-task.schema.js';
-import type { ExpertTaskQuery } from './expert-task-query.js';
-import type { OwnerChangeInput } from './expert-owner-command.js';
-import { ownerChangeBody, ownerChangeResponse } from './expert-owner.schema.js';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
 import type { Config } from '../../config/index.js';
-import type { AuthPrincipal, AuthService } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import type { AuthService } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { validateTransport } from '../auth/security.js';
-import { ExpertAssignmentService } from './expert-assignment.service.js';
 import {
-  expertSchema,
-  myProjectsResponse,
-  myProjectsQuery,
   assignmentDetailQuery,
   assignmentDetailResponse,
+  expertSchema,
+  myProjectsQuery,
+  myProjectsResponse,
   projectOwnerCandidatesResponse,
 } from './expert-assignment.schema.js';
+import { ExpertAssignmentService } from './expert-assignment.service.js';
+import { ownerChangeBody, ownerChangeResponse } from './expert-owner.schema.js';
+import type { OwnerChangeInput } from './expert-owner.service.js';
+import { respondBody, respondResponse } from './expert-respond.schema.js';
+import type { RespondInput } from './expert-respond.service.js';
+import { expertTasksBody, expertTasksResponse } from './expert-task.schema.js';
+import type { ExpertTaskQuery } from './expert-task.types.js';
 export async function expertAssignmentRoutes(
   parent: FastifyInstance,
   service: ExpertAssignmentService,
@@ -43,7 +44,7 @@ export async function expertAssignmentRoutes(
           ...config.desktopOrigins,
         ]);
       } catch {
-        throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
+        throw new AppError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
       }
       const token =
         client === 'desktop'
@@ -178,7 +179,7 @@ export async function expertAssignmentRoutes(
           id < 1 ||
           id > 2147483647
         )
-          throw new AuthError(
+          throw new AppError(
             400,
             'VALIDATION_ERROR',
             '来源ID须为32位正整数，assignmentId与movementId二选一',

@@ -1,9 +1,9 @@
 import type { Prisma } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
 import type { FileRegistryService } from '../files/file-registry.service.js';
 import type { ProjectAttachmentInput } from './project-creation.types.js';
 
-const bad = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
+const bad = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
 // 调用方先锁创建人，再写/锁项目；本方法始终复用同一业务事务。
 export async function syncProjectAttachments(
   tx: Prisma.TransactionClient,

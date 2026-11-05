@@ -1,5 +1,5 @@
-import type { OrgMemberSchedule, OrgAttendanceDaily } from '@prisma/client';
-import { dateText, invalid } from './attendance-domain.js';
+import type { OrgAttendanceDaily, OrgMemberSchedule } from '@prisma/client';
+import { dateText, invalid } from './attendance.domain.js';
 export interface ClockInput {
   orgId?: string | null;
   clockType?: 'CLOCK_IN' | 'CLOCK_OUT' | null;

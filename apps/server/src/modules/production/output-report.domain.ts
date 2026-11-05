@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
-import { invalidTask, type TaskQuery } from './production-domain.js';
-import { parseDate } from '../attendance/attendance-domain.js';
-import { todayText } from '../personnel/personnel-domain.js';
+import { parseDate } from '../attendance/attendance.domain.js';
+import { todayText } from '../personnel/personnel.domain.js';
+import { invalidTask, type TaskQuery } from './production.domain.js';
 export interface ReportQuery extends TaskQuery {
   subtaskId?: number | null;
   reviewStatuses?: string[] | null;

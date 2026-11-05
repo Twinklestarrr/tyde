@@ -1,33 +1,34 @@
-import { calculateClockDaily } from './attendance-clock.domain.js';
-import { replayClockDaily } from './attendance-replay.js';
-import { createHash, randomUUID } from 'node:crypto';
 import {
   Prisma,
-  type PrismaClient,
-  type OrgMemberSchedule,
   type OrgAttendanceDaily,
+  type OrgMemberSchedule,
+  type PrismaClient,
 } from '@prisma/client';
-import { AttendanceService } from './attendance.service.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { lockOrganization, participatingStatuses } from '../organizations/organization.service.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { shanghaiDay } from '../organizations/departure.service.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { lockOrganization } from '../organizations/organization.repository.js';
+import { calculateClockDaily } from './attendance-clock.domain.js';
+import { replayClockDaily } from './attendance-replay.js';
 import {
   calendarDay,
-  summarize,
-  monthDates,
-  parseDate,
+  conflict,
   dateText,
   invalid,
-  conflict,
-} from './attendance-domain.js';
+  monthDates,
+  parseDate,
+  summarize,
+} from './attendance.domain.js';
+import { AttendanceService } from './attendance.service.js';
 import { HolidayCalendarService } from './holiday-calendar.service.js';
 import {
-  normalizeDetails,
   expandBatch,
-  type OrganizationScheduleQuery,
+  normalizeDetails,
   type OrganizationScheduleBatch,
   type OrganizationScheduleDetails,
+  type OrganizationScheduleQuery,
 } from './organization-schedule.domain.js';
 type Assignment = ReturnType<typeof normalizeDetails>[number];
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -48,10 +49,10 @@ export class OrganizationScheduleService {
   }
   private async manager(tx: Prisma.TransactionClient, orgId: string, principal: AuthPrincipal) {
     if (principal.role !== 'EXPERT')
-      throw new AuthError(403, 'FORBIDDEN', '请切换执行专家身份管理组织排班');
+      throw new AppError(403, 'FORBIDDEN', '请切换执行专家身份管理组织排班');
     const rel = await this.attendance.membership(tx, orgId, principal.userId);
     if (!['OWNER', 'ADMIN'].includes(rel.position))
-      throw new AuthError(403, 'FORBIDDEN', '仅目标组织主管或管理员可管理排班');
+      throw new AppError(403, 'FORBIDDEN', '仅目标组织主管或管理员可管理排班');
   }
   async list(input: OrganizationScheduleQuery, principal: AuthPrincipal) {
     const range = monthDates(input.month),
@@ -225,7 +226,7 @@ export class OrganizationScheduleService {
         });
         if (receipt) {
           if (receipt.requestHash !== requestHash)
-            throw new AuthError(409, 'DUPLICATE', '幂等键已用于不同排班请求');
+            throw new AppError(409, 'DUPLICATE', '幂等键已用于不同排班请求');
           return receipt.response;
         }
         const schedules = await assignments();

@@ -19,7 +19,7 @@
 只复验失败1项，从`tyde/`运行：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'production output reports: return, own correction'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'production output reports: return, own correction'
 ```
 
 OUTPUT_REPORT_CORRECTION仅作为轮次类型，卡片使用PRODUCTION_TASK（10）；OUTPUT_DATA_REVIEW卡片优先级70。仅清理sourceBizType=OUTPUT_REPORT的本领域快照，不误删其他来源的PRODUCTION_TASK。新增回归直接核对既有迁移中的支线节点约束，未放宽数据库校验。
@@ -71,7 +71,7 @@ Agent未应用迁移，未操作开发/部署数据库。此前用户通过的25
 
 ```sh
 pnpm db:deploy:test
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'production output reports'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'production output reports'
 ```
 
 迁移命令使用现有_test保护脚本，不清库；集成用例会重置该专用测试库，不可指向开发/部署库。六项覆盖：精确大数量/并发日报量/唯一认领/单位/版本；指定与项目级隔离/全量汇总/协作只读；退回/本人修正/离项转交/离组失权；职责核查/全部核准/终态/竞争/静默通知；混合明细与重复键/非写入状态回滚；注入报量和outbox故障的认领/轮次/快照/项目整事务回滚。

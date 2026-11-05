@@ -37,7 +37,7 @@
 
 ```sh
 pnpm db:deploy:test
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'attendance clock:'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'attendance clock:'
 ```
 
 073—075前批4项通过证据保留，不要求重跑；以上不是全218项复跑。真实HTTP、开发/部署迁移及完整兼容仍待验收；基础已交接10，本轮未执行10。

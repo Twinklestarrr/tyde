@@ -1,19 +1,20 @@
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
-import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
-import { memberInclude, qualifiedForEntry } from '../personnel/personnel-access.js';
 import { Prisma, type PrismaClient, type Project, type ProjectMember } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
 import type { FileRegistryService } from '../files/file-registry.service.js';
-import type { ProjectAttachmentInput } from './project-creation.types.js';
+import { qualifiedForEntry } from '../personnel/personnel-entry.domain.js';
+import { memberInclude } from '../personnel/personnel.types.js';
 import { syncProjectAttachments } from './project-attachments.js';
+import type { ProjectAttachmentInput } from './project-creation.types.js';
 import { displayName, projectDetailInclude } from './project-detail.js';
-import { projectTime } from './project-time.js';
+import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
 import {
   collectManagementTasks,
   managementTaskTypes,
   reconcileTaskRounds,
 } from './project-task-rounds.js';
+import { projectTime } from './project-time.js';
 
 export interface MaterialsInput {
   projectId: number;
@@ -21,7 +22,7 @@ export interface MaterialsInput {
   standardLink?: string | null;
   attachments?: ProjectAttachmentInput[] | null;
 }
-const forbidden = () => new AuthError(403, 'FORBIDDEN', '当前角色及项目关系无权操作标准材料');
+const forbidden = () => new AppError(403, 'FORBIDDEN', '当前角色及项目关系无权操作标准材料');
 const nodes = [
   'RECRUIT_PROJECT_MANAGER',
   'PRODUCTION_PLAN',
@@ -90,7 +91,7 @@ export class ProjectMaterialsService {
     const project = await tx.project.findFirst({
       where: { id, deleted: false, status: 'PUBLISHED' },
     });
-    if (!project) throw new AuthError(404, 'NOT_FOUND', '已发布项目不存在');
+    if (!project) throw new AppError(404, 'NOT_FOUND', '已发布项目不存在');
     if (principal.role === 'NAVIGATOR' && project.createdBy === principal.uid)
       return { project, primary: false };
     if (principal.role === 'PM') {
@@ -174,11 +175,7 @@ export class ProjectMaterialsService {
           AND "userId" = ${principal.userId}::uuid AND "status" = 'ACTIVE'
           AND "joinedAt" IS NOT NULL ORDER BY "id" DESC LIMIT 1 FOR UPDATE`;
       if (!member)
-        throw new AuthError(
-          400,
-          'VALIDATION_ERROR',
-          '当前执行专家尚未实际入项，不能确认标准与培训',
-        );
+        throw new AppError(400, 'VALIDATION_ERROR', '当前执行专家尚未实际入项，不能确认标准与培训');
       const assignment =
         member.expertAssignmentId == null
           ? null
@@ -190,7 +187,7 @@ export class ProjectMaterialsService {
         assignment?.owners.some((o) => o.userId === principal.userId && o.status === 'ACTIVE') ||
         (assignment?.owners.length === 0 && assignment.projectOwnerUserId === principal.userId)
       )
-        throw new AuthError(403, 'FORBIDDEN', '项目负责人不使用普通成员确认入口');
+        throw new AppError(403, 'FORBIDDEN', '项目负责人不使用普通成员确认入口');
       const now = new Date();
       const transitioned = member.standardTrainingConfirmedAt == null;
       if (transitioned) {
@@ -204,7 +201,7 @@ export class ProjectMaterialsService {
           data: { standardTrainingConfirmedAt: now, updatedBy: principal.uid },
         });
         if (updated.count !== 1)
-          throw new AuthError(409, 'DUPLICATE', '标准与培训确认状态已变化，请刷新后重试');
+          throw new AppError(409, 'DUPLICATE', '标准与培训确认状态已变化，请刷新后重试');
       }
       if (project.currentNodeCode !== 'COMPLETED') {
         const open = await tx.projectTaskRound.findMany({
@@ -272,7 +269,7 @@ export class ProjectMaterialsService {
         (input.standardLink?.length ?? 0) > 2000 ||
         (input.attachments?.length ?? 0) > 20
       )
-        throw new AuthError(
+        throw new AppError(
           400,
           'VALIDATION_ERROR',
           '正文与链接至少填写一项，链接最多2000字符，附件最多20个',
@@ -296,7 +293,7 @@ export class ProjectMaterialsService {
           updatedBy: principal.uid,
         },
       });
-      if (changed.count !== 1) throw new AuthError(409, 'DUPLICATE', '项目已更新，请刷新后重试');
+      if (changed.count !== 1) throw new AppError(409, 'DUPLICATE', '项目已更新，请刷新后重试');
       const user =
         input.attachments == null
           ? null

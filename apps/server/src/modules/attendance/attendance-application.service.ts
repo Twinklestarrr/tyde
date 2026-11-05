@@ -1,42 +1,43 @@
+import { Prisma, type ApprovalFlow, type ApprovalNode, type PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
-import { Prisma, type PrismaClient, type ApprovalFlow, type ApprovalNode } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import type { ProcessInput } from '../organizations/organization-approval.service.js';
-import { lockOrganization, participatingStatuses } from '../organizations/organization.service.js';
+import { AppError } from '../../common/errors.js';
 import {
   appendAction,
   approvalConflict,
   finishPending,
   lockFlow,
 } from '../approval/approval.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { shanghaiDay } from '../organizations/departure.service.js';
+import type { ProcessInput } from '../organizations/organization-approval.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { lockOrganization } from '../organizations/organization.repository.js';
 import { displayName } from '../projects/project-detail.js';
-import { invalid, parseDate } from './attendance-domain.js';
 import {
+  applicationConflict,
+  assertDailySnapshot,
+  attendanceApplicationResult,
   attendanceBusinessId,
   attendanceBusinessTypes,
   isAttendanceBusiness,
+  newDailyAutoStatus,
+  readAttendanceForm,
   validateApplication,
   validateLeaveSchedule,
-  readAttendanceForm,
-  assertDailySnapshot,
-  newDailyAutoStatus,
-  applicationConflict,
-  attendanceApplicationResult,
   type AttendanceApplyInput,
 } from './attendance-application.domain.js';
+import { invalid, parseDate } from './attendance.domain.js';
 export class AttendanceApplicationService {
   constructor(readonly db: PrismaClient) {}
   private async scope(tx: Prisma.TransactionClient, orgId: string, userId: string) {
     const org = await tx.organization.findFirst({ where: { id: orgId, deleted: false } });
-    if (!org) throw new AuthError(404, 'NOT_FOUND', '组织不存在');
+    if (!org) throw new AppError(404, 'NOT_FOUND', '组织不存在');
     const rel = await tx.userOrgRel.findUnique({
       where: { userId_orgId: { userId, orgId } },
       include: { user: true },
     });
     if (!rel || !participatingStatuses.includes(rel.joinStatus) || rel.user.status !== 'ACTIVE')
-      throw new AuthError(403, 'FORBIDDEN', '申请人不是该组织有效成员');
+      throw new AppError(403, 'FORBIDDEN', '申请人不是该组织有效成员');
     return { org, rel };
   }
   private async day(tx: Prisma.TransactionClient, orgId: string, userId: string, date: string) {
@@ -61,7 +62,7 @@ export class AttendanceApplicationService {
       await lockOrganization(tx, input.orgId);
       const { org, rel } = await this.scope(tx, input.orgId, principal.userId);
       if (!['MEMBER', 'ADMIN'].includes(rel.position))
-        throw new AuthError(403, 'FORBIDDEN', '组织主管本人请使用获授权的直接变更接口');
+        throw new AppError(403, 'FORBIDDEN', '组织主管本人请使用获授权的直接变更接口');
       const businessId = attendanceBusinessId(principal.userId, input.attendanceDate);
       if (
         await tx.approvalFlow.findFirst({
@@ -185,9 +186,9 @@ export class AttendanceApplicationService {
   ) {
     return this.db.$transaction(async (tx) => {
       const initial = await tx.approvalFlow.findUnique({ where: { id: input.applicationId } });
-      if (!initial) throw new AuthError(404, 'NOT_FOUND', '申请不存在');
+      if (!initial) throw new AppError(404, 'NOT_FOUND', '申请不存在');
       if (initial.applicantId !== principal.userId)
-        throw new AuthError(403, 'FORBIDDEN', '只能撤回本人申请');
+        throw new AppError(403, 'FORBIDDEN', '只能撤回本人申请');
       if (!isAttendanceBusiness(initial.businessType)) throw invalid('本接口仅支持撤回考勤申请');
       if (!initial.applicantOrgId) throw invalid('考勤申请缺少所属组织');
       await lockOrganization(tx, initial.applicantOrgId);
@@ -195,7 +196,7 @@ export class AttendanceApplicationService {
       if (flow.status !== 'PENDING' || flow.versionNo !== input.flowVersionNo)
         throw approvalConflict();
       if (flow.applicantId !== principal.userId || flow.id !== input.applicationId)
-        throw new AuthError(403, 'FORBIDDEN', '只能撤回本人申请');
+        throw new AppError(403, 'FORBIDDEN', '只能撤回本人申请');
       readAttendanceForm(flow);
       await tx.$queryRaw`SELECT "id" FROM "ApprovalNode" WHERE "flowId"=${flow.id}::uuid ORDER BY "id" FOR UPDATE`;
       const nodes = await tx.approvalNode.findMany({ where: { flowId: flow.id } });
@@ -252,7 +253,7 @@ export class AttendanceApplicationService {
     principal: AuthPrincipal,
   ) {
     if (flow.applicantId === principal.userId)
-      throw new AuthError(403, 'FORBIDDEN', '不能审批本人的考勤申请');
+      throw new AppError(403, 'FORBIDDEN', '不能审批本人的考勤申请');
     const form = readAttendanceForm(flow),
       now = new Date();
     const status = input.action === 'APPROVE' ? 'APPROVED' : 'REJECTED';

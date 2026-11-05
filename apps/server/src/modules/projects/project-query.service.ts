@@ -1,8 +1,8 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { hasManagementRole } from '../management/management.service.js';
-import { projectDetailData, projectDetailInclude, displayName } from './project-detail.js';
+import { displayName, projectDetailData, projectDetailInclude } from './project-detail.js';
 import { productionStageData } from './project-production-plan.service.js';
 
 export class ProjectQueryService {
@@ -14,7 +14,7 @@ export class ProjectQueryService {
           where: { id: projectId, deleted: false, status: 'PUBLISHED' },
           include: projectDetailInclude,
         });
-        if (!project) throw new AuthError(404, 'NOT_FOUND', '已发布项目不存在');
+        if (!project) throw new AppError(404, 'NOT_FOUND', '已发布项目不存在');
         // 当前会话角色与实际项目关系共同决定访问范围。
         const creator =
           project.createdBy === principal.uid &&
@@ -51,7 +51,7 @@ export class ProjectQueryService {
             }),
           );
         if (!creator && !manager && !expert)
-          throw new AuthError(403, 'FORBIDDEN', '当前用户无权查看该项目');
+          throw new AppError(403, 'FORBIDDEN', '当前用户无权查看该项目');
         const data = await projectDetailData(tx, project);
         const user = await tx.user.findUnique({
           where: { uid: project.createdBy },

@@ -12,7 +12,7 @@ API-081 `POST /api/v1/project-personnel/roster/list`、API-082 `POST /api/v1/pro
 
 批量最多100项，去重、全成或全败。锁序为用户→组织→组织关系→项目→成员。YES单向推进PRODUCTION_TASK，不递增项目版本；成员决定、管理主线/入项轮次、本域入项快照、普通成员培训轮次及PENDING outbox同事务。负责人任务卡按真实未确认入项来源展示MEMBER_ENTRY_CONFIRM。高优先级跨域快照保留，完整跨域重算/转项审批/实际通知投递仍归04/12/14，业务Agent继续mock。
 
-未来日期生效提供显式命令 `pnpm --filter @tyde/server personnel:entries`，编译入口`dist/personnel-entries.js`。重新锁定并核对接单/准入/组织资格，只激活仍有效的到期成员；实际入项时间为计划日期上海零点，重复不重复写。每人独立事务，失败计数并设置进程非零退出；未配置后台或每日调度，本批Agent未运行此命令或操作开发/部署库。
+未来日期生效提供显式命令 `pnpm --filter @tyde/server personnel:entries`，编译入口`dist/cli/personnel-entries.js`。重新锁定并核对接单/准入/组织资格，只激活仍有效的到期成员；实际入项时间为计划日期上海零点，重复不重复写。每人独立事务，失败计数并设置进程非零退出；未配置后台或每日调度，本批Agent未运行此命令或操作开发/部署库。
 
 验证：2026-10-23 17:56:57启动的504项单测通过（46文件，总21.90秒），服务端类型检查、变更ESLint及后端包构建通过。最终12项人员/任务卡/OpenAPI定向（18:00:15，总5.04秒）、变更ESLint和后端包build通过；新增集成结果见下方。
 

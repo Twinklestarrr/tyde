@@ -1,11 +1,11 @@
 import multipart from '@fastify/multipart';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_PREFIX } from '@tyde/shared';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { EXAM_SOURCE_LIMIT } from './exam-import.parser.js';
-import type { ExamImportInput, ExamImportFile, ExamImportService } from './exam-import.service.js';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { EXAM_SOURCE_LIMIT } from './exam-import.domain.js';
 import { examImportSchema } from './exam-import.schema.js';
+import type { ExamImportFile, ExamImportInput, ExamImportService } from './exam-import.service.js';
 const REQUEST_LIMIT = EXAM_SOURCE_LIMIT + 256 * 1024;
 export async function examImportRoutes(
   app: FastifyInstance,
@@ -30,15 +30,15 @@ export async function examImportRoutes(
       schema: examImportSchema,
       preValidation: async (req) => {
         if (!req.isMultipart())
-          throw new AuthError(400, 'VALIDATION_ERROR', '请使用multipart/form-data');
+          throw new AppError(400, 'VALIDATION_ERROR', '请使用multipart/form-data');
         const body: Partial<ExamImportInput> = {},
           seen = new Set<string>();
         let total = 0,
-          tooLarge: AuthError | undefined;
+          tooLarge: AppError | undefined;
         const count = (chunk: Buffer) => {
           total += chunk.length;
           if (total > REQUEST_LIMIT && !tooLarge) {
-            tooLarge = new AuthError(413, 'PAYLOAD_TOO_LARGE', '导入请求超过总大小限制');
+            tooLarge = new AppError(413, 'PAYLOAD_TOO_LARGE', '导入请求超过总大小限制');
             req.raw.emit('error', tooLarge);
           }
         };
@@ -46,11 +46,11 @@ export async function examImportRoutes(
         try {
           for await (const part of req.parts()) {
             if (seen.has(part.fieldname))
-              throw new AuthError(400, 'VALIDATION_ERROR', '表单字段重复');
+              throw new AppError(400, 'VALIDATION_ERROR', '表单字段重复');
             seen.add(part.fieldname);
             if (part.type === 'file') {
               if (part.fieldname !== 'file')
-                throw new AuthError(400, 'VALIDATION_ERROR', '文件字段名必须为file');
+                throw new AppError(400, 'VALIDATION_ERROR', '文件字段名必须为file');
               files.set(req, { fileName: part.filename, bytes: await part.toBuffer() });
               body.file = part.filename;
             } else {
@@ -59,22 +59,22 @@ export async function examImportRoutes(
                 part.valueTruncated ||
                 part.fieldnameTruncated
               )
-                throw new AuthError(400, 'VALIDATION_ERROR', '表单字段不正确或超过大小限制');
+                throw new AppError(400, 'VALIDATION_ERROR', '表单字段不正确或超过大小限制');
               if (part.fieldname === 'attachmentRefs') {
                 body.attachmentRefs =
                   typeof part.value === 'string' ? JSON.parse(part.value) : part.value;
               } else {
                 if (typeof part.value !== 'string')
-                  throw new AuthError(400, 'VALIDATION_ERROR', '项目或来源字段必须为字符串');
+                  throw new AppError(400, 'VALIDATION_ERROR', '项目或来源字段必须为字符串');
                 body[part.fieldname as 'projectId' | 'redocUrl'] = part.value;
               }
             }
           }
         } catch (error) {
           if (tooLarge) throw tooLarge;
-          if (error instanceof AuthError) throw error;
+          if (error instanceof AppError) throw error;
           const code = (error as { code?: string }).code;
-          throw new AuthError(
+          throw new AppError(
             code &&
               [
                 'FST_REQ_FILE_TOO_LARGE',
@@ -96,7 +96,7 @@ export async function examImportRoutes(
             req.query[key] !== undefined &&
             body[key] !== req.query[key]
           )
-            throw new AuthError(400, 'VALIDATION_ERROR', '查询和表单同名字段冲突');
+            throw new AppError(400, 'VALIDATION_ERROR', '查询和表单同名字段冲突');
           if (body[key] === undefined && req.query[key] !== undefined) body[key] = req.query[key];
         }
         req.body = body as ExamImportInput;

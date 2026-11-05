@@ -1,8 +1,8 @@
 import type { FastifySchema } from 'fastify';
 import { resultSchema } from '../auth/auth.schema.js';
-import { projectPublishedDetail, projectPublishedExample } from './project-query.schema.js';
-import { managerRecruitResult } from './project-manager.schema.js';
 import { branchLabels } from './project-list.service.js';
+import { managerRecruitResult } from './project-manager.schema.js';
+import { projectPublishedDetail, projectPublishedExample } from './project-query.schema.js';
 const text = (description: string, nullable = false) => ({
   type: 'string',
   description,

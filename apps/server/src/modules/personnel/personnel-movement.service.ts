@@ -1,23 +1,22 @@
-import { processDueMovements } from './personnel-movement-effective.js';
+import { Prisma, type PrismaClient } from '@prisma/client';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { displayName } from '../projects/project-detail.js';
+import { personnelScope } from './personnel-access.js';
+import { createMovement } from './personnel-movement-create.service.js';
+import { processDueMovements } from './personnel-movement-effective.service.js';
 import {
   listMovements,
   movementDetail,
-  type MovementQuery,
   type MovementDetailQuery,
+  type MovementQuery,
 } from './personnel-movement-query.js';
-import { createMovement } from './personnel-movement-create.js';
+import type { MovementInput } from './personnel-movement.domain.js';
+import { processMovement, withdrawMovement } from './personnel-transfer.service.js';
 import {
-  processMovement,
-  withdrawMovement,
   type MovementProcessInput,
   type MovementWithdrawInput,
-} from './personnel-transfer.js';
-import type { MovementInput } from './personnel-movement.domain.js';
-import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { displayName } from '../projects/project-detail.js';
-import { personnelScope } from './personnel-access.js';
+} from './personnel-transfer.types.js';
 
 export interface TransferTargetQuery {
   projectId: number;
@@ -71,7 +70,7 @@ export class PersonnelMovementService {
       (query.size ?? 20) > 100 ||
       (query.keyword != null && (typeof query.keyword !== 'string' || query.keyword.length > 128))
     )
-      throw new AuthError(400, 'VALIDATION_ERROR', '项目、成员、分页或关键字格式不正确');
+      throw new AppError(400, 'VALIDATION_ERROR', '项目、成员、分页或关键字格式不正确');
     return this.db.$transaction(
       async (tx) => {
         // 旧候选入口使用管理权限，招募协作负责人的只读权限不适用于此入口。
@@ -82,14 +81,14 @@ export class PersonnelMovementService {
           select: { id: true, organizationId: true, userId: true },
         });
         if (members.length !== ids.length)
-          throw new AuthError(400, 'VALIDATION_ERROR', '所选人员包含非本项目已入项成员');
+          throw new AppError(400, 'VALIDATION_ERROR', '所选人员包含非本项目已入项成员');
         if (
           scope.organizationIds &&
           members.some(
             (m) => !m.organizationId || !scope.organizationIds.includes(m.organizationId),
           )
         )
-          throw new AuthError(403, 'FORBIDDEN', '所选人员不在当前组织管理范围');
+          throw new AppError(403, 'FORBIDDEN', '所选人员不在当前组织管理范围');
 
         const current = query.current ?? 1;
         const size = query.size ?? 20;

@@ -1,12 +1,18 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { type ClientType } from './auth.types.js';
+
 export { MOCK_SMS_CODE as MOCK_CODE } from '@tyde/shared';
+
 export const SESSION_DAYS = 30;
+
 export function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
+
 export function newToken(): string {
   return randomBytes(32).toString('base64url');
 }
+
 export function codeDigest(
   secret: string,
   id: string,
@@ -18,11 +24,13 @@ export function codeDigest(
     .update(JSON.stringify([id, phone, purpose, code]))
     .digest('hex');
 }
+
 export function matchesDigest(left: string, right: string): boolean {
   const a = Buffer.from(left, 'hex');
   const b = Buffer.from(right, 'hex');
   return a.length === 32 && b.length === 32 && timingSafeEqual(a, b);
 }
+
 export function normalizeProfile(
   username: string,
   displayName: string,
@@ -35,7 +43,7 @@ export function normalizeProfile(
     throw new Error('姓名须为 1～80 个字符，不含控制字符');
   return { username: normalized, displayName: name };
 }
-export type ClientType = 'web' | 'desktop';
+
 export function validateTransport(
   headers: Record<string, string | string[] | undefined>,
   method: string,

@@ -1,51 +1,52 @@
-import type { MovementQuery, MovementDetailQuery } from './personnel-movement-query.js';
-import {
-  movementListBody,
-  movementDetailBody,
-  movementListResponse,
-  movementDetailResponse,
-} from './personnel-movement-query.schema.js';
-import {
-  PersonnelRecordsService,
-  type ProjectAttendanceQuery,
-  type PerformanceQuery,
-  type PerformanceInput,
-} from './personnel-records.service.js';
-import {
-  attendanceBody,
-  attendanceResponse,
-  performanceBody,
-  performanceResponse,
-  performanceCreateBody,
-} from './personnel-records.schema.js';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
 import type { Config } from '../../config/index.js';
-import type { AuthPrincipal, AuthService } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import type { AuthService } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { validateTransport } from '../auth/security.js';
-import { PersonnelService } from './personnel.service.js';
+import type { MovementDetailQuery, MovementQuery } from './personnel-movement-query.js';
+import {
+  movementDetailBody,
+  movementDetailResponse,
+  movementListBody,
+  movementListResponse,
+} from './personnel-movement-query.schema.js';
+import type { MovementInput } from './personnel-movement.domain.js';
+import {
+  movementCommandResponse,
+  movementCreateSchema,
+  movementProcessBody,
+  movementWithdrawBody,
+  transferTargetSchema,
+} from './personnel-movement.schema.js';
 import {
   PersonnelMovementService,
   type TransferTargetQuery,
 } from './personnel-movement.service.js';
-import type { MovementInput } from './personnel-movement.domain.js';
-import type { MovementProcessInput, MovementWithdrawInput } from './personnel-transfer.js';
 import {
-  movementCreateSchema,
-  transferTargetSchema,
-  movementWithdrawBody,
-  movementProcessBody,
-  movementCommandResponse,
-} from './personnel-movement.schema.js';
-import type { RosterQuery, EntryInput } from './personnel-domain.js';
+  attendanceBody,
+  attendanceResponse,
+  performanceBody,
+  performanceCreateBody,
+  performanceResponse,
+} from './personnel-records.schema.js';
 import {
+  PersonnelRecordsService,
+  type PerformanceInput,
+  type PerformanceQuery,
+  type ProjectAttendanceQuery,
+} from './personnel-records.service.js';
+import type { MovementProcessInput, MovementWithdrawInput } from './personnel-transfer.types.js';
+import type { EntryInput, RosterQuery } from './personnel.domain.js';
+import {
+  entryBody,
+  entryResponse,
   personnelSchema,
   rosterBody,
   rosterResponse,
-  entryBody,
-  entryResponse,
 } from './personnel.schema.js';
+import { PersonnelService } from './personnel.service.js';
 export async function personnelRoutes(
   parent: FastifyInstance,
   service: PersonnelService,
@@ -72,7 +73,7 @@ export async function personnelRoutes(
           ...config.desktopOrigins,
         ]);
       } catch {
-        throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
+        throw new AppError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
       }
       const token =
         client === 'desktop'

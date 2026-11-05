@@ -1,7 +1,7 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { hasManagementRole } from '../management/management.service.js';
-import { AuthError } from '../auth/auth.error.js';
 import { projectTime } from './project-time.js';
 export const branchLabels = {
   MEMBER_MOVEMENT_APPROVAL: '人员变动审批',
@@ -76,7 +76,7 @@ export class ProjectListService {
     return this.db.$transaction(
       async (tx) => {
         if (!(await hasManagementRole(tx, principal, role)))
-          throw new AuthError(403, 'FORBIDDEN', '请切换到对应业务角色');
+          throw new AppError(403, 'FORBIDDEN', '请切换到对应业务角色');
         const perspective =
           role === 'NAVIGATOR'
             ? Prisma.sql`'NAVIGATOR'`

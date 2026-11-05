@@ -1,24 +1,25 @@
-import { replayClockDaily } from './attendance-replay.js';
-import { attendanceBusinessId, attendanceBusinessTypes } from './attendance-application.domain.js';
-import { createHash, randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { participatingStatuses, lockOrganization } from '../organizations/organization.service.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { shanghaiDay } from '../organizations/departure.service.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { lockOrganization } from '../organizations/organization.repository.js';
 import { projectTime } from '../projects/project-time.js';
+import { attendanceBusinessId, attendanceBusinessTypes } from './attendance-application.domain.js';
+import { replayClockDaily } from './attendance-replay.js';
 import {
   calendarDay,
-  summarize,
+  conflict,
+  dateText,
+  invalid,
+  manualStatuses,
   monthDates,
   normalizeSchedules,
   parseDate,
-  dateText,
-  invalid,
-  conflict,
-  manualStatuses,
+  summarize,
   type ScheduleInput,
-} from './attendance-domain.js';
+} from './attendance.domain.js';
 export interface AttendanceUpdate {
   orgId: string;
   dailyId: number;
@@ -30,18 +31,18 @@ export class AttendanceService {
   constructor(readonly db: PrismaClient) {}
   async independent(tx: Prisma.TransactionClient, principal: AuthPrincipal) {
     if (principal.role !== 'EXPERT')
-      throw new AuthError(403, 'FORBIDDEN', '仅执行专家可以使用个人排班');
+      throw new AppError(403, 'FORBIDDEN', '仅执行专家可以使用个人排班');
     const count = await tx.userOrgRel.count({
       where: { userId: principal.userId, joinStatus: { in: participatingStatuses } },
     });
-    if (count) throw new AuthError(403, 'FORBIDDEN', '当前用户已有组织，请使用组织排班并传orgId');
+    if (count) throw new AppError(403, 'FORBIDDEN', '当前用户已有组织，请使用组织排班并传orgId');
   }
   async membership(tx: Prisma.TransactionClient, orgId: string, userId: string) {
     const org = await tx.organization.findFirst({ where: { id: orgId, deleted: false } });
-    if (!org) throw new AuthError(404, 'NOT_FOUND', '组织不存在');
+    if (!org) throw new AppError(404, 'NOT_FOUND', '组织不存在');
     const rel = await tx.userOrgRel.findUnique({ where: { userId_orgId: { userId, orgId } } });
     if (!rel || !participatingStatuses.includes(rel.joinStatus))
-      throw new AuthError(403, 'FORBIDDEN', '当前用户不是该组织有效成员');
+      throw new AppError(403, 'FORBIDDEN', '当前用户不是该组织有效成员');
     return rel;
   }
   async batch(key: string, input: ScheduleInput, principal: AuthPrincipal) {
@@ -60,7 +61,7 @@ export class AttendanceService {
         });
         if (receipt) {
           if (receipt.requestHash !== requestHash)
-            throw new AuthError(409, 'DUPLICATE', '幂等键已用于不同排班请求');
+            throw new AppError(409, 'DUPLICATE', '幂等键已用于不同排班请求');
           return receipt.response;
         }
         const batchNo = `SELF-SCH-${randomUUID().replaceAll('-', '').toUpperCase()}`;
@@ -266,12 +267,12 @@ export class AttendanceService {
       await lockOrganization(tx, input.orgId);
       const rel = await this.membership(tx, input.orgId, principal.userId);
       if (!['OWNER', 'ADMIN'].includes(rel.position))
-        throw new AuthError(403, 'FORBIDDEN', '仅组织主管和管理员可直接变更考勤');
+        throw new AppError(403, 'FORBIDDEN', '仅组织主管和管理员可直接变更考勤');
       await tx.$queryRaw`SELECT "id" FROM "OrgAttendanceDaily" WHERE "id" = ${input.dailyId} AND "orgId" = ${input.orgId}::uuid FOR UPDATE`;
       const daily = await tx.orgAttendanceDaily.findFirst({
         where: { id: input.dailyId, orgId: input.orgId },
       });
-      if (!daily) throw new AuthError(404, 'NOT_FOUND', '日考勤记录不存在');
+      if (!daily) throw new AppError(404, 'NOT_FOUND', '日考勤记录不存在');
       if (daily.versionNo !== input.versionNo) throw conflict();
       if (dateText(daily.attendanceDate) > shanghaiDay(new Date()))
         throw invalid('不能修正未来日期的考勤');

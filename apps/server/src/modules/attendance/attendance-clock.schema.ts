@@ -1,4 +1,4 @@
-import { attendanceStatuses } from './attendance-domain.js';
+import { attendanceStatuses } from './attendance.domain.js';
 import { scheduleHeaders } from './attendance.schema.js';
 type Schema = Record<string, unknown>;
 const text = (description: string, nullable = false): Schema => ({

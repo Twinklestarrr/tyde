@@ -1,39 +1,40 @@
-import { organizationDetailResponse } from '../organizations/organization.schema.js';
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   API_PREFIX,
-  switchRoleSchema,
-  organizationCreateSchema,
-  type OrganizationCreateInput,
-  type BusinessRole,
-  smsSendSchema,
+  loginSchema,
   nicknameCheckSchema,
-  userProfileUpdateSchema,
-  type UserProfileUpdateInput,
+  organizationCreateSchema,
+  passwordResetSchema,
+  refreshSchema,
   smsLoginSchema,
   smsRegisterSchema,
-  loginSchema,
-  refreshSchema,
-  passwordResetSchema,
-  type SmsSendInput,
+  smsSendSchema,
+  switchRoleSchema,
+  userProfileUpdateSchema,
+  type BusinessRole,
+  type LoginInput,
+  type LoginResponse,
+  type OrganizationCreateInput,
+  type PasswordResetInput,
   type SmsLoginInput,
   type SmsRegisterInput,
-  type LoginInput,
-  type PasswordResetInput,
-  type LoginResponse,
+  type SmsSendInput,
+  type UserProfileUpdateInput,
 } from '@tyde/shared';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
 import type { Config } from '../../config/index.js';
-import { AuthError } from './auth.error.js';
-import { AuthService } from './auth.service.js';
-import { SESSION_DAYS, validateTransport, type ClientType } from './security.js';
+import { organizationDetailResponse } from '../organizations/organization.schema.js';
 import {
   authSchema,
-  resultSchema,
-  userResponse,
-  nicknameCheckResponse,
   loginResponse,
+  nicknameCheckResponse,
+  resultSchema,
   smsLoginResponse,
+  userResponse,
 } from './auth.schema.js';
+import { AuthService } from './auth.service.js';
+import { type ClientType } from './auth.types.js';
+import { SESSION_DAYS, validateTransport } from './security.js';
 export async function authRoutes(app: FastifyInstance, service: AuthService, config: Config) {
   const cookieName = config.cookieSecure ? '__Host-tyde_session' : 'tyde_session';
   const cookieOptions = {
@@ -79,7 +80,7 @@ export async function authRoutes(app: FastifyInstance, service: AuthService, con
     try {
       validateTransport(req.headers, req.method, browserOrigins);
     } catch (error) {
-      throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', (error as Error).message);
+      throw new AppError(403, 'ORIGIN_NOT_ALLOWED', (error as Error).message);
     }
   });
   function finish(result: LoginResponse, req: FastifyRequest, reply: FastifyReply) {

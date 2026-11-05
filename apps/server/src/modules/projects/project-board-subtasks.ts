@@ -1,8 +1,8 @@
 import { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { boardStatisticsScope } from './project-workbench-statistics.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { projectTime } from './project-time.js';
+import { boardStatisticsScope } from './project-workbench-statistics.js';
 
 const Decimal = Prisma.Decimal.clone({ precision: 64 });
 const statusNames: Record<string, string> = {
@@ -19,13 +19,13 @@ export async function resolveBoardAccess(
   principal: AuthPrincipal,
 ) {
   if (!Number.isInteger(projectId) || projectId < 1 || projectId > 2147483647)
-    throw new AuthError(400, 'VALIDATION_ERROR', 'projectId必须为32位正整数');
+    throw new AppError(400, 'VALIDATION_ERROR', 'projectId必须为32位正整数');
   const scope = boardStatisticsScope(principal);
   const project = await tx.project.findFirst({
     where: { id: projectId, deleted: false, status: 'PUBLISHED', AND: [scope] },
     select: { id: true, projectName: true, deadline: true, currentNodeCode: true },
   });
-  if (!project) throw new AuthError(403, 'FORBIDDEN', '当前用户无权查看该项目看板');
+  if (!project) throw new AppError(403, 'FORBIDDEN', '当前用户无权查看该项目看板');
   const assignments =
     principal.role === 'EXPERT'
       ? await tx.projectExpertAssignment.findMany({
@@ -35,7 +35,7 @@ export async function resolveBoardAccess(
       : null;
   const organizationIds = assignments?.flatMap((a) => (a.organizationId ? [a.organizationId] : []));
   if (organizationIds && !organizationIds.length)
-    throw new AuthError(403, 'FORBIDDEN', '当前执行专家不再管理该项目组织');
+    throw new AppError(403, 'FORBIDDEN', '当前执行专家不再管理该项目组织');
   return { project, organizationIds };
 }
 

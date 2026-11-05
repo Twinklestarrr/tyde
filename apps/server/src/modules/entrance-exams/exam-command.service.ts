@@ -1,24 +1,23 @@
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
-import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
-import { randomUUID } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
 import type { FileRegistryService } from '../files/file-registry.service.js';
 import { displayName } from '../projects/project-detail.js';
-import { projectTime } from '../projects/project-time.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { nodeAfterPlan } from '../projects/project-production-plan.service.js';
 import {
   collectManagementTasks,
-  reconcileTaskRounds,
   managementTaskTypes,
+  reconcileTaskRounds,
 } from '../projects/project-task-rounds.js';
-import { requireExamManager } from './exam-access.js';
-import { requireProjectExam, type ExamLocator } from './exam-access.js';
+import { projectTime } from '../projects/project-time.js';
+import { requireExamManager, requireProjectExam, type ExamLocator } from './exam-access.js';
 import { prepareExamConfig } from './exam-config.js';
 import type { ExamConfigInput, ExamEditInput, ExamFileInput } from './exam-config.types.js';
-const bad = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
-const conflict = (message: string) => new AuthError(409, 'DUPLICATE', message);
+const bad = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
+const conflict = (message: string) => new AppError(409, 'DUPLICATE', message);
 export class ExamCommandService {
   constructor(
     readonly db: PrismaClient,
@@ -93,7 +92,7 @@ export class ExamCommandService {
             exam = await tx.projectEntranceExam.findFirst({
               where: { id: editing.examId, projectId: input.projectId, deleted: false },
             });
-            if (!exam) throw new AuthError(404, 'NOT_FOUND', '考试不存在或不属于当前项目');
+            if (!exam) throw new AppError(404, 'NOT_FOUND', '考试不存在或不属于当前项目');
             if (exam.status !== 'ACTIVE') throw bad('已关闭考试不允许编辑');
             if (exam.currentVersionId !== editing.expectedCurrentVersionId)
               throw conflict('考试内容已被其他人修改，请刷新后重试');
@@ -101,7 +100,7 @@ export class ExamCommandService {
               where: { id: exam.currentVersionId },
             });
             if (!current || current.examId !== exam.id)
-              throw new AuthError(500, 'INTERNAL_ERROR', '考试当前配置版本异常');
+              throw new AppError(500, 'INTERNAL_ERROR', '考试当前配置版本异常');
             versionNo = current.versionNo + 1;
           } else {
             await tx.$queryRaw`SELECT "id" FROM "ProjectProductionPlan" WHERE "projectId" = ${input.projectId} FOR UPDATE`;

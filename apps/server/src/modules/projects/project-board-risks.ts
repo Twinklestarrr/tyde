@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { loadBoardSubtasks, resolveBoardAccess } from './project-board-subtasks.js';
 import { displayName } from './project-detail.js';
 import { projectTime } from './project-time.js';

@@ -1,5 +1,5 @@
 import type { FastifySchema } from 'fastify';
-import { taskStatuses } from './production-domain.js';
+import { taskStatuses } from './production.domain.js';
 export const id = (description: string) => ({
   type: 'integer',
   minimum: 1,

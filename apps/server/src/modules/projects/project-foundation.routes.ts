@@ -1,63 +1,64 @@
-import type { BoardTrendsQuery } from './project-board-trends.js';
+import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
+import type { Config } from '../../config/index.js';
+import type { AuthService } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { validateTransport } from '../auth/security.js';
 import type { BoardProjectsQuery } from './project-board-projects.js';
+import type { BoardTrendsQuery } from './project-board-trends.js';
+import {
+  boardBasicSchema,
+  boardProjectsSchema,
+  boardRisksSchema,
+  boardStatisticsSchema,
+  boardSubtasksSchema,
+  boardTrendsSchema,
+} from './project-board.schema.js';
 import type { ProjectBoardService } from './project-board.service.js';
 import {
-  boardTrendsSchema,
-  boardRisksSchema,
-  boardSubtasksSchema,
-  boardProjectsSchema,
-  boardStatisticsSchema,
-  boardBasicSchema,
-} from './project-board.schema.js';
-import type { ProjectRecruitmentService, RecruitmentInput } from './project-recruitment.service.js';
-import type { RecruitmentQuery } from './project-recruitment-candidates.js';
-import { recruitmentSchema } from './project-recruitment.schema.js';
-import type {
-  ProjectRecruitmentHandlerService,
-  HandlerChangeInput,
-} from './project-recruitment-handler.service.js';
-import { handlerSchema } from './project-recruitment-handler.schema.js';
-import type { ProjectMaterialsService, MaterialsInput } from './project-materials.service.js';
-import { materialsSchema, materialsConfirmSchema } from './project-materials.schema.js';
-import type { ProjectListService } from './project-list.service.js';
-import { projectListSchema } from './project-list.schema.js';
-import type { ProjectQueryService } from './project-query.service.js';
-import { projectQuerySchema } from './project-query.schema.js';
-import { productionPlanSchema } from './project-production-plan.schema.js';
-import type {
-  ProjectProductionPlanService,
-  ProductionPlanInput,
-} from './project-production-plan.service.js';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { API_PREFIX } from '@tyde/shared';
-import type { Config } from '../../config/index.js';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal, AuthService } from '../auth/auth.service.js';
-import { validateTransport } from '../auth/security.js';
-import type { ProjectManagerService, ManagerRecruitInput } from './project-manager.service.js';
-import {
-  managerCandidatesQuery,
-  managerRecruitBody,
-  managerCandidates,
-  managerRecruitResult,
-  projectManagerSchema,
-} from './project-manager.schema.js';
-import { ProjectFoundationService, type RequesterParams } from './project-foundation.service.js';
+  projectCreationSchema,
+  projectDraftResponse,
+  projectMutation,
+  projectSaveBody,
+} from './project-creation.schema.js';
 import type { ProjectCreationService } from './project-creation.service.js';
 import type { ProjectSaveInput } from './project-creation.types.js';
 import {
-  projectCreationSchema,
-  projectSaveBody,
-  projectMutation,
-  projectDraftResponse,
-} from './project-creation.schema.js';
-import {
-  categoryQuery,
   categoriesResponse,
+  categoryQuery,
+  projectFoundationSchema,
   requesterParams,
   requesterResponse,
-  projectFoundationSchema,
 } from './project-foundation.schema.js';
+import { ProjectFoundationService, type RequesterParams } from './project-foundation.service.js';
+import { projectListSchema } from './project-list.schema.js';
+import type { ProjectListService } from './project-list.service.js';
+import {
+  managerCandidates,
+  managerCandidatesQuery,
+  managerRecruitBody,
+  managerRecruitResult,
+  projectManagerSchema,
+} from './project-manager.schema.js';
+import type { ManagerRecruitInput, ProjectManagerService } from './project-manager.service.js';
+import { materialsConfirmSchema, materialsSchema } from './project-materials.schema.js';
+import type { MaterialsInput, ProjectMaterialsService } from './project-materials.service.js';
+import { productionPlanSchema } from './project-production-plan.schema.js';
+import type {
+  ProductionPlanInput,
+  ProjectProductionPlanService,
+} from './project-production-plan.service.js';
+import { projectQuerySchema } from './project-query.schema.js';
+import type { ProjectQueryService } from './project-query.service.js';
+import type { RecruitmentQuery } from './project-recruitment-candidates.js';
+import { handlerSchema } from './project-recruitment-handler.schema.js';
+import type {
+  HandlerChangeInput,
+  ProjectRecruitmentHandlerService,
+} from './project-recruitment-handler.service.js';
+import { recruitmentSchema } from './project-recruitment.schema.js';
+import type { ProjectRecruitmentService, RecruitmentInput } from './project-recruitment.service.js';
 
 export async function projectFoundationRoutes(
   parent: FastifyInstance,
@@ -92,7 +93,7 @@ export async function projectFoundationRoutes(
           ...config.desktopOrigins,
         ]);
       } catch {
-        throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
+        throw new AppError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
       }
       const token =
         client === 'desktop'
@@ -103,7 +104,7 @@ export async function projectFoundationRoutes(
     const planProjectId = (value: string) => {
       const id = Number(value);
       if (!Number.isInteger(id) || id < 1 || id > 2147483647)
-        throw new AuthError(400, 'VALIDATION_ERROR', '项目ID必须为32位正整数');
+        throw new AppError(400, 'VALIDATION_ERROR', '项目ID必须为32位正整数');
       return id;
     };
     app.get<{ Querystring: { mode: 'TASK' | 'BOARD' } }>(
@@ -306,7 +307,7 @@ export async function projectFoundationRoutes(
       async (req) => {
         const projectId = Number(req.query.projectId);
         if (!Number.isInteger(projectId) || projectId < 1 || projectId > 2147483647)
-          throw new AuthError(400, 'VALIDATION_ERROR', '项目ID必须为32位正整数');
+          throw new AppError(400, 'VALIDATION_ERROR', '项目ID必须为32位正整数');
         return {
           code: 200,
           message: '操作成功',

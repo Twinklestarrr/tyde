@@ -1,11 +1,11 @@
-import { tryConsumeTransferResult } from '../personnel/personnel-transfer-exam.js';
+import { Prisma, type EntranceExamAttempt, type PrismaClient } from '@prisma/client';
 import { createHash } from 'node:crypto';
-import type { AutoCallbackInput, AutoCompensateInput } from './exam-auto.types.js';
-import { Prisma, type PrismaClient, type EntranceExamAttempt } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { tryConsumeTransferResult } from '../personnel/personnel-transfer-exam.js';
 import { reconcileTaskRounds } from '../projects/project-task-rounds.js';
 import { requireExamManager, requireProjectExam, type ExamLocator } from './exam-access.js';
+import type { AutoCallbackInput, AutoCompensateInput } from './exam-auto.types.js';
 import {
   decideGradingResult,
   gradePaper,
@@ -16,8 +16,8 @@ import {
   collectGradingTasks,
   gradingTaskTypes,
   reviewerIds,
-  refreshGradingSnapshots,
-} from './exam-grading-tasks.js';
+} from './exam-grading-task.repository.js';
+import { refreshGradingSnapshots } from './exam-grading-tasks.js';
 
 export interface ManualGradingInput extends ExamLocator {
   attemptId: number;
@@ -25,8 +25,8 @@ export interface ManualGradingInput extends ExamLocator {
   conclusionSummary?: string | null;
   items: GradingItemInput[];
 }
-const bad = (message: string) => new AuthError(400, 'VALIDATION_ERROR', message);
-const conflict = (message: string) => new AuthError(409, 'DUPLICATE', message);
+const bad = (message: string) => new AppError(400, 'VALIDATION_ERROR', message);
+const conflict = (message: string) => new AppError(409, 'DUPLICATE', message);
 export class ExamGradingCommandService {
   constructor(readonly db: PrismaClient) {}
   async manual(input: ManualGradingInput, principal: AuthPrincipal) {
@@ -38,7 +38,7 @@ export class ExamGradingCommandService {
       include: { attempt: true },
     });
     if (!record || record.attempt.examId !== input.examId)
-      throw new AuthError(404, 'NOT_FOUND', '判卷记录不存在');
+      throw new AppError(404, 'NOT_FOUND', '判卷记录不存在');
     return this.submit(
       { ...input, attemptId: record.attemptId, conclusionSummary: input.summary },
       principal,
@@ -51,7 +51,7 @@ export class ExamGradingCommandService {
       include: { attempt: true },
     });
     if (!record || record.attemptId !== input.attemptId)
-      throw new AuthError(404, 'NOT_FOUND', '判卷记录不存在');
+      throw new AppError(404, 'NOT_FOUND', '判卷记录不存在');
     return this.submit(
       {
         ...input,
@@ -86,7 +86,7 @@ export class ExamGradingCommandService {
     )
       throw bad('结论总结最多5000字');
     if (!auto?.callback && (!principal || !['NAVIGATOR', 'PM', 'EXPERT'].includes(principal.role)))
-      throw new AuthError(403, 'FORBIDDEN', '当前角色不允许提交阅卷');
+      throw new AppError(403, 'FORBIDDEN', '当前角色不允许提交阅卷');
     try {
       const result = await this.db.$transaction(
         async (tx) => {
@@ -98,13 +98,13 @@ export class ExamGradingCommandService {
           const attempt = await tx.entranceExamAttempt.findFirst({
             where: { id: input.attemptId, examId: input.examId },
           });
-          if (!attempt) throw new AuthError(404, 'NOT_FOUND', '应试记录不存在');
+          if (!attempt) throw new AppError(404, 'NOT_FOUND', '应试记录不存在');
           await tx.$queryRaw`SELECT "id" FROM "EntranceExamGradingRecord" WHERE "id" = ${input.gradingRecordId} AND "attemptId" = ${attempt.id} FOR UPDATE`;
           const record = await tx.entranceExamGradingRecord.findFirst({
             where: { id: input.gradingRecordId, attemptId: attempt.id },
             include: { gradingRound: true },
           });
-          if (!record) throw new AuthError(404, 'NOT_FOUND', '判卷记录不存在');
+          if (!record) throw new AppError(404, 'NOT_FOUND', '判卷记录不存在');
           const round = record.gradingRound;
           if (
             round.gradingMode !== (auto ? 'AUTO' : 'MANUAL') ||
@@ -150,7 +150,7 @@ export class ExamGradingCommandService {
               throw bad('只有失败或已完成的自动阅卷记录可以补偿');
           } else {
             if (!reviewerIds(round.reviewersJson).includes(principal!.userId))
-              throw new AuthError(403, 'FORBIDDEN', '当前用户不是本轮配置的阅卷人');
+              throw new AppError(403, 'FORBIDDEN', '当前用户不是本轮配置的阅卷人');
             if (record.status === 'COMPLETED') throw conflict('本轮阅卷结果已提交，不可修改');
             if (!['PENDING', 'PROCESSING'].includes(record.status))
               throw bad('当前判卷记录状态不允许提交人工阅卷');
@@ -161,7 +161,7 @@ export class ExamGradingCommandService {
             where: { id: attempt.examVersionId, examId: input.examId },
             include: { gradingRounds: { orderBy: { roundNo: 'asc' } } },
           });
-          if (!version) throw new AuthError(500, 'INTERNAL_ERROR', '应试记录绑定的考试版本异常');
+          if (!version) throw new AppError(500, 'INTERNAL_ERROR', '应试记录绑定的考试版本异常');
           const records = await tx.entranceExamGradingRecord.findMany({
             where: { attemptId: attempt.id },
           });
@@ -215,7 +215,7 @@ export class ExamGradingCommandService {
             where: { id: attempt.paperId, examVersionId: version.id },
             include: { questions: true },
           });
-          if (!paper) throw new AuthError(500, 'INTERNAL_ERROR', '应试记录绑定的试卷异常');
+          if (!paper) throw new AppError(500, 'INTERNAL_ERROR', '应试记录绑定的试卷异常');
           const items = await tx.entranceExamGradingItem.findMany({
             where: { gradingRecordId: record.id },
             include: { answer: true },
@@ -427,12 +427,12 @@ async function ensurePendingMember(
   now: Date,
 ) {
   if (attempt.sourceBizType !== 'EXPERT_ORDER' || !attempt.sourceBizId)
-    throw new AuthError(500, 'INTERNAL_ERROR', '准入成员接单来源不完整');
+    throw new AppError(500, 'INTERNAL_ERROR', '准入成员接单来源不完整');
   await tx.$queryRaw`SELECT "id" FROM "ProjectExpertAssignment" WHERE "id" = ${attempt.sourceBizId} AND "projectId" = ${projectId} FOR UPDATE`;
   const assignment = await tx.projectExpertAssignment.findFirst({
     where: { id: attempt.sourceBizId, projectId },
   });
-  if (!assignment) throw new AuthError(500, 'INTERNAL_ERROR', '准入成员接单来源不存在');
+  if (!assignment) throw new AppError(500, 'INTERNAL_ERROR', '准入成员接单来源不存在');
   if (assignment.status !== 'ACCEPTED') return; // 保留考试结论，但失效接单不再获得席位。
   if (assignment.subjectType === 'INDIVIDUAL') {
     if (
@@ -440,7 +440,7 @@ async function ensurePendingMember(
       attempt.organizationId !== null ||
       attempt.userOrgRelId !== null
     )
-      throw new AuthError(500, 'INTERNAL_ERROR', '个人接单与考生来源不一致');
+      throw new AppError(500, 'INTERNAL_ERROR', '个人接单与考生来源不一致');
   } else if (
     assignment.subjectType === 'ORGANIZATION' &&
     assignment.organizationId === attempt.organizationId &&
@@ -453,8 +453,8 @@ async function ensurePendingMember(
         orgId: attempt.organizationId!,
       },
     });
-    if (!membership) throw new AuthError(500, 'INTERNAL_ERROR', '组织考生来源不一致');
-  } else throw new AuthError(500, 'INTERNAL_ERROR', '接单与考生组织来源不一致');
+    if (!membership) throw new AppError(500, 'INTERNAL_ERROR', '组织考生来源不一致');
+  } else throw new AppError(500, 'INTERNAL_ERROR', '接单与考生组织来源不一致');
   const existing = await tx.projectMember.findUnique({ where: { admissionAttemptId: attempt.id } });
   if (existing) {
     if (

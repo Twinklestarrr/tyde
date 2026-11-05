@@ -1,21 +1,18 @@
 import type { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import {
-  memberInclude,
-  personnelScope,
-  qualifiedForEntry,
-  type PersonnelMember,
-} from '../personnel/personnel-access.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
-export const forbiddenReport = () => new AuthError(403, 'FORBIDDEN', '无当前项目报量操作权限');
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+import { personnelScope } from '../personnel/personnel-access.js';
+import { qualifiedForEntry } from '../personnel/personnel-entry.domain.js';
+import { memberInclude, type PersonnelMember } from '../personnel/personnel.types.js';
+export const forbiddenReport = () => new AppError(403, 'FORBIDDEN', '无当前项目报量操作权限');
 export const reportConflict = () =>
-  new AuthError(409, 'DUPLICATE', '数据状态已变化或当前节点不允许操作');
+  new AppError(409, 'DUPLICATE', '数据状态已变化或当前节点不允许操作');
 export async function reportProject(tx: Prisma.TransactionClient, projectId: number) {
   const project = await tx.project.findFirst({
     where: { id: projectId, deleted: false, status: 'PUBLISHED' },
   });
-  if (!project) throw new AuthError(404, 'NOT_FOUND', '已发布项目不存在');
+  if (!project) throw new AppError(404, 'NOT_FOUND', '已发布项目不存在');
   return project;
 }
 export async function reportMembers(
@@ -88,7 +85,7 @@ export async function outputScope(
   try {
     organizationIds = (await personnelScope(tx, projectId, p)).organizationIds ?? [];
   } catch (error) {
-    if (!(error instanceof AuthError) || error.status !== 403) throw error;
+    if (!(error instanceof AppError) || error.status !== 403) throw error;
   }
   // 本人的有效组织关系也用于代修正，不能沿用离组后的负责人历史身份。
   const rels = await tx.userOrgRel.findMany({
@@ -149,7 +146,7 @@ export async function writableReport(
     return { quantityUnit: project.quantityUnit, task: null };
   }
   const task = await tx.projectSubtask.findFirst({ where: { id: subtaskId, projectId } });
-  if (!task) throw new AuthError(404, 'NOT_FOUND', '子任务不存在');
+  if (!task) throw new AppError(404, 'NOT_FOUND', '子任务不存在');
   if (task.status !== 'IN_PROGRESS') throw reportConflict();
   return { quantityUnit: task.quantityUnit, task };
 }

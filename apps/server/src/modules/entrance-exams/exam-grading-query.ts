@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { displayName } from '../projects/project-detail.js';
 import { requireExamViewer, requireProjectExam, type ExamLocator } from './exam-access.js';
 
@@ -19,21 +19,21 @@ export async function queryExamGradingDetail(
     where: { id: input.attemptId, examId: input.examId },
     include: { candidate: { select: { displayName: true, realName: true } } },
   });
-  if (!attempt) throw new AuthError(404, 'NOT_FOUND', '应试记录不存在');
+  if (!attempt) throw new AppError(404, 'NOT_FOUND', '应试记录不存在');
   if (attempt.examVersionId === null || attempt.paperId === null)
-    throw new AuthError(400, 'VALIDATION_ERROR', '考生尚未进入考试');
+    throw new AppError(400, 'VALIDATION_ERROR', '考生尚未进入考试');
   const version = await tx.entranceExamVersion.findFirst({
     where: { id: attempt.examVersionId, examId: input.examId },
     include: { gradingRounds: { orderBy: { roundNo: 'asc' } } },
   });
-  if (!version) throw new AuthError(500, 'INTERNAL_ERROR', '应试记录绑定的考试版本异常');
+  if (!version) throw new AppError(500, 'INTERNAL_ERROR', '应试记录绑定的考试版本异常');
   const selected = version.gradingRounds.find((r) => r.roundNo === (input.roundNo ?? 1));
-  if (!selected) throw new AuthError(400, 'VALIDATION_ERROR', '判卷轮次不存在');
+  if (!selected) throw new AppError(400, 'VALIDATION_ERROR', '判卷轮次不存在');
   const paper = await tx.entranceExamPaper.findFirst({
     where: { id: attempt.paperId, examVersionId: version.id },
     include: { questions: { orderBy: { sequenceNo: 'asc' } } },
   });
-  if (!paper) throw new AuthError(500, 'INTERNAL_ERROR', '应试记录绑定的试卷异常');
+  if (!paper) throw new AppError(500, 'INTERNAL_ERROR', '应试记录绑定的试卷异常');
   const records = await tx.entranceExamGradingRecord.findMany({ where: { attemptId: attempt.id } });
   const byRound = new Map(records.map((r) => [r.gradingRoundId, r]));
   const selectedRecord = byRound.get(selected.id);

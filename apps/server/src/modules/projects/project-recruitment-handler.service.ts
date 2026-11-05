@@ -1,9 +1,9 @@
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
 import { refreshManagementCardSnapshots } from './project-management-card-snapshot.js';
-import { collectRecruitmentTasks } from './project-recruitment-snapshot.js';
+import { collectRecruitmentTasks } from './project-recruitment-task.repository.js';
 import { managementTaskTypes, reconcileTaskRounds, taskEventFacts } from './project-task-rounds.js';
 
 export interface HandlerChangeInput {
@@ -22,15 +22,15 @@ export class ProjectRecruitmentHandlerService {
   constructor(readonly db: PrismaClient) {}
 
   private async primary(tx: Prisma.TransactionClient, id: number, principal: AuthPrincipal) {
-    if (principal.role !== 'PM') throw new AuthError(403, 'FORBIDDEN', '当前会话必须为策略官');
+    if (principal.role !== 'PM') throw new AppError(403, 'FORBIDDEN', '当前会话必须为策略官');
     const project = await tx.project.findFirst({ where: { id, deleted: false } });
-    if (!project) throw new AuthError(404, 'NOT_FOUND', '项目不存在');
+    if (!project) throw new AppError(404, 'NOT_FOUND', '项目不存在');
     const relation = await tx.projectManagerRecruitment.findFirst({
       where: { projectId: id, status: 'ASSIGNED' },
       orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
     });
     if (relation?.candidateUserId !== principal.userId)
-      throw new AuthError(403, 'FORBIDDEN', '只有项目主策略官可以操作招募负责人');
+      throw new AppError(403, 'FORBIDDEN', '只有项目主策略官可以操作招募负责人');
     return { project, relation };
   }
   async candidates(id: number, principal: AuthPrincipal) {
@@ -56,14 +56,14 @@ export class ProjectRecruitmentHandlerService {
     );
   }
   async change(input: HandlerChangeInput, principal: AuthPrincipal) {
-    if (principal.role !== 'PM') throw new AuthError(403, 'FORBIDDEN', '当前会话必须为策略官');
+    if (principal.role !== 'PM') throw new AppError(403, 'FORBIDDEN', '当前会话必须为策略官');
     return this.db.$transaction(async (tx) => {
       // 与材料写操作一致，先锁用户后锁项目，避免相反锁顺序。
       const [candidate] = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "User" WHERE "id"=${input.handlerUserId}::uuid AND "status"='ACTIVE' FOR SHARE`;
       await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id"=${input.projectId} AND "deleted"=false FOR UPDATE`;
       const { project, relation } = await this.primary(tx, input.projectId, principal);
-      if (!candidate) throw new AuthError(400, 'VALIDATION_ERROR', '所选用户不是可用的策略官');
+      if (!candidate) throw new AppError(400, 'VALIDATION_ERROR', '所选用户不是可用的策略官');
       const before = await collectRecruitmentTasks(tx, project);
       const changed = await tx.projectManagerRecruitment.updateMany({
         where: {
@@ -75,7 +75,7 @@ export class ProjectRecruitmentHandlerService {
         data: { expertRecruitmentHandlerUserId: input.handlerUserId, updatedBy: principal.uid },
       });
       if (changed.count !== 1)
-        throw new AuthError(409, 'DUPLICATE', '环节负责人已变化，请刷新后重试');
+        throw new AppError(409, 'DUPLICATE', '环节负责人已变化，请刷新后重试');
       const after = await collectRecruitmentTasks(tx, project);
       await reconcileTaskRounds(
         tx,

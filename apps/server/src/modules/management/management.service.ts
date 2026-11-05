@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 
 export type ManagementRole = 'NAVIGATOR' | 'PM';
 export interface GrantChange {
@@ -17,7 +17,7 @@ export class ManagementService {
   // 使用服务端会话角色；项目归属和任职资格由各业务继续检查。
   async requireRole(principal: AuthPrincipal, role: ManagementRole) {
     if (!(await this.hasRole(principal, role)))
-      throw new AuthError(403, 'FORBIDDEN', '请切换到对应业务角色');
+      throw new AppError(403, 'FORBIDDEN', '请切换到对应业务角色');
   }
 
   async hasRole(principal: AuthPrincipal, role: ManagementRole) {
@@ -27,7 +27,7 @@ export class ManagementService {
   // 保留内部方法签名供旧运维脚本明确失败，避免产生已撤销三角色的假象。
   async change(_input: GrantChange): Promise<{ changed: boolean }> {
     void _input;
-    throw new AuthError(409, 'CONFLICT', '统一账号自带三角色，不再支持独立授予或撤销管理角色');
+    throw new AppError(409, 'CONFLICT', '统一账号自带三角色，不再支持独立授予或撤销管理角色');
   }
 }
 

@@ -1,10 +1,10 @@
 import { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
-import { boardStatisticsScope } from './project-workbench-statistics.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
 import { displayName } from './project-detail.js';
 import { projectTime } from './project-time.js';
+import { boardStatisticsScope } from './project-workbench-statistics.js';
 
 export interface BoardProjectsQuery {
   keyword?: string | null;
@@ -61,7 +61,7 @@ async function requireExpertManager(tx: Prisma.TransactionClient, p: AuthPrincip
     },
     select: { id: true },
   });
-  if (!relation) throw new AuthError(403, 'FORBIDDEN', '仅组织主管或项目负责人可查看工作台看板');
+  if (!relation) throw new AppError(403, 'FORBIDDEN', '仅组织主管或项目负责人可查看工作台看板');
 }
 export async function boardProjects(
   tx: Prisma.TransactionClient,
@@ -79,7 +79,7 @@ export async function boardProjects(
     size > 100 ||
     (query.keyword != null && (typeof query.keyword !== 'string' || query.keyword.length > 128))
   )
-    throw new AuthError(400, 'VALIDATION_ERROR', '分页参数无效或keyword超过128字符');
+    throw new AppError(400, 'VALIDATION_ERROR', '分页参数无效或keyword超过128字符');
   const scope = boardStatisticsScope(p);
   const keyword = query.keyword?.trim();
   // 旧SQL按名称快照搜索，展示个人需求方的实时名称；保留该区别。

@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
 import { displayName } from '../projects/project-detail.js';
 import { projectTime } from '../projects/project-time.js';
 import { requireExamViewer } from './exam-access.js';
@@ -56,13 +56,13 @@ export async function queryExamAdmissions(
     size > 100 ||
     !Number.isSafeInteger((current - 1) * size)
   )
-    throw new AuthError(400, 'VALIDATION_ERROR', '页码须为正安全整数，每页1至100条且偏移不能溢出');
+    throw new AppError(400, 'VALIDATION_ERROR', '页码须为正安全整数，每页1至100条且偏移不能溢出');
   let organizationIds: string[] | undefined;
   if (principal.role === 'EXPERT') {
     const project = await tx.project.findFirst({ where: { id: input.projectId, deleted: false } });
-    if (!project) throw new AuthError(404, 'NOT_FOUND', '项目不存在');
+    if (!project) throw new AppError(404, 'NOT_FOUND', '项目不存在');
     if (project.status !== 'PUBLISHED')
-      throw new AuthError(400, 'VALIDATION_ERROR', '只有已发布项目可以查询准入情况');
+      throw new AppError(400, 'VALIDATION_ERROR', '只有已发布项目可以查询准入情况');
     const memberships = await tx.userOrgRel.findMany({
       where: {
         userId: principal.userId,
@@ -88,7 +88,7 @@ export async function queryExamAdmissions(
       ...new Set(assignments.flatMap((a) => (a.organizationId ? [a.organizationId] : []))),
     ];
     if (!organizationIds.length)
-      throw new AuthError(403, 'FORBIDDEN', '只有组织主管或项目负责人可以查看当前组织准入情况');
+      throw new AppError(403, 'FORBIDDEN', '只有组织主管或项目负责人可以查看当前组织准入情况');
   } else await requireExamViewer(tx, input.projectId, principal);
   const keyword = input.keyword?.trim();
   const where: Prisma.EntranceExamAttemptWhereInput = {

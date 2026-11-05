@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { resolveBoardAccess } from './project-board-subtasks.js';
 import { displayName } from './project-detail.js';
 
@@ -37,7 +37,7 @@ export async function boardTrends(
     end < start ||
     (end - start) / dayMs >= 366
   )
-    throw new AuthError(
+    throw new AppError(
       400,
       'VALIDATION_ERROR',
       'metric必须为QUANTITY、ACCURACY或CPD；日期须为有效yyyy-MM-dd，正序且包含首尾不超过366天',

@@ -1,21 +1,11 @@
 import type { Prisma, Project, ProjectTaskRound } from '@prisma/client';
+import {
+  type TaskRecipient,
+  type TaskScope,
+  type TaskSnapshot,
+  type TaskSource,
+} from './project-task.types.js';
 
-export type TaskRole = 'NAVIGATOR' | 'PM' | 'EXPERT';
-export type TaskRecipient = { userId: string; role: TaskRole };
-export interface TaskScope extends TaskRecipient {
-  perspective: string;
-  currentNodeCode: string;
-  mainEligible: boolean;
-  boardVisible: boolean;
-}
-export interface TaskSource extends TaskRecipient {
-  taskType: string;
-  sources: string[];
-}
-export interface TaskSnapshot {
-  scopes: TaskScope[];
-  sources: TaskSource[];
-}
 export const managementTaskTypes = [
   'MAIN_RECRUIT_PROJECT_MANAGER',
   'MAIN_PRODUCTION_PLAN',
@@ -23,15 +13,19 @@ export const managementTaskTypes = [
   'MAIN_STANDARD_TRAINING',
   'MAIN_RECRUIT_EXECUTION_EXPERT',
 ];
+
 const managerMain = new Set([
   'PRODUCTION_PLAN',
   'ENTRANCE_EXAM',
   'STANDARD_TRAINING',
   'RECRUIT_EXECUTION_EXPERT',
 ]);
+
 const recipientKey = (r: TaskRecipient) => JSON.stringify([r.userId, r.role]);
+
 const taskKey = (r: { userId: string; role: string; taskType: string }) =>
   JSON.stringify([r.userId, r.role, r.taskType]);
+
 const scopeKey = (s: TaskScope) =>
   JSON.stringify([
     s.userId,
@@ -41,6 +35,7 @@ const scopeKey = (s: TaskScope) =>
     s.mainEligible,
     s.boardVisible,
   ]);
+
 const retains = (snapshot: TaskSnapshot, r: { userId: string; role: string }) =>
   snapshot.scopes.some((s) => s.userId === r.userId && s.role === r.role);
 

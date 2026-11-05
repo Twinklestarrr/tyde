@@ -75,13 +75,13 @@ pnpm build:vercel
 
 `build:vercel` 调用与阿里云交付相同的 `pnpm build:server`。该命令先编译 shared、platform、检查 Web 类型，再让 Vite 将 Web 输出到 `apps/server/public`；随后编译 shared、生成 Prisma Client、编译后端。Vite 每次清理专用输出目录，避免旧资源残留。该目录已从 Git、ESLint 和 Prettier 检查中忽略，只提交源码、锁文件与构建配置。普通 `pnpm build:web` 仍输出 `apps/web/dist`，供 Electron 与独立 Web 交付使用。
 
-Node 服务端的网络响应使用现有 `undici-types` 显式类型。日历服务不再依赖全局 `typeof fetch` 推断响应：当构建环境注入不完整 Web 全局声明时，Node 的全局 `Response` 可能缺少 `ok`/`text()`，即使普通后端 `tsc` 通过，平台后续类型检查仍会报TS2339。这里只导入类型，运行时继续使用 Node 原生 fetch，不新增运行时依赖或放宽编译检查。回归命令：`pnpm --filter @tyde/server exec vitest run tests/holiday-fetch-types.test.ts tests/personal-workbench.test.ts`，其中编译用例通过内存中的部分 Web 全局声明复现平台环境，不修改实际全局类型。
+Node 服务端的网络响应使用现有 `undici-types` 显式类型。日历服务不再依赖全局 `typeof fetch` 推断响应：当构建环境注入不完整 Web 全局声明时，Node 的全局 `Response` 可能缺少 `ok`/`text()`，即使普通后端 `tsc` 通过，平台后续类型检查仍会报TS2339。这里只导入类型，运行时继续使用 Node 原生 fetch，不新增运行时依赖或放宽编译检查。回归命令：`pnpm --filter @tyde/server exec vitest run tests/unit/holiday-fetch-types.test.ts tests/unit/personal-workbench.test.ts`，其中编译用例通过内存中的部分 Web 全局声明复现平台环境，不修改实际全局类型。
 
 2026-10-21构建修复验证：上述11项定向测试、服务端typecheck、变更ESLint及`pnpm --filter @tyde/server build`通过。Agent本机`pnpm build:vercel`在Web阶段因既有安装目录缺少已声明的前端依赖失败，未完成本机全链构建；用户日志的Web阶段已成功。未执行线上Vercel构建或部署，修复后的平台复验仍需重新触发部署。本次无数据库改动，不应用第17迁移、不重跑数据库集成。
 
-Vercel 通过 `src/app.ts` 默认导出的 HTTP server 提供页面和 API，入口注册 `registerWeb` 托管 `public`。`web.ts` 直接枚举固定的 Web 目录，使文件追踪包含 HTML 与动态命名的 JS/CSS。根路径直接返回首页，不依赖 `/` 的平台重写；页面采用 HashRouter，无需全路径 SPA fallback，未知 API 不会变成 HTML 页面。入口 HTML 每次使用前重新验证缓存，Vite 带内容摘要的 `/assets/*` 资源允许长期缓存。Fastify 部署入口约束见 [Vercel Fastify 文档](https://vercel.com/docs/frameworks/backend/fastify)。
+Vercel 通过 `src/app.ts` 默认导出的 HTTP server 提供页面和 API，入口注册 `registerWeb` 托管 `public`。`plugins/static-web.ts` 直接枚举固定的 Web 目录，使文件追踪包含 HTML 与动态命名的 JS/CSS。根路径直接返回首页，不依赖 `/` 的平台重写；页面采用 HashRouter，无需全路径 SPA fallback，未知 API 不会变成 HTML 页面。入口 HTML 每次使用前重新验证缓存，Vite 带内容摘要的 `/assets/*` 资源允许长期缓存。Fastify 部署入口约束见 [Vercel Fastify 文档](https://vercel.com/docs/frameworks/backend/fastify)。
 
-2026-10-26 页面更新排查：`pnpm build:vercel` 完整通过；`https://aact.pw` 的 HTML、JS、CSS 与本地当前源码构建逐字节一致。线上 HTML 的修改时间固定为 `2018-10-20T01:46:40Z`，原静态插件按文件大小和修改时间计算 ETag；不同版本 HTML 长度相同时可产生同一验证器，导致浏览器收到 304 后保留旧资源引用。`/`、`/index.html` 现改为显式返回 HTML 正文，不发送 ETag/Last-Modified，也不按旧条件请求返回 304；带摘要资源继续长期缓存。修复需重新部署才在线上生效。回归命令：`pnpm --filter @tyde/server exec vitest run tests/web.test.ts`。未修改数据库、执行迁移或发布部署。
+2026-10-26 页面更新排查：`pnpm build:vercel` 完整通过；`https://aact.pw` 的 HTML、JS、CSS 与本地当前源码构建逐字节一致。线上 HTML 的修改时间固定为 `2018-10-20T01:46:40Z`，原静态插件按文件大小和修改时间计算 ETag；不同版本 HTML 长度相同时可产生同一验证器，导致浏览器收到 304 后保留旧资源引用。`/`、`/index.html` 现改为显式返回 HTML 正文，不发送 ETag/Last-Modified，也不按旧条件请求返回 304；带摘要资源继续长期缓存。修复需重新部署才在线上生效。回归命令：`pnpm --filter @tyde/server exec vitest run tests/unit/web.test.ts`。未修改数据库、执行迁移或发布部署。
 
 ```text
 同一个 Vercel 项目、同一个域名
@@ -89,7 +89,7 @@ Vercel 通过 `src/app.ts` 默认导出的 HTTP server 提供页面和 API，入
   /api/v1/*               → Fastify Function 提供 API
 ```
 
-阿里云的独立入口 `src/main.ts` 与 Vercel 的 `src/app.ts` 均在 API 装配后注册 `src/web.ts`，托管同一个 `public` 目录。本地未构建 Web 时 `pnpm dev:server` 可仅启动 API；存在构建产物时也能访问根路径页面。
+阿里云的独立入口 `src/main.ts` 与 Vercel 的 `src/app.ts` 均在 API 装配后注册 `src/plugins/static-web.ts`，托管同一个 `public` 目录。本地未构建 Web 时 `pnpm dev:server` 可仅启动 API；存在构建产物时也能访问根路径页面。
 
 ### 环境变量与迁移
 
@@ -151,7 +151,7 @@ Mac：`pnpm package:mac`；Windows：`pnpm package:win`。
 - Web 和两种桌面系统分别验证新账号注册、老账号登录、重启恢复、退出和网络失败。
 - live 成功、ready 失败表示服务进程存活但数据库未就绪，不能当作部署成功。
 - 日志通过 systemd journal 或进程 stdout 查看；请求编号用于关联错误，不记录请求体、验证码或会话令牌。
-- 试用期间可执行 `pnpm db:cleanup` 清理过期记录；此源码命令需要开发依赖。部署包直接运行 `node --env-file=.env dist/cleanup.js`（在 apps/server 目录）。
+- 试用期间可执行 `pnpm db:cleanup` 清理过期记录；此源码命令需要开发依赖。部署包直接运行 `node --env-file=.env dist/cli/cleanup.js`（在 apps/server 目录）。
 - 更新前备份数据库与当前版本，应用迁移再切换服务；回退前检查迁移兼容性，不能承诺任意数据库变更可直接回滚。
 
 所有 example 域名、目录和配置均为占位；本文不表示已完成阿里云部署。
@@ -194,7 +194,7 @@ pnpm --filter @tyde/server storage:verify
 本地在`tyde/`运行 `pnpm --filter @tyde/server organizations:departures`，读取服务端`.env`。后端部署包在`apps/server`运行：
 
 ```sh
-node --env-file=.env dist/organizations-departures.js
+node --env-file=.env dist/cli/organizations-departures.js
 ```
 
 生产安装仅含生产依赖，使用上述已编译入口，不依赖开发工具tsx。由部署环境按Asia/Shanghai每天零点调度，并监控进程退出码及failed计数；失败可重跑。命令逐成员独立事务、组织行锁，以拟离职日上海零点记实际leftAt，重复运行不会重复结束关系。发生单条失败时其他成员继续处理，本次失败下次仍可重试；进程failed>0时退出1。
@@ -205,4 +205,4 @@ node --env-file=.env dist/organizations-departures.js
 
 `pnpm --filter @tyde/server personnel:transfer-results` 补偿已提交的转项考试最终结果；考试结果已保留但消费者事务失败时可重试。该命令读取服务端 `.env` 并写当前环境，重复执行幂等，失败计数非零退出1，不等于专用测试库验证。
 
-`personnel:movement-approvers` 补偿当前人工待办资格，`personnel:movements` 处理到期转项/汰换；部署分别使用 `dist/personnel-movement-approvers.js`、`dist/personnel-movements.js`。组织离职维护先于入项/变动的每日上海零点任务。调度部署与真实目标环境须单独验收，不能手工跳过接单/考试等待节点。完整业务规则见[人员变动](backend/PERSONNEL_MOVEMENTS.md)。
+`personnel:movement-approvers` 补偿当前人工待办资格，`personnel:movements` 处理到期转项/汰换；部署分别使用 `dist/cli/personnel-movement-approvers.js`、`dist/cli/personnel-movements.js`。组织离职维护先于入项/变动的每日上海零点任务。调度部署与真实目标环境须单独验收，不能手工跳过接单/考试等待节点。完整业务规则见[人员变动](backend/PERSONNEL_MOVEMENTS.md)。

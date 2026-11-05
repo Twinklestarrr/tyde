@@ -31,7 +31,7 @@
 
 首次响应readConfirmationTransitioned=true，重复为false；stateTransitioned恒false，canConfirmRead=false，confirmedReadAt返回首次上海时间。项目versionNo及共享currentNodeCode不变，不发布实时事件，不调用业务Agent。
 
-本批396项单测（35文件，16:40:36启动，总13.11秒）、类型/变更ESLint/后端build通过；新增2项集成均停在beforeEach数据库不可达（127.0.0.1:5432），180跳过，共182项，未执行业务断言。覆盖普通入项/负责人/接单权限、并发一次转换、时间幂等/快照修复及快照失败整事务回滚。用户本机仅复测本批：`pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^materials confirmation '`。无新增迁移/依赖，未应用迁移或操作开发/部署库。真实HTTP/OSS、部署与兼容仍待验收。
+本批396项单测（35文件，16:40:36启动，总13.11秒）、类型/变更ESLint/后端build通过；新增2项集成均停在beforeEach数据库不可达（127.0.0.1:5432），180跳过，共182项，未执行业务断言。覆盖普通入项/负责人/接单权限、并发一次转换、时间幂等/快照修复及快照失败整事务回滚。用户本机仅复测本批：`pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t '^materials confirmation '`。无新增迁移/依赖，未应用迁移或操作开发/部署库。真实HTTP/OSS、部署与兼容仍待验收。
 
 ## 16:44:41用户集成复测与修正（历史，16:47:26已复验通过）
 
@@ -40,7 +40,7 @@
 修正后28项定向单测（16:45:48，总2.38秒）与变更ESLint通过；仅该1项数据库集成待用户本机复验，不宣称5项全过。前批396单测/类型/build证据保留。无需重做已通过4项或迁移，保持06，之后从056继续。用户从tyde运行（仅配置的专用_test库，会清表）：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^materials attachment claim, removal and task-write failure are one database transaction$'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t '^materials attachment claim, removal and task-write failure are one database transaction$'
 ```
 
 ## 第一批验证历史
@@ -52,7 +52,7 @@ pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^m
 在专用测试库可连接的用户本机，从`tyde/`执行以下命令；测试会清空`.env.test`指定且允许重置的`_test`库，不连接开发库。本批无迁移，不要求重做21迁移。
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t '^materials '
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t '^materials '
 ```
 
 本任务056/057已由第三批接入，见[招募负责人](PROJECT_RECRUITMENT.md)；下一批从API-058—060继续；按需核对对应旧Controller/DTO/Service/Mapper与真实接单来源，保持当前会话角色权限。详细唯一接口状态及交接见06任务记录（历史外部记录 `backend-migration/06-training-recruitment/todoTask.md`）。

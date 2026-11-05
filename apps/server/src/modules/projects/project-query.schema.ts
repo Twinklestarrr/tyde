@@ -1,9 +1,9 @@
 import type { FastifySchema } from 'fastify';
 import { resultSchema } from '../auth/auth.schema.js';
 import {
+  projectAttachmentResponse,
   projectDraftDetail,
   projectDraftExample,
-  projectAttachmentResponse,
 } from './project-creation.schema.js';
 import {
   productionPlanBody,

@@ -1,4 +1,4 @@
-import { readFileConfig, type FileConfig } from '../modules/files/file.config.js';
+import { readFileConfig, type FileConfig } from './files.js';
 
 export interface Config {
   files: FileConfig;

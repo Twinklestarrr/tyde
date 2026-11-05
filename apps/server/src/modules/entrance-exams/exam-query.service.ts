@@ -1,12 +1,12 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { displayName } from '../projects/project-detail.js';
 import { projectTime } from '../projects/project-time.js';
 import { requireExamViewer, requireProjectExam, type ExamLocator } from './exam-access.js';
-export type { ExamLocator } from './exam-access.js';
 import { queryExamAdmissions, type ExamAdmissionInput } from './exam-admission.js';
 import { queryExamGradingDetail, type ExamGradingDetailInput } from './exam-grading-query.js';
+export type { ExamLocator } from './exam-access.js';
 export interface ExamRosterInput extends ExamLocator {
   keyword?: string | null;
   finalResult?: 'PENDING' | 'ADMITTED' | 'ELIMINATED' | null;
@@ -35,9 +35,9 @@ export class ExamQueryService {
         await requireExamViewer(tx, input.projectId, principal);
         const exam = await requireProjectExam(tx, input);
         if (exam.status !== 'ACTIVE')
-          throw new AuthError(400, 'VALIDATION_ERROR', '已关闭考试不允许编辑');
+          throw new AppError(400, 'VALIDATION_ERROR', '已关闭考试不允许编辑');
         if (exam.currentVersionId == null)
-          throw new AuthError(500, 'INTERNAL_ERROR', '考试当前配置版本异常');
+          throw new AppError(500, 'INTERNAL_ERROR', '考试当前配置版本异常');
         const version = await tx.entranceExamVersion.findFirst({
           where: { id: exam.currentVersionId, examId: exam.id },
           include: {
@@ -48,7 +48,7 @@ export class ExamQueryService {
             gradingRounds: { orderBy: { roundNo: 'asc' } },
           },
         });
-        if (!version) throw new AuthError(500, 'INTERNAL_ERROR', '考试当前配置版本异常');
+        if (!version) throw new AppError(500, 'INTERNAL_ERROR', '考试当前配置版本异常');
         const ids = [
           ...new Set(
             version.gradingRounds.flatMap((round) =>
@@ -219,7 +219,7 @@ export class ExamQueryService {
       !Number.isInteger(size) ||
       !Number.isSafeInteger((current - 1) * size)
     )
-      throw new AuthError(400, 'VALIDATION_ERROR', '分页参数超出安全整数范围');
+      throw new AppError(400, 'VALIDATION_ERROR', '分页参数超出安全整数范围');
     return this.db.$transaction(
       async (tx) => {
         await requireExamViewer(tx, input.projectId, principal);

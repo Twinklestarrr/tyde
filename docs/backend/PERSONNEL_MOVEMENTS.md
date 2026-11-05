@@ -69,7 +69,7 @@
 本批已通过；以下命令仅留作后续必要回归参考，在仓库`tyde/`目录执行：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'personnel transfer targets'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'personnel transfer targets'
 ```
 
 集成测试读取`apps/server/.env.test`，只允许库名以`_test`结尾且`TEST_DATABASE_RESET=true`的专用库，每项会清空该库；不能连接开发或部署库。本批无迁移，不需要重新应用27，也不重复11已通过的16项。三个用例分别覆盖组织交集/发布删除与分页/需求方和考试默认值，开放身份与关闭历史/个人来源，组织范围/角色/协作限制与失权。本机真实HTTP业务、部署及完整兼容仍待验收。
@@ -119,7 +119,7 @@ pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'pe
 
 ```sh
 pnpm db:deploy:test
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'personnel movement creation'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'personnel movement creation'
 ```
 
 本批4项已通过，不重复本批、101三项或11十六项；当前专用库不需要再迁移28。保持任务12，下次直接继续102接单/考试消费与终止恢复、103—106查询/实时审批资格/撤回、到期生效，再107与07结构化来源。真实HTTP、部署及完整兼容仍待验收；102当前只能称部分迁移。
@@ -147,7 +147,7 @@ pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'pe
 用户14:16:05已定向复验本批6项全部通过（249跳过，共255项，总19.89秒，测试7.28秒）；CANCELLED误写约束冲突已解除，完整五步、取消/恢复/撤回、并发与失权、整事务回滚及提交后补偿幂等均已验证。不是全255项复跑，迁移历史未另查，无需当前专用_test库再次迁移29或重复本批、创建4项、候选3项及11前批。以上连接失败保留为历史，以下命令仅留作未来必要回归参考，本批无需运行。集成只允许`.env.test`指定且TEST_DATABASE_RESET=true的专用_test库，每项会清空这个专用库。本轮仅同步用户结果与文档，未重跑测试或操作数据库。
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'personnel transfer progression'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'personnel transfer progression'
 ```
 
 本批已通过，下次直接103/104查询、当前已激活待办负责人动态同步、当天/未来到期生效，再107/07来源及旧assignmentId转项响应兼容回补。105已实现待真实HTTP/部署/完整兼容；102/106仍部分迁移，保持12，不开始13。
@@ -188,7 +188,7 @@ WITHDRAW须原项目仍有该成员管理权限且为发起人，转项仍PROCES
 本批三项已通过，以下仅供未来必要回归参考，在`tyde/`目录运行：
 
 ```sh
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'personnel movement reads'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'personnel movement reads'
 ```
 
 只允许`.env.test`指定且以`_test`结尾、`TEST_DATABASE_RESET=true`的专用库，测试会清空该专用库；不能指向开发/部署库。当前专用库已具备第29迁移所需结构，本批无新迁移，无需再次迁移29。三项已通过，下次直接继续已激活待办负责人动态同步、当天审批完成即时生效/未来日期显式补偿，再107/07结构化来源及旧assignmentId响应兼容，不重复103/104实现，不开始13。
@@ -208,13 +208,13 @@ pnpm --filter @tyde/server personnel:movement-approvers
 pnpm --filter @tyde/server personnel:movements
 ```
 
-部署入口为`dist/personnel-movement-approvers.js`和`dist/personnel-movements.js`。负责人关系变动后运行候选补偿；日期生效建议上海每日零点依次组织离职→入项→人员变动。未配置、启动或验收任何调度；实际通知投递归14，业务Agent继续mock。
+部署入口为`dist/cli/personnel-movement-approvers.js`和`dist/cli/personnel-movements.js`。负责人关系变动后运行候选补偿；日期生效建议上海每日零点依次组织离职→入项→人员变动。未配置、启动或验收任何调度；实际通知投递归14，业务Agent继续mock。
 
 用户本机已于15:45:19完成本批六项定向集成，全部通过（258跳过，共264项，总14.99秒，测试10.97秒），不是全264项复跑。无新迁移，迁移历史未另查；无需再次迁移29或重复本批六项及前批16项。以下为已完成的复验命令，留作记录：
 
 ```sh
 cd tyde
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'personnel movement lifecycle' --maxWorkers=1
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'personnel movement lifecycle' --maxWorkers=1
 ```
 
 本批549单测通过；收尾Swagger说明调整后47定向通过（6文件，15:39:59，总9.52秒），类型、ESLint和后端build通过，未在说明调整后重跑549全量。最初双并发定向有1项动态加载Swagger测试5秒超时，降低并发后44项通过，未放宽超时；另1项未来汰换单测暴露不必要读取，已改为仅当天汰换加载生效数据，后续44项及549全量通过。Agent此前六项集成分5+1执行仅初始化连接失败；该历史阻塞现由用户15:45:19六项全部通过解除。当前负责人转派、日期生效/并发唯一及故障回滚和重试幂等的数据库断言已验证。下一批直接从107/07转项来源、个人转入身份及旧assignmentId兼容继续。
@@ -233,7 +233,7 @@ API-067旧assignmentId在本人、目标项目、来源组织及MEMBER_CONFIRM�
 
 ```sh
 cd tyde
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'personnel transfer sources'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'personnel transfer sources'
 ```
 
 覆盖：本人申请真实来源/隔离与读取无副作用、旧assignmentId组织并发响应/独立考试、outbox故障整事务回滚及拒绝重试、个人完整接单/考试/审批生效后列表/详情/材料/生产资格。业务Agent仍mock，调度未运行或部署；保持12，真实HTTP/部署/完整兼容未验收，不自动交接13。
@@ -244,7 +244,7 @@ pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'pe
 
 ```sh
 cd tyde
-pnpm --filter @tyde/server exec vitest run tests/auth.integration.test.ts -t 'personnel transfer sources: personal effective identity'
+pnpm --filter @tyde/server exec vitest run tests/integration/auth.integration.test.ts -t 'personnel transfer sources: personal effective identity'
 ```
 
 仅使用.env.test指定的专用_test库（会清表），不重迁移29、不重复已过3项及前批22项；556单测及类型/build证据保留。本轮只改测试请求和交接文档，未操作开发/部署库。

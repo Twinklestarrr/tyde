@@ -1,15 +1,15 @@
-import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { requireExamManager, requireProjectExam } from './exam-access.js';
-import { collectGradingTasks } from './exam-grading-tasks.js';
+import type { AutoCallbackInput, AutoRetryInput } from './exam-auto.types.js';
 import {
   ExamGradingCommandService,
   gradingResponse,
   syncGradingTasks,
 } from './exam-grading-command.service.js';
-import type { AutoCallbackInput, AutoRetryInput } from './exam-auto.types.js';
+import { collectGradingTasks } from './exam-grading-task.repository.js';
 
 // 仅持久化模拟执行状态，不构造真实Agent地址或外部附件凭证。
 export class ExamAutoService {
@@ -22,9 +22,9 @@ export class ExamAutoService {
         await requireProjectExam(tx, input);
         const { record, attempt } = await lockedAutoRecord(tx, input.gradingRecordId);
         if (attempt.examId !== input.examId)
-          throw new AuthError(404, 'NOT_FOUND', '判卷记录不属于该考试');
+          throw new AppError(404, 'NOT_FOUND', '判卷记录不属于该考试');
         if (record.status !== 'FAILED')
-          throw new AuthError(400, 'VALIDATION_ERROR', '只有自动阅卷失败记录可以重试');
+          throw new AppError(400, 'VALIDATION_ERROR', '只有自动阅卷失败记录可以重试');
         const before = await collectGradingTasks(tx, input.projectId),
           now = new Date();
         const pending = await tx.entranceExamGradingRecord.update({
@@ -151,7 +151,7 @@ export class ExamAutoService {
         });
         expired++;
       } catch (error) {
-        if (!(error instanceof AuthError && error.status === 409)) throw error;
+        if (!(error instanceof AppError && error.status === 409)) throw error;
       }
     }
     return expired;
@@ -197,7 +197,7 @@ export class ExamAutoService {
           errorMessage: '本地模拟回调投递失败',
         });
       } catch (failure) {
-        if (!(failure instanceof AuthError && failure.status === 409)) throw failure;
+        if (!(failure instanceof AppError && failure.status === 409)) throw failure;
       }
       throw error;
     }
@@ -206,7 +206,7 @@ export class ExamAutoService {
 }
 async function lockedAutoRecord(tx: Prisma.TransactionClient, id: number) {
   const located = await tx.entranceExamGradingRecord.findUnique({ where: { id } });
-  if (!located) throw new AuthError(404, 'NOT_FOUND', '判卷记录不存在');
+  if (!located) throw new AppError(404, 'NOT_FOUND', '判卷记录不存在');
   await tx.$queryRaw`SELECT "id" FROM "EntranceExamAttempt" WHERE "id" = ${located.attemptId} FOR UPDATE`;
   await tx.$queryRaw`SELECT "id" FROM "EntranceExamGradingRecord" WHERE "id" = ${id} FOR UPDATE`;
   const record = await tx.entranceExamGradingRecord.findUniqueOrThrow({
@@ -222,12 +222,12 @@ async function lockedAutoRecord(tx: Prisma.TransactionClient, id: number) {
     round.gradingMode !== 'AUTO' ||
     round.examVersionId !== attempt.examVersionId
   )
-    throw new AuthError(400, 'VALIDATION_ERROR', '不是已交卷绑定版本的自动阅卷记录');
+    throw new AppError(400, 'VALIDATION_ERROR', '不是已交卷绑定版本的自动阅卷记录');
   const earlier = await tx.entranceExamGradingRound.findMany({
     where: { examVersionId: attempt.examVersionId, roundNo: { lt: round.roundNo } },
     include: { records: { where: { attemptId: attempt.id }, select: { status: true } } },
   });
   if (earlier.some((r) => r.records.length !== 1 || r.records[0]!.status !== 'COMPLETED'))
-    throw new AuthError(400, 'VALIDATION_ERROR', '前一轮阅卷尚未完成');
+    throw new AppError(400, 'VALIDATION_ERROR', '前一轮阅卷尚未完成');
   return { record, attempt };
 }

@@ -1,58 +1,35 @@
-import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { projectTime } from '../projects/project-time.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { refreshOwnerProgress } from '../expert/expert-progress.service.js';
 import { displayName } from '../projects/project-detail.js';
-import { refreshOwnerProgress } from '../expert/expert-owner-command.js';
+import { refreshManagementCardSnapshots } from '../projects/project-management-card-snapshot.js';
 import {
   collectManagementTasks,
   managementTaskTypes,
   reconcileTaskRounds,
 } from '../projects/project-task-rounds.js';
-import { entryTasks, syncEntrySnapshots } from './personnel-progress.js';
-import { personnelScope, memberInclude, qualifiedForEntry } from './personnel-access.js';
+import { projectTime } from '../projects/project-time.js';
+import { personnelScope } from './personnel-access.js';
+import { qualifiedForEntry } from './personnel-entry.domain.js';
+import { syncEntrySnapshots } from './personnel-progress.js';
+import { entryTasks } from './personnel-task.repository.js';
 import {
   canSetEntry,
-  statusNames,
   memberStatuses,
+  statusNames,
   todayText,
   validateEntry,
-  type RosterQuery,
   type EntryInput,
-} from './personnel-domain.js';
+  type RosterQuery,
+} from './personnel.domain.js';
+import { lockPersonnel } from './personnel.repository.js';
+import { memberInclude } from './personnel.types.js';
+
 const date = (d: Date | null) => d?.toISOString().slice(0, 10) ?? null;
+
 const time = (d: Date | null) => (d ? projectTime(d) : null);
-export async function lockPersonnel(
-  tx: Prisma.TransactionClient,
-  projectId: number,
-  ids: number[],
-  actorUserId: string,
-  relatedProjectIds: number[] = [],
-) {
-  const projectIds = [...new Set([projectId, ...relatedProjectIds])].sort((a, b) => a - b);
-  const initial = await tx.projectMember.findMany({
-    where: { projectId: projectId, id: { in: ids } },
-  });
-  const users = [...new Set([actorUserId, ...initial.map((m) => m.userId)])].sort();
-  await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ANY(ARRAY[${Prisma.join(users)}]::uuid[]) ORDER BY "id" FOR SHARE`;
-  // 组织成员变更采用用户→组织→成员关系→项目；项目内业务统一先锁项目再锁成员。
-  const organizations = await tx.projectExpertAssignment.findMany({
-    where: { projectId: { in: projectIds }, organizationId: { not: null } },
-    select: { organizationId: true },
-  });
-  const orgIds = [
-    ...new Set([
-      ...organizations.map((a) => a.organizationId!),
-      ...initial.flatMap((m) => (m.organizationId ? [m.organizationId] : [])),
-    ]),
-  ].sort();
-  if (orgIds.length) {
-    await tx.$queryRaw`SELECT "id" FROM "Organization" WHERE "id" = ANY(ARRAY[${Prisma.join(orgIds)}]::uuid[]) ORDER BY "id" FOR SHARE`;
-    await tx.$queryRaw`SELECT "id" FROM "UserOrgRel" WHERE "orgId" = ANY(ARRAY[${Prisma.join(orgIds)}]::uuid[]) ORDER BY "id" FOR UPDATE`;
-  }
-  await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id" IN (${Prisma.join(projectIds)}) ORDER BY "id" FOR UPDATE`;
-}
+
 export class PersonnelService {
   constructor(readonly db: PrismaClient) {}
   async roster(query: RosterQuery, principal: AuthPrincipal) {
@@ -181,13 +158,13 @@ export class PersonnelService {
         await lockPersonnel(tx, input.projectId, ids, principal.userId);
         const scope = await personnelScope(tx, input.projectId, principal, true);
         if (scope.project.currentNodeCode === 'COMPLETED')
-          throw new AuthError(409, 'DUPLICATE', '项目已结项');
+          throw new AppError(409, 'DUPLICATE', '项目已结项');
         await tx.$queryRaw`SELECT "id" FROM "ProjectMember" WHERE "id" IN (${Prisma.join(ids)}) ORDER BY "id" FOR UPDATE`;
         const members = await tx.projectMember.findMany({
           where: { projectId: input.projectId, id: { in: ids } },
           include: memberInclude,
         });
-        if (members.length !== ids.length) throw new AuthError(404, 'NOT_FOUND', '项目成员不存在');
+        if (members.length !== ids.length) throw new AppError(404, 'NOT_FOUND', '项目成员不存在');
         const plan = await tx.projectProductionPlan.findUnique({
           where: { projectId: input.projectId },
         });
@@ -196,11 +173,11 @@ export class PersonnelService {
             scope.organizationIds &&
             (!m.organizationId || !scope.organizationIds.includes(m.organizationId))
           )
-            throw new AuthError(403, 'FORBIDDEN', '只能管理职责组织内成员');
+            throw new AppError(403, 'FORBIDDEN', '只能管理职责组织内成员');
           if (!canSetEntry(m, todayText(now)))
-            throw new AuthError(409, 'DUPLICATE', '成员入项状态已生效，不能再次修改');
+            throw new AppError(409, 'DUPLICATE', '成员入项状态已生效，不能再次修改');
           if (!qualifiedForEntry(m, plan?.needWrittenExam ?? false))
-            throw new AuthError(409, 'DUPLICATE', '成员接单、组织或准入资格已失效');
+            throw new AppError(409, 'DUPLICATE', '成员接单、组织或准入资格已失效');
         }
         const before = await collectManagementTasks(tx, scope.project);
         const beforeEntry = await entryTasks(tx, input.projectId);

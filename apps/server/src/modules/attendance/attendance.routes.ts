@@ -1,54 +1,55 @@
-import { AttendanceClockService } from './attendance-clock.service.js';
-import type { ClockInput } from './attendance-clock.domain.js';
-import {
-  clockQuery,
-  clockBody,
-  clockHeaders,
-  clockContextResponse,
-  clockResponse,
-} from './attendance-clock.schema.js';
-import { OrganizationScheduleService } from './organization-schedule.service.js';
-import type {
-  OrganizationScheduleQuery,
-  OrganizationScheduleBatch,
-  OrganizationScheduleDetails,
-} from './organization-schedule.domain.js';
-import {
-  organizationScheduleQuery,
-  organizationBatchBody,
-  organizationDetailsBody,
-  organizationSchedulesResponse,
-  organizationScheduleResult,
-  organizationScheduleHeaders,
-} from './organization-schedule.schema.js';
-import { AttendanceApplicationService } from './attendance-application.service.js';
+import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
+import type { Config } from '../../config/index.js';
+import type { AuthService } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { validateTransport } from '../auth/security.js';
 import type { AttendanceApplyInput } from './attendance-application.domain.js';
 import {
   attendanceApplicationBody,
-  attendanceWithdrawBody,
   attendanceApplicationResponse,
+  attendanceWithdrawBody,
 } from './attendance-application.schema.js';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { API_PREFIX } from '@tyde/shared';
-import type { Config } from '../../config/index.js';
-import type { AuthPrincipal, AuthService } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { validateTransport } from '../auth/security.js';
-import { AttendanceService, type AttendanceUpdate } from './attendance.service.js';
-import type { ScheduleInput } from './attendance-domain.js';
-import { HolidayCalendarService } from './holiday-calendar.service.js';
+import { AttendanceApplicationService } from './attendance-application.service.js';
+import type { ClockInput } from './attendance-clock.domain.js';
 import {
-  attendanceSchema,
+  clockBody,
+  clockContextResponse,
+  clockHeaders,
+  clockQuery,
+  clockResponse,
+} from './attendance-clock.schema.js';
+import { AttendanceClockService } from './attendance-clock.service.js';
+import type { ScheduleInput } from './attendance.domain.js';
+import {
   attendanceQuery,
-  holidayQuery,
   attendanceResponse,
+  attendanceSchema,
+  attendanceUpdateBody,
+  attendanceUpdateResponse,
+  holidayQuery,
   holidayResponse,
   scheduleBody,
   scheduleHeaders,
   scheduleResponse,
-  attendanceUpdateBody,
-  attendanceUpdateResponse,
 } from './attendance.schema.js';
+import { AttendanceService, type AttendanceUpdate } from './attendance.service.js';
+import { HolidayCalendarService } from './holiday-calendar.service.js';
+import type {
+  OrganizationScheduleBatch,
+  OrganizationScheduleDetails,
+  OrganizationScheduleQuery,
+} from './organization-schedule.domain.js';
+import {
+  organizationBatchBody,
+  organizationDetailsBody,
+  organizationScheduleHeaders,
+  organizationScheduleQuery,
+  organizationScheduleResult,
+  organizationSchedulesResponse,
+} from './organization-schedule.schema.js';
+import { OrganizationScheduleService } from './organization-schedule.service.js';
 export async function attendanceRoutes(
   parent: FastifyInstance,
   service: AttendanceService,
@@ -77,7 +78,7 @@ export async function attendanceRoutes(
           ...config.desktopOrigins,
         ]);
       } catch {
-        throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
+        throw new AppError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
       }
       const token =
         client === 'desktop'

@@ -1,10 +1,10 @@
 import {
-  normalizeSchedules,
-  parseDate,
   dateText,
   invalid,
+  normalizeSchedules,
+  parseDate,
   type ScheduleInput,
-} from './attendance-domain.js';
+} from './attendance.domain.js';
 import type { HolidayCalendarService } from './holiday-calendar.service.js';
 export interface OrganizationScheduleQuery {
   orgId: string;

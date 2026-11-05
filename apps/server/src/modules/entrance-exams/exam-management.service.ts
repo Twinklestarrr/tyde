@@ -1,8 +1,8 @@
-import { requireExamManager } from './exam-access.js';
 import { Prisma, type PrismaClient } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ManagementService } from '../management/management.service.js';
 import { displayName } from '../projects/project-detail.js';
+import { requireExamManager } from './exam-access.js';
 import { examImportTemplate, type ExamTemplateType } from './exam-import-template.js';
 
 export class ExamManagementService {

@@ -1,50 +1,52 @@
+import { API_PREFIX } from '@tyde/shared';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { AppError } from '../../common/errors.js';
+import type { Config } from '../../config/index.js';
+import type { AuthService } from '../auth/auth.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { validateTransport } from '../auth/security.js';
+import {
+  exitBody,
+  exitHeaders,
+  exitResponse,
+  pendingBody,
+  pendingResponse,
+  processBody,
+  processResponse,
+  recordsBody,
+  recordsResponse,
+} from './approval.schema.js';
 import { memberImportRoutes } from './member-import.routes.js';
 import {
-  OrganizationApprovalService,
-  type ExitInput,
-  type ApprovalQuery,
-  type ProcessInput,
-} from './organization-approval.service.js';
-import {
-  exitHeaders,
-  exitBody,
-  pendingBody,
-  recordsBody,
-  processBody,
-  exitResponse,
-  pendingResponse,
-  recordsResponse,
-  processResponse,
-} from './approval.schema.js';
-import {
-  MemberService,
-  type MemberQuery,
-  type MemberUpdateInput,
-  type MemberPositionInput,
-} from './member.service.js';
-import {
+  memberListResponse,
+  memberPositionBody,
+  memberPositionResponse,
   memberQueryBody,
   memberUpdateBody,
-  memberPositionBody,
-  memberListResponse,
   memberUpdateResponse,
-  memberPositionResponse,
 } from './member.schema.js';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { API_PREFIX } from '@tyde/shared';
-import type { Config } from '../../config/index.js';
-import { AuthError } from '../auth/auth.error.js';
-import type { AuthPrincipal, AuthService } from '../auth/auth.service.js';
-import { validateTransport } from '../auth/security.js';
-import { OrganizationService, type OrganizationUpdateInput } from './organization.service.js';
+import { MemberService } from './member.service.js';
 import {
-  organizationSchema,
-  organizationQuery,
-  organizationUpdateBody,
+  type MemberPositionInput,
+  type MemberQuery,
+  type MemberUpdateInput,
+} from './member.types.js';
+import { OrganizationApprovalService } from './organization-approval.service.js';
+import {
+  type ApprovalQuery,
+  type ExitInput,
+  type ProcessInput,
+} from './organization-approval.types.js';
+import {
   organizationDetailResponse,
-  organizationUpdateResponse,
   organizationOverviewResponse,
+  organizationQuery,
+  organizationSchema,
+  organizationUpdateBody,
+  organizationUpdateResponse,
 } from './organization.schema.js';
+import { OrganizationService } from './organization.service.js';
+import { type OrganizationUpdateInput } from './organization.types.js';
 
 export async function organizationRoutes(
   parent: FastifyInstance,
@@ -72,7 +74,7 @@ export async function organizationRoutes(
           ...config.desktopOrigins,
         ]);
       } catch {
-        throw new AuthError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
+        throw new AppError(403, 'ORIGIN_NOT_ALLOWED', '请求来源或会话凭据组合不可信');
       }
       const token =
         client === 'desktop'

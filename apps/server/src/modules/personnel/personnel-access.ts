@@ -1,7 +1,8 @@
 import type { Prisma } from '@prisma/client';
-import type { AuthPrincipal } from '../auth/auth.service.js';
-import { AuthError } from '../auth/auth.error.js';
-import { participatingStatuses } from '../organizations/organization.service.js';
+import { AppError } from '../../common/errors.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { participatingStatuses } from '../organizations/organization.domain.js';
+
 export async function personnelScope(
   tx: Prisma.TransactionClient,
   projectId: number,
@@ -9,9 +10,9 @@ export async function personnelScope(
   write = false,
 ) {
   if (!['PM', 'EXPERT'].includes(principal.role))
-    throw new AuthError(403, 'FORBIDDEN', '请切换至PM或EXPERT角色');
+    throw new AppError(403, 'FORBIDDEN', '请切换至PM或EXPERT角色');
   const project = await tx.project.findFirst({ where: { id: projectId, deleted: false } });
-  if (!project) throw new AuthError(404, 'NOT_FOUND', '项目不存在');
+  if (!project) throw new AppError(404, 'NOT_FOUND', '项目不存在');
   if (principal.role === 'PM') {
     const manager = await tx.projectManagerRecruitment.findFirst({
       where: { projectId, status: 'ASSIGNED' },
@@ -53,109 +54,5 @@ export async function personnelScope(
     ];
     if (organizationIds.length) return { project, organizationIds, readOnly: false };
   }
-  throw new AuthError(403, 'FORBIDDEN', '无当前项目人员管理权限');
-}
-export const memberInclude = {
-  user: true,
-  organization: true,
-  organizationMembership: true,
-  expertAssignment: {
-    include: {
-      owners: { include: { user: true }, orderBy: { id: 'asc' as const } },
-      legacyOwner: true,
-      memberResponses: true,
-    },
-  },
-  admissionAttempt: {
-    include: {
-      exam: { select: { projectId: true } },
-      transferMovement: { include: { flow: true } },
-    },
-  },
-} satisfies Prisma.ProjectMemberInclude;
-export type PersonnelMember = Prisma.ProjectMemberGetPayload<{ include: typeof memberInclude }>;
-export function qualifiedForEntry(member: PersonnelMember, needWrittenExam: boolean) {
-  const a = member.expertAssignment;
-  const attempt = member.admissionAttempt;
-  const movement = attempt?.transferMovement;
-  if (attempt?.sourceBizType === 'PROJECT_MEMBER_TRANSFER') {
-    if (
-      !movement ||
-      movement.id !== attempt.sourceBizId ||
-      movement.status !== 'EFFECTIVE' ||
-      movement.flow?.status !== 'APPROVED' ||
-      movement.userId !== member.userId ||
-      movement.targetProjectId !== member.projectId ||
-      movement.targetExamAttemptId !== attempt.id ||
-      attempt.candidateUserId !== member.userId ||
-      attempt.organizationId !== member.organizationId ||
-      attempt.userOrgRelId !== member.userOrgRelId ||
-      attempt.exam.projectId !== member.projectId ||
-      attempt.finalResult !== 'ADMITTED' ||
-      attempt.cancelledAt ||
-      member.user.status !== 'ACTIVE' ||
-      !member.admittedAt
-    )
-      return false;
-    if (!member.organizationId) return !member.userOrgRelId && !member.expertAssignmentId;
-    const rel = member.organizationMembership;
-    return !!(
-      a &&
-      a.status === 'ACCEPTED' &&
-      a.subjectType === 'ORGANIZATION' &&
-      a.projectId === member.projectId &&
-      a.organizationId === member.organizationId &&
-      !member.organization?.deleted &&
-      rel &&
-      rel.userId === member.userId &&
-      rel.orgId === member.organizationId &&
-      participatingStatuses.includes(rel.joinStatus)
-    );
-  }
-  if (
-    !a ||
-    a.status !== 'ACCEPTED' ||
-    a.projectId !== member.projectId ||
-    member.user.status !== 'ACTIVE' ||
-    !member.admittedAt
-  )
-    return false;
-  if (member.organizationId) {
-    const rel = member.organizationMembership;
-    if (
-      a.subjectType !== 'ORGANIZATION' ||
-      a.organizationId !== member.organizationId ||
-      member.organization?.deleted ||
-      !rel ||
-      rel.orgId !== member.organizationId ||
-      rel.userId !== member.userId ||
-      !participatingStatuses.includes(rel.joinStatus)
-    )
-      return false;
-    const response = a.memberResponses.find(
-      (r) => r.userId === member.userId && r.userOrgRelId === rel.id,
-    );
-    const owner = a.owners.length
-      ? a.owners.some((o) => o.userId === member.userId && o.status === 'ACTIVE')
-      : a.projectOwnerUserId === member.userId;
-    if (!owner && (!response || !['ACCEPTED', 'SELECTED'].includes(response.status))) return false;
-  } else if (
-    a.subjectType !== 'INDIVIDUAL' ||
-    a.expertUserId !== member.userId ||
-    member.userOrgRelId
-  )
-    return false;
-  return (
-    !needWrittenExam ||
-    !!(
-      attempt &&
-      attempt.candidateUserId === member.userId &&
-      attempt.organizationId === member.organizationId &&
-      attempt.finalResult === 'ADMITTED' &&
-      attempt.exam.projectId === member.projectId &&
-      attempt.userOrgRelId === member.userOrgRelId &&
-      attempt.sourceBizId === a.id &&
-      !attempt.cancelledAt
-    )
-  );
+  throw new AppError(403, 'FORBIDDEN', '无当前项目人员管理权限');
 }

@@ -1,4 +1,4 @@
-import { attendanceStatuses, manualStatuses } from './attendance-domain.js';
+import { attendanceStatuses, manualStatuses } from './attendance.domain.js';
 type Schema = Record<string, unknown>;
 const text = (description: string, nullable = false): Schema => ({
   type: 'string',
